@@ -1,5 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { createSaveQueue, type SaveQueueHooks } from "./saveQueue";
+import {
+  createSaveQueue,
+  createSaveVerdict,
+  type SaveQueueHooks,
+  type SaveStatus,
+  type TaskKind,
+} from "./saveQueue";
 import type { Snapshot } from "./api";
 
 /**
@@ -124,5 +130,167 @@ describe("save queue", () => {
     // empty, so the first caller hears about its success last. What matters is
     // that "second true" comes after "second ran" and never before it.
     expect(events).toEqual(["second ran", "second true", "first true"]);
+  });
+});
+
+/**
+ * The wiring the shell uses: the queue feeds the verdict, and every word the
+ * verdict speaks is recorded. The clock is injected so a stamp's moment is
+ * exact, and the kinds are recorded so a test can see which claims the chain
+ * offered.
+ */
+function wiredVerdict(now: () => number) {
+  const statuses: SaveStatus[] = [];
+  const verdict = createSaveVerdict((s) => statuses.push(s), now);
+  const begins: TaskKind[] = [];
+  const finishes: TaskKind[] = [];
+  const applied: string[] = [];
+  const failures: Array<{ cause: unknown; dropped: number; kind: TaskKind }> = [];
+  const queue = createSaveQueue({
+    begin: (kind) => {
+      begins.push(kind);
+      verdict.begin(kind);
+    },
+    apply: (snap, kind) => {
+      applied.push(`${kind}:${revisionOf(snap)}`);
+    },
+    fail: (cause, dropped, kind) => {
+      failures.push({ cause, dropped, kind });
+      verdict.fail(String(cause), kind);
+    },
+    finish: (kind) => {
+      finishes.push(kind);
+      verdict.finish(kind);
+    },
+  });
+  return {
+    queue,
+    verdict,
+    statuses,
+    begins,
+    finishes,
+    applied,
+    failures,
+    /** The verdict a drawer's foot would be showing right now. */
+    last: (): SaveStatus => statuses[statuses.length - 1] ?? { phase: "idle" },
+  };
+}
+
+describe("save feedback scope", () => {
+  it("the startup snapshot loads the pages and claims no save", async () => {
+    const w = wiredVerdict(() => 1000);
+    const boot = w.queue.run(async () => snapshot("boot"), "observe");
+    // No "saving" flash while the read runs.
+    expect(w.last()).toEqual({ phase: "idle" });
+    expect(w.begins).toEqual(["observe"]);
+    expect(await boot).toBe(true);
+    // The pages get their data, and the verdict never spoke a save word.
+    expect(w.applied).toEqual(["observe:boot"]);
+    expect(w.statuses).toEqual([]);
+    expect(w.last()).toEqual({ phase: "idle" });
+  });
+
+  it("a balance refresh answers as an observation and never re-ages a save", async () => {
+    const w = wiredVerdict(() => 5000);
+    // A write first, so there is a stamp an observation must not touch.
+    expect(await w.queue.run(async () => snapshot("edit"))).toBe(true);
+    expect(w.last()).toEqual({ phase: "saved", at: 5000 });
+    const spoken = w.statuses.length;
+
+    expect(await w.queue.run(async () => snapshot("balances"), "observe")).toBe(true);
+    // The reading applied, and the stamp is still the write's own — not
+    // re-stamped, not wiped, not turned into a fresh "saved".
+    expect(w.applied).toContain("observe:balances");
+    expect(w.last()).toEqual({ phase: "saved", at: 5000 });
+    expect(w.statuses.length).toBe(spoken);
+  });
+
+  it("a failed refresh keeps the last reading and holds nobody's place", async () => {
+    const w = wiredVerdict(() => 5000);
+    const boom = w.queue.run(async () => {
+      throw new Error("the panel refused");
+    }, "observe");
+    // An edit queued behind the failing observation must still land.
+    const edit = w.queue.run(async () => snapshot("edit"));
+
+    expect(await boom).toBe(false);
+    expect(await edit).toBe(true);
+    // The failed reading replaced nothing: the last valid value stands.
+    expect(w.applied).toEqual(["write:edit"]);
+    expect(w.failures).toEqual([
+      { cause: new Error("the panel refused"), dropped: 0, kind: "observe" },
+    ]);
+    // The drawer is not told a save failed; the write's own verdict is.
+    expect(w.statuses).toEqual([{ phase: "saving" }, { phase: "saved", at: 5000 }]);
+  });
+
+  it("a freshly opened drawer inherits nothing from the surface before it", () => {
+    const w = wiredVerdict(() => 5000);
+
+    // A write is in flight when another entity's drawer mounts. (A write's
+    // begin fires the moment it joins the queue, so a begin the drawer never
+    // saw is exactly one that began before its mount.)
+    w.verdict.begin("write");
+    w.verdict.reset();
+    expect(w.last()).toEqual({ phase: "idle" });
+    w.verdict.finish("write");
+    // The outcome belongs to the surface that is gone: this one stays silent.
+    expect(w.last()).toEqual({ phase: "idle" });
+
+    // Nor does a verdict earned before the mount survive it.
+    w.verdict.begin("write");
+    w.verdict.finish("write");
+    expect(w.last()).toEqual({ phase: "saved", at: 5000 });
+    w.verdict.reset();
+    expect(w.last()).toEqual({ phase: "idle" });
+
+    // From the drawer's own first write on, the verdict is its own again.
+    w.verdict.begin("write");
+    expect(w.last()).toEqual({ phase: "saving" });
+    w.verdict.finish("write");
+    expect(w.last()).toEqual({ phase: "saved", at: 5000 });
+  });
+
+  it("the write path still answers saving, then saved", async () => {
+    const w = wiredVerdict(() => 4242);
+    const done = w.queue.run(async () => snapshot("edit"));
+    expect(w.last()).toEqual({ phase: "saving" });
+    expect(await done).toBe(true);
+    expect(w.last()).toEqual({ phase: "saved", at: 4242 });
+    expect(w.begins).toEqual(["write"]);
+    expect(w.finishes).toEqual(["write"]);
+  });
+
+  it("a failed write still says so and keeps the error over later silence", async () => {
+    const w = wiredVerdict(() => 5000);
+    const boom = w.queue.run(async () => {
+      throw new Error("disk full");
+    });
+    const queued = w.queue.run(async () => snapshot("second"));
+    expect(await boom).toBe(false);
+    expect(await queued).toBe(false);
+    expect(w.last()).toEqual({ phase: "error", message: "Error: disk full" });
+
+    // An observation after the failure neither clears nor re-ages it.
+    expect(await w.queue.run(async () => snapshot("balances"), "observe")).toBe(true);
+    expect(w.last()).toEqual({ phase: "error", message: "Error: disk full" });
+  });
+
+  it("a write queued behind an observation still gets its saving, then saved", async () => {
+    const w = wiredVerdict(() => 777);
+    const hold = deferred<Snapshot>();
+    const observe = w.queue.run(() => hold.promise, "observe");
+    const edit = w.queue.run(async () => snapshot("edit"));
+    // The write's intent is visible the moment it joins the chain, not only
+    // once the reading ahead of it finishes.
+    expect(w.last()).toEqual({ phase: "saving" });
+    expect(w.begins).toEqual(["observe", "write"]);
+
+    hold.resolve(snapshot("balances"));
+    expect(await observe).toBe(true);
+    expect(await edit).toBe(true);
+    expect(w.applied).toEqual(["observe:balances", "write:edit"]);
+    expect(w.last()).toEqual({ phase: "saved", at: 777 });
+    expect(w.finishes).toEqual(["write"]);
   });
 });

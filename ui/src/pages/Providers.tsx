@@ -1,4 +1,13 @@
-import { Fragment, memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  Fragment,
+  memo,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type PointerEvent as ReactPointerEvent,
+} from "react";
 import {
   api,
   BALANCE_PRESETS,
@@ -23,6 +32,7 @@ import {
 import { describeBackendError } from "../i18n";
 import {
   Badge,
+  Banner,
   Button,
   CompactNumber,
   ConfirmDialog,
@@ -45,7 +55,9 @@ import { useI18n } from "../i18n";
 import { useMode } from "../mode";
 import { groupProviders } from "../providerGroups";
 import { hasChatCredential } from "../providerCredential";
+import { SaveFeedbackReset, type TaskKind } from "../saveQueue";
 import NewApiPanel from "./NewApiPanel";
+import { revealAddFormLanding } from "./Models";
 import { AccountBindingReview } from "../AccountBindingReview";
 
 type KindLabelKey =
@@ -179,7 +191,12 @@ function decisionUrl(baseUrl: string, path: string): string {
   const base = baseUrl.replace(/\/+$/, "");
   const trimmed = path.trim();
   if (trimmed === "") return base;
-  return trimmed.startsWith("/v1") ? `${base}${trimmed}` : `${base}/v1${trimmed}`;
+  const segments = trimmed.split("/").filter(Boolean);
+  const baseSegments = base.split("/").filter(Boolean);
+  if (segments.length && segments.every((part, index) => part === baseSegments[baseSegments.length - segments.length + index])) return base;
+  const suffix = `/${trimmed.replace(/^\/+/, "")}`;
+  if (base.endsWith("/v1")) return `${base}${suffix.replace(/^\/v1\//, "/")}`;
+  return suffix === "/v1" || suffix.startsWith("/v1/") ? `${base}${suffix}` : `${base}/v1${suffix}`;
 }
 
 /**
@@ -228,7 +245,7 @@ export default function Providers({
 }: {
   snapshot: Snapshot;
   save: (mutate: (config: AppConfig) => AppConfig | null) => Promise<boolean>;
-  run: (task: () => Promise<Snapshot>) => Promise<boolean>;
+  run: (task: () => Promise<Snapshot>, kind?: TaskKind) => Promise<boolean>;
   busy: boolean;
 }) {
   const { config, keys, balances } = snapshot;
@@ -243,6 +260,18 @@ export default function Providers({
   // when a provider is added, because the drawer that opens over it is the
   // continuation of that task.
   const [adding, setAdding] = useState(false);
+  /*
+   * …and when it opens, the reader is handed it: the landing under the head
+   * is brought into the viewport (a no-op from the top, where the trigger
+   * put them) and the focus lands in the form's first field. The behavior
+   * and its order live in `revealAddFormLanding`, shared with the model
+   * page's entry; StrictMode's double effect just lands the same focus twice.
+   */
+  const addLandingRef = useRef<HTMLDivElement | null>(null);
+  useEffect(() => {
+    if (!adding) return;
+    revealAddFormLanding(addLandingRef.current, "input");
+  }, [adding]);
   const [ccSelected, setCcSelected] = useState<Record<string, boolean>>({});
   const isMounted = useRef(true);
   useEffect(() => () => { isMounted.current = false; }, []);
@@ -338,6 +367,23 @@ export default function Providers({
     }
   };
 
+  /**
+   * Refresh every balance, as an observation.
+   *
+   * The readings travel through the same serial chain as a save — an
+   * observation applying an older document over a fresher write would roll
+   * the rebase point back — but the words are the observation's own: the
+   * readings are current, and nothing here claims a configuration was saved.
+   * A per-provider failure arrives inside the snapshot and is said beside that
+   * provider's balance; a rejection means the refresh itself could not run,
+   * and the last readings stand untouched.
+   */
+  const refreshAllBalances = async () => {
+    const ok = await run(api.refreshBalances, "observe");
+    if (ok) notify("ok", t("toast.balances_refreshed"));
+    else notify("error", t("toast.balances_refresh_failed"));
+  };
+
   const importSelected = async () => {
     const ids = Object.entries(ccSelected)
       .filter(([, on]) => on)
@@ -367,6 +413,17 @@ export default function Providers({
    */
   const anyBalance = config.providers.some((p) => hasBalanceSource(p, snapshot));
 
+  /*
+   * Providers the wallet check has paused. The hold is a property of the
+   * provider, so it is marked on its own row and explained in its drawer; it
+   * used to be a second list above the first, printing the same two providers
+   * again under a heading whose only new content was the release button.
+   */
+  const heldProviders = useMemo(
+    () => new Set(snapshot.wallet_holds.map((hold) => hold.provider_id)),
+    [snapshot.wallet_holds],
+  );
+
   return (
     <>
       <ConfirmDialog request={confirm} onClose={() => setConfirm(null)} />
@@ -385,9 +442,11 @@ export default function Providers({
              * for — a permanently expanded three-field form under the list
              * was furniture nobody had asked to sit on. cc-switch puts its
              * add entry in the header and opens a wizard; here the form
-             * unfolds in place at the bottom, which keeps it one click from
-             * the list it edits. The layout harness expands it the same way
-             * a reader would: by clicking this link.
+             * unfolds directly under this head, above the list — the old
+             * berth at the bottom surfaced it a whole list-length below the
+             * button that opened it, and the landing of an unfolded form is
+             * wherever it is mounted. The layout harness expands it the same
+             * way a reader would: by clicking this link.
              */}
             <button type="button"
               className="linky"
@@ -406,7 +465,7 @@ export default function Providers({
             {anyBalance && (
               <button type="button"
                 className="linky"
-                onClick={() => void run(api.refreshBalances)}
+                onClick={() => void refreshAllBalances()}
                 disabled={busy}
               >
                 {t("providers.refresh_all")}
@@ -419,46 +478,27 @@ export default function Providers({
         }
       />
 
-      {snapshot.wallet_holds.length > 0 && (
-        <Section title={t("providers.wallet_holds")} hint={t("providers.wallet_holds_hint")}>
-          <div className="list">
-            {snapshot.wallet_holds.map((hold) => {
-              const provider = config.providers.find((p) => p.id === hold.provider_id);
-              const scope = [hold.account_id, hold.key_id].filter(Boolean).join(" / ");
-              return (
-                <div
-                  className="list-row"
-                  key={`${hold.provider_id}:${hold.account_id ?? ""}:${hold.key_id ?? ""}`}
-                  style={{ cursor: "default" }}
-                >
-                  <StatusDot tone="danger" state={t("providers.wallet_empty")} />
-                  <div className="row-main">
-                    <span className="row-title">
-                      {provider?.name ?? hold.provider_id}
-                      {scope && <span className="muted mono"> · {scope}</span>}
-                    </span>
-                    <span className="row-sub">
-                      {t("providers.wallet_held_since", {
-                        time: new Date(hold.held_at * 1000).toLocaleString(),
-                      })}
-                    </span>
-                  </div>
-                  <Button
-                    kind="ghost"
-                    disabled={busy}
-                    onClick={() =>
-                      void run(() =>
-                        api.releaseWalletHold(hold.provider_id, hold.account_id, hold.key_id),
-                      )
-                    }
-                  >
-                    {t("providers.wallet_release")}
-                  </Button>
-                </div>
-              );
-            })}
-          </div>
-        </Section>
+      {/*
+       * The form unfolds from the page head's entry — and it unfolds here,
+       * above the list, because the landing of an unfolded form is wherever
+       * it is mounted: at the bottom it surfaced a whole list-length below
+       * the button that opened it. Opening hands the focus to the form's
+       * first field (the effect beside `adding`); the layout harness expands
+       * it the same way a reader would, by clicking the head link.
+       */}
+      {adding && (
+        <div ref={addLandingRef}>
+          <AddProviderForm
+            providers={config.providers}
+            save={save}
+            busy={busy}
+            opencodeAvailable={snapshot.opencode_available}
+            onAdded={(id) => {
+              setAdding(false);
+              openProvider(id);
+            }}
+          />
+        </div>
       )}
 
       {config.providers.length === 0 ? (
@@ -486,6 +526,7 @@ export default function Providers({
                 selected={openId === p.id}
                 showBalance={hasBalanceSource(p, snapshot)}
                 balance={balances[p.id]}
+                held={heldProviders.has(p.id)}
                 onOpen={openProvider}
               />
               {(grouped.nested.get(p.id) ?? []).map((d) => (
@@ -506,6 +547,7 @@ export default function Providers({
                   selected={openId === d.id}
                   showBalance={hasBalanceSource(d, snapshot)}
                   balance={balances[d.id]}
+                  held={heldProviders.has(d.id)}
                   nested
                   onOpen={openProvider}
                 />
@@ -518,19 +560,6 @@ export default function Providers({
       {/* The account probe moved to the Accounts page: it is a runtime reading
           over every provider's accounts, not a property of this page's list, and
           the drawer never had a good place to put a cross-provider report. */}
-
-      {adding && (
-        <AddProviderForm
-          providers={config.providers}
-          save={save}
-          busy={busy}
-          opencodeAvailable={snapshot.opencode_available}
-          onAdded={(id) => {
-            setAdding(false);
-            openProvider(id);
-          }}
-        />
-      )}
 
       {ccPreview && (
         <Section
@@ -626,6 +655,7 @@ const ProviderRow = memo(function ProviderRow({
   selected,
   showBalance,
   balance,
+  held,
   nested,
   onOpen,
 }: {
@@ -638,6 +668,8 @@ const ProviderRow = memo(function ProviderRow({
   selected: boolean;
   showBalance: boolean;
   balance: BalanceStatus | undefined;
+  /** The wallet check paused this provider; the drawer carries the release. */
+  held?: boolean;
   /** Rendered under the ordinary provider it shares a host with. */
   nested?: boolean;
   onOpen: (id: string) => void;
@@ -656,21 +688,25 @@ const ProviderRow = memo(function ProviderRow({
        * in the sentence.
        */
       aria-label={`${t("providers.open_row", { name })} — ${
-        status === "off"
-          ? t("status.disabled")
-          : status === "warn"
-            ? t("status.no_key")
-            : t("status.enabled")
-      }`}
-    >
-      <StatusDot
-        tone={status}
-        state={
-          status === "off"
+        held
+          ? t("status.wallet_held")
+          : status === "off"
             ? t("status.disabled")
             : status === "warn"
               ? t("status.no_key")
               : t("status.enabled")
+      }`}
+    >
+      <StatusDot
+        tone={held ? "danger" : status}
+        state={
+          held
+            ? t("status.wallet_held")
+            : status === "off"
+              ? t("status.disabled")
+              : status === "warn"
+                ? t("status.no_key")
+                : t("status.enabled")
         }
       />
       <div className="row-main">
@@ -689,6 +725,93 @@ const ProviderRow = memo(function ProviderRow({
 });
 
 /**
+ * One submit intent's draft: what the three fields hold when it is made.
+ */
+export type AddProviderDraft = {
+  name: string;
+  baseUrl: string;
+  kind: ProviderKind;
+};
+
+/**
+ * How a submit intent ended.
+ *
+ * `added` is the only outcome that may clear the draft, fold the form and
+ * open the new provider's drawer — the failure the review's O5 recorded was
+ * exactly those effects running on a save nobody waited for. `duplicate`
+ * covers both a name already on the page and the race where a queued save
+ * lands on a document that has the id by now: the form stays open, and the
+ * drawer of the *existing* provider must not open over it. `write_failed` is
+ * a save the backend refused or the queue dropped — including the stale
+ * rejection when the configuration changed underneath the save — and the
+ * draft is kept as typed for a retry.
+ */
+export type AddProviderOutcome =
+  | { kind: "added"; id: string }
+  | { kind: "duplicate"; id: string }
+  | { kind: "name_required" }
+  | { kind: "write_failed" }
+  | { kind: "ignored" };
+
+/**
+ * The add form's submission as one unit, the way `saveQueue` is.
+ *
+ * `run` turns one intent into at most one `save` call and reports how it
+ * ended; the form applies the outcome to its state. A second intent while one
+ * is still in flight is ignored — one press, one write, never a queue of
+ * duplicates. Extracted from the component so the failure paths stay testable
+ * without a DOM.
+ */
+export function createAddProviderSubmission(
+  save: (mutate: (config: AppConfig) => AppConfig | null) => Promise<boolean>,
+) {
+  let inFlight = false;
+  return {
+    /** Whether an intent is mid-save; the form's button waits on this. */
+    inFlight: () => inFlight,
+    async run(
+      draft: AddProviderDraft,
+      providers: Provider[],
+    ): Promise<AddProviderOutcome> {
+      if (inFlight) return { kind: "ignored" };
+      const name = draft.name.trim() || nameFromBaseUrl(draft.baseUrl);
+      if (!name) return { kind: "name_required" };
+      const id = slugify(name);
+      if (providers.some((p) => p.id === id)) return { kind: "duplicate", id };
+      inFlight = true;
+      try {
+        // `committed` separates "the queue ran and the write landed" from
+        // "the queue ran and found the provider already there": a mutate that
+        // returns null also resolves true, and only the first is an add.
+        let committed = false;
+        const ok = await save((cfg) => {
+          // Re-checked against the document being committed: a save that
+          // queues behind another one rebases onto the newer configuration,
+          // and the id may have been taken in between.
+          if (cfg.providers.some((p) => p.id === id)) return null;
+          const next = structuredClone(cfg);
+          next.providers.push(
+            emptyProvider(
+              id,
+              name,
+              draft.kind,
+              draft.baseUrl.trim() || defaultBaseUrl(draft.kind),
+            ),
+          );
+          committed = true;
+          return next;
+        });
+        if (!ok) return { kind: "write_failed" };
+        if (!committed) return { kind: "duplicate", id };
+        return { kind: "added", id };
+      } finally {
+        inFlight = false;
+      }
+    },
+  };
+}
+
+/**
  * The add-a-provider form, with its own drafts.
  *
  * The drafts used to live in the page above, so typing a provider name
@@ -698,7 +821,10 @@ const ProviderRow = memo(function ProviderRow({
  * one input.
  *
  * The form is still the same form: the same fields, in the same order, with
- * the same names, and the provider it adds still opens its own drawer.
+ * the same names, and the provider it adds still opens its own drawer. What
+ * changed is when: the drawer opens only after the save that added the
+ * provider has landed, and a refused save leaves the form and its draft
+ * standing for a retry.
  */
 function AddProviderForm({
   providers,
@@ -720,42 +846,61 @@ function AddProviderForm({
   const [newKind, setNewKind] = useState<ProviderKind>("openai_compatible");
   const [newBaseUrl, setNewBaseUrl] = useState("");
   const [nameError, setNameError] = useState<string | null>(null);
+  const [saveError, setSaveError] = useState<string | null>(null);
+  const [submitting, setSubmitting] = useState(false);
+  // The form folds the moment its work ends, so a save that lands after the
+  // fold — or after the page itself is gone — must not touch state that no
+  // longer exists.
+  const mounted = useRef(true);
+  useEffect(() => {
+    // StrictMode's mount–cleanup–mount reruns this pair on the same ref.
+    mounted.current = true;
+    return () => {
+      mounted.current = false;
+    };
+  }, []);
+  const submission = useMemo(() => createAddProviderSubmission(save), [save]);
 
-  const addProvider = () => {
-    const name = newName.trim() || nameFromBaseUrl(newBaseUrl);
-    if (!name) {
-      setNameError(t("providers.name_required"));
-      return;
-    }
-    const id = slugify(name);
-    if (providers.some((p) => p.id === id)) {
-      setNameError(t("providers.duplicate", { id }));
-      return;
-    }
-    void save((cfg) => {
-      if (cfg.providers.some((p) => p.id === id)) {
-        setNameError(t("providers.duplicate", { id }));
-        return null;
-      }
-      const next = structuredClone(cfg);
-      next.providers.push(
-        emptyProvider(
-          id,
-          name,
-          newKind,
-          newBaseUrl.trim() || defaultBaseUrl(newKind),
-        ),
+  const addProvider = async () => {
+    // One intent, one write: while a save is in flight the press is ignored,
+    // not queued behind itself.
+    if (submission.inFlight()) return;
+    setSaveError(null);
+    setSubmitting(true);
+    try {
+      const outcome = await submission.run(
+        { name: newName, baseUrl: newBaseUrl, kind: newKind },
+        providers,
       );
-      return next;
-    });
-    setNewName("");
-    setNewBaseUrl("");
-    setNameError(null);
-    onAdded(id);
+      if (!mounted.current) return;
+      if (outcome.kind === "added") {
+        // A real add only. The drawer that opens over this form is where the
+        // credential is filled in next, so the draft is cleared and the new
+        // provider's own drawer opens on it.
+        setNewName("");
+        setNewBaseUrl("");
+        setNameError(null);
+        setSaveError(null);
+        onAdded(outcome.id);
+      } else if (outcome.kind === "duplicate") {
+        setNameError(t("providers.duplicate", { id: outcome.id }));
+      } else if (outcome.kind === "name_required") {
+        setNameError(t("providers.name_required"));
+      } else if (outcome.kind === "write_failed") {
+        // The write was refused or dropped; the draft stays as typed for a
+        // retry. The queue's own error is already on the window — this line
+        // ties the refusal to the form that made the attempt.
+        setSaveError(t("providers.add_failed"));
+      }
+      // `ignored`: another intent is mid-save, and this press made no write.
+    } finally {
+      if (mounted.current) setSubmitting(false);
+    }
   };
 
   return (
     <Section title={t("providers.add_section")} hint={t("providers.add_hint")}>
+      {saveError && <Banner tone="danger">{saveError}</Banner>}
       <div className="controls">
         <Field label={t("field.name")} danger={Boolean(nameError)} hint={nameError ?? t("providers.name_optional")}>
           <input
@@ -789,7 +934,7 @@ function AddProviderForm({
           <Button
             kind="primary"
             onClick={addProvider}
-            disabled={busy || (!newName.trim() && !newBaseUrl.trim())}
+            disabled={busy || submitting || (!newName.trim() && !newBaseUrl.trim())}
           >
             {t("providers.add")}
           </Button>
@@ -982,6 +1127,12 @@ function AccountSection({
   const [inferenceKeyFor, setInferenceKeyFor] = useState<string | null>(null);
   const [inferenceDraft, setInferenceDraft] = useState("");
   const [confirm, setConfirm] = useState<ConfirmRequest | null>(null);
+  const [dragFrom, setDragFrom] = useState<{ accountId: string; keyId: string } | null>(null);
+  const [dropAt, setDropAt] = useState<{ accountId: string; index: number } | null>(null);
+  const [reordering, setReordering] = useState<Record<string, boolean>>({});
+  const reorderPending = useRef(new Set<string>());
+  const inferenceWriteChains = useRef(new Map<string, Promise<boolean>>());
+  const inferenceRows = useRef(new Map<string, HTMLDivElement>());
 
   /** A reference of its own — the account does not resolve to the provider key. */
   const hasOwnRef = (a: Account) =>
@@ -1067,11 +1218,105 @@ function AccountSection({
     key_id: string,
     options: { api_key?: string; priority?: number; enabled?: boolean; note?: string },
   ) => {
-    const ok = await run(() =>
-      api.setAccountInferenceKey(provider.id, account_id, key_id, options),
-    );
+    const previous = inferenceWriteChains.current.get(account_id) ?? Promise.resolve(true);
+    const pending = previous
+      .then((previousOk) =>
+        previousOk
+          ? run(() => api.setAccountInferenceKey(provider.id, account_id, key_id, options))
+          : false,
+      );
+    inferenceWriteChains.current.set(account_id, pending);
+    const ok = await pending;
+    if (inferenceWriteChains.current.get(account_id) === pending) {
+      inferenceWriteChains.current.delete(account_id);
+    }
     if (!ok) notify("error", t("accounts.inference_store_failed"));
     return ok;
+  };
+
+  const reorderInference = async (
+    account_id: string,
+    order: (typeof accounts)[number]["inference_keys"],
+  ) => {
+    if (reorderPending.current.has(account_id)) return;
+    reorderPending.current.add(account_id);
+    setReordering((current) => ({ ...current, [account_id]: true }));
+    try {
+      // The command changes persisted config. Await every write so each one
+      // rebases on the snapshot committed by the previous key's update.
+      for (const [index, key] of order.entries()) {
+        const priority = index * 10;
+        if (!(await writeInference(account_id, key.id, { priority }))) return;
+      }
+    } finally {
+      reorderPending.current.delete(account_id);
+      setReordering((current) => ({ ...current, [account_id]: false }));
+    }
+  };
+
+  const moveInference = (
+    account_id: string,
+    order: typeof accounts[number]["inference_keys"],
+    from: number,
+    delta: -1 | 1,
+  ) => {
+    const to = from + delta;
+    if (to < 0 || to >= order.length || reorderPending.current.has(account_id)) return;
+    const next = [...order];
+    [next[from], next[to]] = [next[to], next[from]];
+    void reorderInference(account_id, next);
+  };
+
+  const startInferenceDrag = (
+    account_id: string,
+    ordered: (typeof accounts)[number]["inference_keys"],
+    from: number,
+  ) => (event: ReactPointerEvent<HTMLButtonElement>) => {
+    if (busy || reorderPending.current.has(account_id) || event.button !== 0) return;
+    const startY = event.clientY;
+    let started = false;
+    const hitIndex = (y: number) => {
+      for (let index = 0; index < ordered.length; index += 1) {
+        const row = inferenceRows.current.get(`${account_id}:${ordered[index].id}`);
+        if (!row) continue;
+        const rect = row.getBoundingClientRect();
+        if (y < rect.top + rect.height / 2) return index;
+      }
+      return ordered.length;
+    };
+    const finish = (event: PointerEvent) => {
+      window.removeEventListener("pointermove", move);
+      window.removeEventListener("pointerup", finish);
+      window.removeEventListener("pointercancel", cancel);
+      if (!started) return;
+      const to = hitIndex(event.clientY);
+      setDragFrom(null);
+      setDropAt(null);
+      if (to === from || to === from + 1) return;
+      const next = [...ordered];
+      const [key] = next.splice(from, 1);
+      next.splice(to > from ? to - 1 : to, 0, key);
+      void reorderInference(account_id, next);
+    };
+    const cancel = () => {
+      window.removeEventListener("pointermove", move);
+      window.removeEventListener("pointerup", finish);
+      window.removeEventListener("pointercancel", cancel);
+      setDragFrom(null);
+      setDropAt(null);
+    };
+    const move = (pointer: PointerEvent) => {
+      if (!started) {
+        if (Math.abs(pointer.clientY - startY) < 4) return;
+        started = true;
+        setDragFrom({ accountId: account_id, keyId: ordered[from].id });
+      }
+      pointer.preventDefault();
+      setDropAt({ accountId: account_id, index: hitIndex(pointer.clientY) });
+    };
+    window.addEventListener("pointermove", move);
+    window.addEventListener("pointerup", finish);
+    window.addEventListener("pointercancel", cancel);
   };
 
   const addInference = async (account_id: string) => {
@@ -1217,11 +1462,41 @@ function AccountSection({
                   <Empty>{t("accounts.inference_empty")}</Empty>
                 ) : (
                   <div className="key-list">
-                    {a.inference_keys.map((key) => {
+                    {[...a.inference_keys]
+                      .sort(
+                        (left, right) =>
+                          left.priority - right.priority || left.id.localeCompare(right.id),
+                      )
+                      .map((key, index, ordered) => {
                       const slot = `${a.account_id}:${key.id}`;
                       const stored = snapshot.keys[key.key_ref] ?? false;
+                      const dragging = dragFrom?.accountId === a.account_id && dragFrom.keyId === key.id;
+                      const dragIndex = dragFrom?.accountId === a.account_id
+                        ? ordered.findIndex((item) => item.id === dragFrom.keyId)
+                        : -1;
+                      const dropBefore = dropAt?.accountId === a.account_id && dropAt.index === index && dropAt.index !== dragIndex && dropAt.index !== dragIndex + 1;
+                      const dropAfter = dropAt?.accountId === a.account_id && dropAt.index === ordered.length && index === ordered.length - 1 && dragIndex !== ordered.length - 1;
                       return (
-                        <div className="key-row" key={key.id}>
+                        <div
+                          className={`key-row ${dragging ? "key-row-dragging" : ""} ${dropBefore ? "key-row-drop-before" : ""} ${dropAfter ? "key-row-drop-after" : ""}`}
+                          data-inference-key-id={key.id}
+                          key={key.id}
+                          ref={(row) => {
+                            const rowId = `${a.account_id}:${key.id}`;
+                            if (row) inferenceRows.current.set(rowId, row);
+                            else inferenceRows.current.delete(rowId);
+                          }}
+                        >
+                          <button
+                            type="button"
+                            className="inference-drag-handle"
+                            aria-label={t("routing.drag_hint")}
+                            title={t("routing.drag_hint")}
+                            disabled={busy || reordering[a.account_id] || ordered.length < 2}
+                            onPointerDown={startInferenceDrag(a.account_id, ordered, index)}
+                          >
+                            ⋮⋮
+                          </button>
                           <div className="key-head">
                             <span className="key-id mono">{key.id}</span>
                             <input
@@ -1270,6 +1545,36 @@ function AccountSection({
                             </label>
                           </div>
                           <div className="key-actions">
+                              <button
+                                type="button"
+                                className="btn btn-ghost"
+                                aria-label={t("routing.move_up", { model: key.id })}
+                                disabled={busy || reordering[a.account_id] || index === 0}
+                                onClick={() => moveInference(a.account_id, ordered, index, -1)}
+                                onKeyDown={(event) => {
+                                  if (event.key === "Enter" || event.key === " ") {
+                                    event.preventDefault();
+                                    moveInference(a.account_id, ordered, index, -1);
+                                  }
+                                }}
+                              >
+                                ↑
+                              </button>
+                              <button
+                                type="button"
+                                className="btn btn-ghost"
+                                aria-label={t("routing.move_down", { model: key.id })}
+                                disabled={busy || reordering[a.account_id] || index === ordered.length - 1}
+                                onClick={() => moveInference(a.account_id, ordered, index, 1)}
+                                onKeyDown={(event) => {
+                                  if (event.key === "Enter" || event.key === " ") {
+                                    event.preventDefault();
+                                    moveInference(a.account_id, ordered, index, 1);
+                                  }
+                                }}
+                              >
+                                ↓
+                              </button>
                             <Button
                               kind="ghost"
                               disabled={busy}
@@ -1331,7 +1636,7 @@ function AccountSection({
                           )}
                         </div>
                       );
-                    })}
+                      })}
                   </div>
                 )}
                 <div className="controls">
@@ -1572,13 +1877,14 @@ function ProviderDrawer({
   snapshot: Snapshot;
   busy: boolean;
   save: (mutate: (config: AppConfig) => AppConfig | null) => Promise<boolean>;
-  run: (task: () => Promise<Snapshot>) => Promise<boolean>;
+  run: (task: () => Promise<Snapshot>, kind?: TaskKind) => Promise<boolean>;
   onClose: () => void;
   /** Mutates the provider being committed; see `Providers.update`. */
   onUpdate: (mutate: (provider: Provider) => void) => void;
   onRemove: () => void;
 }) {
   const { t } = useI18n();
+  const notify = useToast();
   // Simple mode collapses the drawer to its facts: what this provider is, how
   // it authenticates, whether it is on. The panels, the probe, the quirks and
   // the account declarations keep existing and keep running — the mode only
@@ -1632,20 +1938,25 @@ function ProviderDrawer({
     [snapshot.config.models, providerId],
   );
 
+  /** Wallet holds for this provider, one per paused account or key. */
+  const holds = snapshot.wallet_holds.filter((hold) => hold.provider_id === providerId);
+
   return (
       <Drawer
         title={
           <>
             <StatusDot
               tone={
-                provider.enabled
-                  ? hasKey ||
-                    accountKeys > 0 ||
-                    provider.key_ref === "" ||
-                    !needsKey(provider.kind)
-                    ? "ok"
-                    : "warn"
-                  : "off"
+                holds.length > 0
+                  ? "danger"
+                  : provider.enabled
+                    ? hasKey ||
+                      accountKeys > 0 ||
+                      provider.key_ref === "" ||
+                      !needsKey(provider.kind)
+                      ? "ok"
+                      : "warn"
+                    : "off"
               }
             />
             {provider.name}
@@ -1653,6 +1964,10 @@ function ProviderDrawer({
         }
         onClose={onClose}
       >
+      {/* A drawer opened for one provider starts with no verdict inherited
+          from the surface before it — not from the startup read, not from
+          another provider's last save. */}
+      <SaveFeedbackReset />
       <KeyValue
         rows={[
           [t("providers.endpoint"), <span className="mono">{endpoint}</span>],
@@ -1683,6 +1998,56 @@ function ProviderDrawer({
         ]}
       />
 
+      {/*
+        The hold lives where the release button does. On the page it was a
+        second list of the same providers, sorted by nothing and offering the
+        one action the row itself could not; here the subject is already named
+        by the drawer, so the block says what happened and how to undo it.
+      */}
+      {holds.length > 0 && (
+        <Section title={t("providers.wallet_holds")} hint={t("providers.wallet_holds_hint")}>
+          <div className="list">
+            {holds.map((hold) => {
+              const scope = [hold.account_id, hold.key_id].filter(Boolean).join(" / ");
+              return (
+                <div
+                  className="list-row"
+                  key={`${hold.provider_id}:${hold.account_id ?? ""}:${hold.key_id ?? ""}`}
+                  style={{ cursor: "default" }}
+                >
+                  <StatusDot tone="danger" state={t("providers.wallet_empty")} />
+                  <div className="row-main">
+                    <span className="row-title">
+                      {t("providers.wallet_empty")}
+                      {scope && <span className="muted mono"> · {scope}</span>}
+                    </span>
+                    <span className="row-sub">
+                      {t("providers.wallet_held_since", {
+                        time: new Date(hold.held_at * 1000).toLocaleString(),
+                      })}
+                    </span>
+                  </div>
+                  <Button
+                    kind="ghost"
+                    disabled={busy}
+                    onClick={() =>
+                      // Releasing a hold is a router runtime action, not a
+                      // configuration write.
+                      void run(
+                        () =>
+                          api.releaseWalletHold(hold.provider_id, hold.account_id, hold.key_id),
+                        "observe",
+                      )
+                    }
+                  >
+                    {t("providers.wallet_release")}
+                  </Button>
+                </div>
+              );
+            })}
+          </div>
+        </Section>
+      )}
       {/* A free provider has nothing to paste: the field asks for a credential
           the kind cannot use, and the row beside it already says so. */}
       {!hasKey && needsKey(provider.kind) && provider.key_ref !== "" && (
@@ -1951,9 +2316,14 @@ function ProviderDrawer({
               kind="ghost"
               onClick={() => {
                 setCheckingBalance(true);
-                void run(() => api.refreshBalance(provider.id)).finally(() =>
-                  setCheckingBalance(false),
-                );
+                void run(() => api.refreshBalance(provider.id), "observe")
+                  .then((ok) => {
+                    // The probe's own failure is recorded in the snapshot and
+                    // rendered beside the balance below, with the last reading
+                    // kept; a rejection means the check never ran at all.
+                    if (!ok) notify("error", t("toast.balances_refresh_failed"));
+                  })
+                  .finally(() => setCheckingBalance(false));
               }}
               disabled={busy || checkingBalance || !hasBalanceSource(provider, snapshot)}
               title={
@@ -2071,16 +2441,18 @@ function ProviderDrawer({
               })
             }
           />
-          <Toggle
-            label={t("quirk.portable_history")}
-            hint={t("quirk.portable_history_hint")}
-            checked={provider.quirks.portable_history}
-            onChange={(v) =>
-              onUpdate((p) => {
-                p.quirks.portable_history = v;
-              })
-            }
-          />
+          <div className="grid-span">
+            <Toggle
+              label={t("quirk.portable_history")}
+              hint={t("quirk.portable_history_hint")}
+              checked={provider.quirks.portable_history}
+              onChange={(v) =>
+                onUpdate((p) => {
+                  p.quirks.portable_history = v;
+                })
+              }
+            />
+          </div>
         </div>
       </Section>
       )}

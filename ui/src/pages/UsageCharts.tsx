@@ -1,4 +1,4 @@
-import { useLayoutEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { compactCount, type UsageDay } from "../api";
 import { Segment, num } from "../components";
@@ -117,6 +117,29 @@ export default function UsageCharts({
   const [range, setRange] = useState<RangeKey>("30");
 
   /*
+   * The width the drawing may use, measured rather than assumed.
+   *
+   * The heatmap answers "when do I use this", which is a year-shaped question:
+   * a five-week window is a stamp in the corner of the panel, and that is what
+   * it looked like. It now always draws the loaded year and sizes its cells to
+   * the panel, so the last column reaches the right edge instead of stopping a
+   * tenth of the way across. `ResizeObserver` keeps that true when the window
+   * or the drawer changes, and a chart is data, not a banner: cells stop
+   * growing at a legible square rather than becoming tiles.
+   */
+  const container = useRef<HTMLDivElement | null>(null);
+  const [available, setAvailable] = useState(0);
+  useLayoutEffect(() => {
+    const element = container.current;
+    if (!element) return;
+    const measure = () => setAvailable(Math.floor(element.clientWidth));
+    measure();
+    const observer = new ResizeObserver(measure);
+    observer.observe(element);
+    return () => observer.disconnect();
+  }, []);
+
+  /*
    * The hover card, as one state: which day is under the pointer and where
    * the pointer is. A single singleton element renders from it, so a year of
    * cells costs one div however fast the pointer moves.
@@ -159,17 +182,16 @@ export default function UsageCharts({
   const onHover: OnHover = (day, x, y) => setHover({ day, x, y });
 
   /*
-   * One window rule for every chart style. The heatmap used to be pinned to a
-   * full year regardless of the range selector — which painted 366 grey
-   * squares under a two-day-old install and made the most common first look
-   * at this page an exercise in finding the two dark cells. The grid columns
-   * derive from the window's length either way, so a young install now draws
-   * five columns instead of a wall of nothing.
+   * One window rule per chart kind. Bars and the line follow the range
+   * selector, because their shape is the selected span. The heatmap draws the
+   * whole loaded year instead: a week of squares says nothing about when the
+   * work happens, and the range selector is hidden while it is on, so the two
+   * controls cannot disagree about what is drawn.
    */
   const window = useMemo(() => {
     if (!days) return null;
-    return days.slice(-Number(range));
-  }, [days, range]);
+    return style === "heatmap" ? days : days.slice(-Number(range));
+  }, [days, range, style]);
 
   const weeks = useMemo(
     () => (window && style === "heatmap" ? heatmapWeeks(window) : null),
@@ -178,16 +200,31 @@ export default function UsageCharts({
 
   const total = window ? window.reduce((sum, day) => sum + measure(day, metric), 0) : 0;
   const quiet = window !== null && total === 0;
-  const canvas = chartSize(style, weeks?.length ?? 0);
+  const cell = heatCell(weeks?.length ?? 0, available);
+  const canvas = chartSize(style, weeks?.length ?? 0, cell);
   const metricLabel =
     metric === "requests"
       ? t("activity.metric_requests")
       : metric === "cache"
         ? t("activity.metric_cache")
         : t("activity.metric_tokens");
+  const spanLabel = style === "heatmap" ? t("activity.range_365") : t(`activity.range_${range}`);
+
+  /*
+   * A measure with no data at all is not offered: a tier that draws nothing is
+   * a control promising a reading it cannot give. The check is over the whole
+   * loaded year rather than the window, so switching the range never reorders
+   * the segment under a pointer.
+   */
+  const cachePresent = (days ?? []).some(
+    (day) => day.cache_read_tokens + day.cache_write_tokens > 0,
+  );
+  useEffect(() => {
+    if (metric === "cache" && days !== null && !cachePresent) onMetricChange("requests");
+  }, [metric, days, cachePresent, onMetricChange]);
 
   return (
-    <div className="usage-charts">
+    <div className="usage-charts" ref={container}>
       <div className="chart-toolbar">
         <Segment<ChartStyle>
           ariaLabel={t("activity.chart_style")}
@@ -206,21 +243,50 @@ export default function UsageCharts({
           options={[
             { value: "requests", label: t("activity.metric_requests") },
             { value: "tokens", label: t("activity.metric_tokens") },
-            { value: "cache", label: t("activity.metric_cache") },
+            ...(cachePresent
+              ? [{ value: "cache" as const, label: t("activity.metric_cache") }]
+              : []),
           ]}
         />
-        <Segment<RangeKey>
-          ariaLabel={t("activity.chart_range")}
-          value={range}
-          onChange={setRange}
-          options={[
-            { value: "7", label: t("activity.range_7") },
-            { value: "30", label: t("activity.range_30") },
-            { value: "90", label: t("activity.range_90") },
-            { value: "365", label: t("activity.range_365") },
-          ]}
-        />
+        {style !== "heatmap" && (
+          <Segment<RangeKey>
+            ariaLabel={t("activity.chart_range")}
+            value={range}
+            onChange={setRange}
+            options={[
+              { value: "7", label: t("activity.range_7") },
+              { value: "30", label: t("activity.range_30") },
+              { value: "90", label: t("activity.range_90") },
+              { value: "365", label: t("activity.range_365") },
+            ]}
+          />
+        )}
+        {style === "heatmap" && (
+          <span className="chart-legend chart-legend-inline">
+            <span>{t("activity.heat_less")}</span>
+            {[0, 1, 2, 3, 4].map((level) => (
+              <span key={level} className="chart-legend-cell" data-level={level} />
+            ))}
+            <span>{t("activity.heat_more")}</span>
+          </span>
+        )}
       </div>
+
+      {/*
+       * What is drawn, over what span, and how much of it. The figure answers
+       * "which measure" by its shape alone, and three heatmaps shaded from
+       * their own quartiles look alike; this line is the reading the selector
+       * needs to visibly change something.
+       */}
+      {window !== null && !quiet && (
+        <p className="chart-reading">
+          {t("activity.chart_reading", {
+            metric: metricLabel,
+            span: spanLabel,
+            total: num(total),
+          })}
+        </p>
+      )}
 
       {window === null ? (
         <p className="empty">{t("common.loading")}</p>
@@ -242,22 +308,13 @@ export default function UsageCharts({
             onMouseLeave={() => setHover(null)}
           >
             {weeks ? (
-              <Heatmap weeks={weeks} metric={metric} onHover={onHover} />
+              <Heatmap weeks={weeks} metric={metric} onHover={onHover} cell={cell} />
             ) : style === "bars" ? (
               <Bars days={window} metric={metric} onHover={onHover} />
             ) : (
               <Line days={window} metric={metric} onHover={onHover} />
             )}
           </svg>
-          {style === "heatmap" && (
-            <figcaption className="chart-legend">
-              <span>{t("activity.heat_less")}</span>
-              {[0, 1, 2, 3, 4].map((level) => (
-                <span key={level} className="chart-legend-cell" data-level={level} />
-              ))}
-              <span>{t("activity.heat_more")}</span>
-            </figcaption>
-          )}
         </figure>
       )}
 
@@ -310,28 +367,47 @@ export default function UsageCharts({
 }
 
 /** The one place a layout's canvas is named, so the frame and the drawing agree. */
-function chartSize(style: ChartStyle, weeks: number): { width: number; height: number } {
+function chartSize(
+  style: ChartStyle,
+  weeks: number,
+  cell: number,
+): { width: number; height: number } {
   if (style === "heatmap") {
+    const step = cell + HEAT_GAP;
     return {
-      width: HEATMAP_LEFT + weeks * STEP - GAP,
-      height: HEATMAP_TOP + 7 * STEP - GAP,
+      width: Math.max(1, weeks * step - HEAT_GAP),
+      height: 7 * step - HEAT_GAP + HEAT_LABEL_BAND,
     };
   }
   return { width: PLOT_WIDTH, height: PLOT_HEIGHT };
 }
 
-const CELL = 11;
-const GAP = 3;
-const STEP = CELL + GAP;
-const HEATMAP_LEFT = 34;
-const HEATMAP_TOP = 16;
+/*
+ * A year of squares, sized to the panel.
+ *
+ * The heatmap is a year view: it draws the loaded series whatever the range
+ * selector says, so its columns are weeks and its width is decided by the
+ * panel. Cells stop growing at a legible square (a five-column year blown up
+ * to fill the row would be forty-pixel tiles) and stop shrinking at a cell
+ * that still reads as a day; below that the SVG scales down as a whole.
+ */
+const HEAT_MIN_CELL = 7;
+const HEAT_MAX_CELL = 22;
+const HEAT_GAP = 3;
+/** The band under the grid that holds the month names. */
+const HEAT_LABEL_BAND = 17;
+
+function heatCell(weeks: number, available: number): number {
+  if (weeks <= 0 || available <= 0) return 11;
+  const fitted = Math.floor(available / weeks) - HEAT_GAP;
+  return Math.max(HEAT_MIN_CELL, Math.min(HEAT_MAX_CELL, fitted));
+}
 
 /**
  * The days as Monday-first columns.
  *
  * The first column is padded so every row is one weekday; without it the grid
- * would shift by a row depending on which day of the week the window ended,
- * and the labels down the left would name the wrong days.
+ * would shift by a row depending on which day of the week the window ended.
  */
 function heatmapWeeks(days: UsageDay[]): (UsageDay | null)[][] {
   // An empty window — no traffic since the counters were reset — has no first
@@ -357,58 +433,54 @@ const PLOT_RIGHT = 8;
 const PLOT_TOP = 10;
 const PLOT_BOTTOM = 22;
 
-/** The Monday-first year grid, shaded by the day's quartile. */
+/**
+ * The Monday-first year grid, shaded by the day's quartile.
+ *
+ * Month names sit under the grid rather than over it, the way a contribution
+ * graph is read: the row labels went away with the short-window version, so
+ * nothing competes with the squares and the left edge is the first column.
+ */
 function Heatmap({
   weeks,
   metric,
   onHover,
+  cell,
 }: {
   weeks: (UsageDay | null)[][];
   metric: Metric;
   onHover: OnHover;
+  cell: number;
 }) {
   const { lang } = useI18n();
   const days = weeks.flat().filter((day): day is UsageDay => day !== null);
   const values = days.map((day) => measure(day, metric));
   const level = heatLevels(values);
 
+  const step = cell + HEAT_GAP;
+  const width = weeks.length * step - HEAT_GAP;
+  const labelY = 7 * step - HEAT_GAP + 12;
   const months = new Intl.DateTimeFormat(lang, { month: "short" });
-  const weekdays = new Intl.DateTimeFormat(lang, { weekday: "short" });
-  // 2024-01-01 was a Monday, which is the reference the padded rows need.
-  const monday = new Date(2024, 0, 1);
 
   const monthLabels: { x: number; text: string }[] = [];
   let lastMonth = -1;
+  let lastX = Number.NEGATIVE_INFINITY;
   weeks.forEach((week, column) => {
     const first = week.find((day): day is UsageDay => day !== null);
     if (!first) return;
     const date = parseDay(first.day);
     if (date.getMonth() === lastMonth) return;
-    // A month starting in the last column or two would run off the canvas.
-    if (column < weeks.length - 1) {
-      monthLabels.push({ x: HEATMAP_LEFT + column * STEP, text: months.format(date) });
-    }
     lastMonth = date.getMonth();
+    const x = column * step;
+    // The name is drawn start-anchored at its week, so the last one or two
+    // columns have no room for it; a month that moved since the previous name
+    // is still that month, and dropping the name loses nothing.
+    if (x < lastX + 26 || x > width - 22) return;
+    monthLabels.push({ x, text: months.format(date) });
+    lastX = x;
   });
 
   return (
     <>
-      {monthLabels.map((label) => (
-        <text key={`${label.x}-${label.text}`} className="chart-label" x={label.x} y={10}>
-          {label.text}
-        </text>
-      ))}
-      {[0, 2, 4].map((row) => (
-        <text
-          key={row}
-          className="chart-label"
-          x={0}
-          y={HEATMAP_TOP + row * STEP + CELL / 2}
-          dominantBaseline="middle"
-        >
-          {weekdays.format(new Date(monday.getFullYear(), monday.getMonth(), monday.getDate() + row))}
-        </text>
-      ))}
       {weeks.map((week, column) =>
         week.map((day, row) => {
           if (!day) return null;
@@ -416,16 +488,21 @@ function Heatmap({
           return (
             <rect
               key={day.day}
-              x={HEATMAP_LEFT + column * STEP}
-              y={HEATMAP_TOP + row * STEP}
-              width={CELL}
-              height={CELL}
+              x={column * step}
+              y={row * step}
+              width={cell}
+              height={cell}
               data-level={level(value)}
               onMouseMove={(event) => onHover(day, event.clientX, event.clientY)}
             />
           );
         }),
       )}
+      {monthLabels.map((label) => (
+        <text key={`${label.x}-${label.text}`} className="chart-label" x={label.x} y={labelY}>
+          {label.text}
+        </text>
+      ))}
     </>
   );
 }

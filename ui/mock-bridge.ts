@@ -62,6 +62,8 @@ import type {
   AppConfig,
   BalanceConfig,
   BalancePreset,
+  ClientSetupOptions,
+  ClientSetupPreview,
   ClientTotals,
   CostTotals,
   KindTotals,
@@ -75,10 +77,19 @@ import type {
   ProviderQuirks,
   RequestRecord,
   StatsSummary,
+  TakeoverAgent,
+  TakeoverView,
   TraySnapshot,
   UsageDay,
+  UsageSourceView,
+  UsageSourcesView,
+  UsageImportOutcome,
+  UsageImportPreview,
+  UsageHistorySourceOffer,
+  ImportedUsageView,
   UsageHistoryPage,
   UsageHistoryQuery,
+  UsageAttempt,
 } from "./src/api";
 
 /**
@@ -583,6 +594,14 @@ const recent = (): RequestRecord[] =>
     };
   });
 
+const standbyRecent = (): RequestRecord[] =>
+  recent().slice(0, 28).map((record, index) => ({
+    ...record,
+    id: `standby-${index}-${record.id}`,
+    at: ago(index * 83_000 + 21_000),
+    usage: { ...record.usage, input_tokens: record.usage.input_tokens + 450 },
+  }));
+
 const clientMetadata = (client_id: string) => {
   const recognised = ["claude_code", "opencode", "codex_cli", "gemini_cli"].includes(client_id);
   return {
@@ -597,8 +616,9 @@ const clientMetadata = (client_id: string) => {
  * The 999 USD legacy values on failed records must therefore appear nowhere in
  * these totals, while their small known subtotals survive beside unpriced rows.
  */
-const statsSummary = (): StatsSummary => {
-  const records = recent();
+const statsSummary = (): StatsSummary => statsSummaryFor(recent());
+
+const statsSummaryFor = (records: RequestRecord[]): StatsSummary => {
   const perModel = new Map<string, ModelTotals>();
   const perKind = new Map<string, KindTotals>();
   const perClient = new Map<string, ClientTotals>();
@@ -831,6 +851,23 @@ function mlStatusFixture() {
 }
 
 let running = true;
+
+/**
+ * What the last simulated import stored.
+ *
+ * Importing is a sequence — pick, preview, commit, report, clear — so the mock
+ * remembers the committed totals instead of answering every call from a
+ * constant. `null` means nothing has been imported, which is the state the
+ * usage card has to render without inventing a zero.
+ */
+let importedHistory: { requests: number } | null = null;
+const pendingImports = new Map<string, UsageImportPreview>(
+  JSON.parse(sessionStorage.getItem("zroutery-mock-imports") ?? "[]"),
+);
+const cancelledImports = new Set<string>();
+const importReports = new Map<string, UsageImportOutcome>();
+const savePendingImports = () =>
+  sessionStorage.setItem("zroutery-mock-imports", JSON.stringify([...pendingImports]));
 
 /**
  * The config the bridge hands out, as state rather than a fresh `appConfig()`
@@ -1106,6 +1143,169 @@ function checkin(phase: string, held: boolean) {
   };
 }
 
+/* ============================================================================
+   The takeover state machine.
+
+   The page's two mutations (adopt, release) and the menu-sync drawer's two
+   calls (preview, apply) all answer from one per-agent phase, persisted in
+   sessionStorage: a mock whose adopt answered with a constant was undone by
+   the very next 3-second poll, and the mutation read as a no-op — the exact
+   dishonesty this bridge exists to avoid. The phase is `held` (active/
+   degraded/conflict collapse to active here; the real backend's field-level
+   states need a real filesystem to be honest about), `offerable` (ready) or
+   `undetected`. OpenCode and Gemini stay undetected through every mutation:
+   there is no config to write, and pretending otherwise would fake a flow
+   the real backend refuses.
+   ========================================================================== */
+
+const CONFIG_PATH: Record<TakeoverAgent, string> = {
+  claude: "C:\\Users\\operator\\.claude\\settings.json",
+  codex: "C:\\Users\\operator\\.codex\\config.toml",
+  opencode: "C:\\Users\\operator\\.config\\opencode\\opencode.json",
+  gemini: "C:\\Users\\operator\\.gemini\\settings.json",
+};
+
+const UNDETECTED: Partial<Record<TakeoverAgent, string[]>> = {
+  opencode: [
+    "C:\\Users\\operator\\.config\\opencode\\opencode.json",
+    "C:\\Users\\operator\\opencode.json",
+  ],
+  gemini: [
+    "C:\\Users\\operator\\.gemini\\settings.json",
+    "C:\\Users\\operator\\AppData\\Roaming\\Gemini\\settings.json",
+  ],
+};
+
+const MANAGED_FIELDS: Partial<Record<TakeoverAgent, string[]>> = {
+  claude: ["env.ANTHROPIC_BASE_URL", "env.ANTHROPIC_AUTH_TOKEN"],
+  codex: ["env.ANTHROPIC_BASE_URL", "env.ANTHROPIC_AUTH_TOKEN"],
+};
+
+type AgentPhase = { phase: "held" | "offerable" | "undetected"; generation: number };
+
+const TAKEOVER_STORE_KEY = "zroutery-mock-takeover";
+
+/** claude held (3 generations), codex offerable with the real diff, the two
+ * undetectable ones undetected — four rows, four truths. */
+const INITIAL_PHASES: Record<TakeoverAgent, AgentPhase> = {
+  claude: { phase: "held", generation: 3 },
+  codex: { phase: "offerable", generation: 0 },
+  opencode: { phase: "undetected", generation: 0 },
+  gemini: { phase: "undetected", generation: 0 },
+};
+
+const mockPhases = (): Record<TakeoverAgent, AgentPhase> => {
+  const stored = sessionStorage.getItem(TAKEOVER_STORE_KEY);
+  if (stored) {
+    try {
+      return { ...INITIAL_PHASES, ...(JSON.parse(stored) as Record<TakeoverAgent, AgentPhase>) };
+    } catch {
+      sessionStorage.removeItem(TAKEOVER_STORE_KEY);
+    }
+  }
+  return { ...INITIAL_PHASES };
+};
+
+const saveMockPhases = (phases: Record<TakeoverAgent, AgentPhase>) =>
+  sessionStorage.setItem(TAKEOVER_STORE_KEY, JSON.stringify(phases));
+
+const mockPhase = (agent: TakeoverAgent): AgentPhase => mockPhases()[agent];
+
+const adoptMockAgent = (agent: TakeoverAgent) => {
+  const phases = mockPhases();
+  const phase = phases[agent];
+  if (phase.phase === "undetected") return;
+  phases[agent] = { phase: "held", generation: phase.generation + 1 };
+  saveMockPhases(phases);
+};
+
+const releaseMockAgent = (agent: TakeoverAgent) => {
+  const phases = mockPhases();
+  const phase = phases[agent];
+  if (phase.phase === "undetected") return;
+  phases[agent] = { phase: "offerable", generation: phase.generation + 1 };
+  saveMockPhases(phases);
+};
+
+const takeoverViewFor = (agent: TakeoverAgent): TakeoverView => {
+  const { phase, generation } = mockPhase(agent);
+  if (phase === "undetected") {
+    return {
+      agent,
+      status: {
+        state: "not_detected",
+        searched: UNDETECTED[agent] ?? [],
+        reason: `no ${agent} configuration found`,
+      },
+    };
+  }
+  if (phase === "offerable") {
+    return {
+      agent,
+      status: {
+        state: "ready",
+        config_path: CONFIG_PATH[agent],
+        proposal: {
+          managed_fields: MANAGED_FIELDS[agent] ?? [],
+          changes: (MANAGED_FIELDS[agent] ?? []).map((field, index) => ({
+            field_path: field,
+            current: index === 0 ? "https://relay.example.com" : "sk-relay-token",
+            managed: index === 0 ? "http://127.0.0.1:8787" : "zr-mock-gateway-token",
+          })),
+          fingerprint: "mock-takeover-1",
+        },
+      },
+    };
+  }
+  return { agent, status: { state: "active", config_path: CONFIG_PATH[agent], generation } };
+};
+
+const setupFingerprint = (agent: TakeoverAgent, options: ClientSetupOptions): string =>
+  `mock-setup-${agent}-${options.default_class ?? "keep"}-${options.standby ? "8788" : "8787"}`;
+
+/** The menu-sync preview: one model per usage tier out of the catalogue
+ * fixtures (highest priority wins, the way the real preview reads the tier
+ * pools), the gateway address the standby toggle really moves, and the
+ * proposal diff the apply's fingerprint guard is checked against. */
+const setupPreviewFor = (agent: TakeoverAgent, options: ClientSetupOptions): ClientSetupPreview => {
+  const port = options.standby ? 8788 : 8787;
+  const url = `http://127.0.0.1:${port}`;
+  const tiers: ModelTier[] = ["fast", "standard", "reasoning", "frontier"];
+  const proposal = {
+    managed_fields: MANAGED_FIELDS[agent] ?? [],
+    changes: (MANAGED_FIELDS[agent] ?? []).map((field, index) => ({
+      field_path: field,
+      current: index === 0 ? "https://relay.example.com" : "sk-relay-token",
+      managed: index === 0 ? url : "zr-mock-gateway-token",
+    })),
+    fingerprint: setupFingerprint(agent, options),
+  };
+  return {
+    agent,
+    classes: tiers.flatMap((tier) => {
+      const model = models
+        .filter((m) => m.enabled && m.tier === tier)
+        .sort((a, b) => a.priority - b.priority)[0];
+      if (!model) return [];
+      return [{
+        model: `${model.provider_id}:${model.upstream_model}`,
+        display_name: model.display_name ?? model.upstream_model,
+        effort_levels: model.effort_levels,
+        capabilities: model.capabilities,
+        context_window: model.context_window,
+        max_output_tokens: model.max_output_tokens,
+        capability_source: "manifest",
+      }];
+    }),
+    unavailable_classes: [],
+    catalogue_fingerprint: "mock-catalogue-1",
+    proposal,
+    config_path: CONFIG_PATH[agent],
+    gateway_url: url,
+    notes: [],
+  };
+};
+
 const handlers: Record<string, (args: any) => Json | Promise<Json>> = {
   // Tauri events go through the event plugin rather than a command name, and
   // `listen` is called on mount, so a missing pair here shows up as an
@@ -1115,6 +1315,207 @@ const handlers: Record<string, (args: any) => Json | Promise<Json>> = {
 
   get_snapshot: () => snapshot(),
   get_activity: () => ({ health: modelHealth(), summary: statsSummary(), recent: recent() }),
+  get_usage_sources: (args: { days?: number }): UsageSourcesView => {
+    const makeSource = (name: string, records: RequestRecord[]): UsageSourceView => {
+      const days = Math.min(400, Math.max(1, Math.trunc(args.days ?? 371)));
+      const start = new Date(NOW);
+      const rows: UsageDay[] = [];
+      for (let i = days - 1; i >= 0; i--) {
+        const d = new Date(start.getTime() - i * 86_400_000);
+        rows.push({
+          day: `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`,
+          requests: 0,
+          failures: 0,
+          input_tokens: 0,
+          output_tokens: 0,
+          cache_read_tokens: 0,
+          cache_write_tokens: 0,
+          unpriced_requests: 0,
+          cost: {},
+        });
+      }
+      const byDay = new Map(rows.map((row) => [row.day, row]));
+      for (const record of records) {
+        const date = new Date(record.at);
+        const row = byDay.get(`${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`);
+        if (!row) continue;
+        const usage = observedUsage(record);
+        row.requests++;
+        row.failures += Number(!record.ok);
+        row.input_tokens += usage.input_tokens;
+        row.output_tokens += usage.output_tokens;
+        row.cache_read_tokens += usage.cache_read_tokens;
+        row.cache_write_tokens += usage.cache_write_tokens;
+        row.unpriced_requests += Number(unpriced(record));
+        addKnownCost(row.cost, record);
+      }
+      return {
+        source_name: name,
+        revision: records.length,
+        summary: statsSummaryFor(records),
+        recent: records.slice(0, 200),
+        days: rows,
+      };
+    };
+    return {
+      local: makeSource("This device", recent()),
+      standby: makeSource("runtime.sqlite3", standbyRecent()),
+    };
+  },
+  choose_standby_usage_database: () => "C:\\Users\\operator\\AppData\\Local\\Zroutery\\standby-8788\\runtime.sqlite3",
+  discover_usage_history_sources: (): UsageHistorySourceOffer[] => [
+    {
+      source: "ccswitch",
+      label: "CC Switch",
+      path: "C:\\Users\\operator\\.cc-switch\\cc-switch.db",
+      recent: true,
+    },
+    {
+      source: "claudecode",
+      label: "Claude Code",
+      path: "C:\\Users\\operator\\.claude\\projects",
+      recent: false,
+    },
+  ],
+  pick_usage_history_source: (args: { kind?: string } = {}) =>
+    args.kind === "folder"
+      ? "C:\\Users\\operator\\.claude\\projects"
+      : "C:\\Users\\operator\\.cc-switch\\cc-switch.db",
+  /*
+   * The preview is deliberately not a clean total: it carries day totals, a
+   * suspected duplicate and unpriced rows, so the confirmation screen is
+   * exercised against the states that actually need explaining. A folder is a
+   * transcripts copy, and transcripts carry no price and no failures.
+   */
+  preview_usage_history_import: (args: {
+    path?: string;
+    instance?: string | null;
+    runId: string;
+    range?: { from?: string | null; until?: string | null };
+  }): UsageImportPreview => {
+    const folder = (args.path ?? "").endsWith("projects");
+    const preview: UsageImportPreview = {
+      source: folder ? "claudecode" : "ccswitch",
+      instance: args.instance ?? (folder ? "projects" : "cc-switch"),
+      source_version: folder ? 0 : 21,
+      requests: folder ? 86 : 412,
+      aggregates: folder ? 0 : 7,
+      suspected: folder ? 0 : 3,
+      covered_totals: folder ? 0 : 12,
+      priced: folder ? 0 : 398,
+      unpriced: folder ? 86 : 14,
+      failures: folder ? 0 : 6,
+      days: [],
+      warnings: [],
+      run_id: args.runId,
+      fingerprint: `mock-${args.runId}`,
+      range: args.range ?? {},
+      cancelled: cancelledImports.has(args.runId),
+    };
+    if (!preview.cancelled) {
+      pendingImports.set(args.runId, preview);
+      savePendingImports();
+    }
+    return preview;
+  },
+  commit_usage_history_import: (args: { runId: string; fingerprint: string }): UsageImportOutcome => {
+    const saved = importReports.get(args.runId);
+    if (saved) return saved;
+    if (cancelledImports.has(args.runId)) {
+      return { inserted: 0, updated: 0, unchanged: 0, revision: 0, cancelled: true };
+    }
+    const preview = pendingImports.get(args.runId);
+    if (!preview || preview.fingerprint !== args.fingerprint) throw new Error("Import preview is stale");
+    importedHistory = { requests: preview.requests + preview.aggregates - preview.suspected };
+    const outcome = {
+      inserted: preview.requests + preview.aggregates,
+      updated: 0, unchanged: 0, revision: 419, cancelled: false,
+    };
+    pendingImports.delete(args.runId);
+    savePendingImports();
+    importReports.set(args.runId, outcome);
+    return outcome;
+  },
+  pending_usage_history_imports: () => [...pendingImports.values()],
+  get_usage_attempts: (): UsageAttempt[] => [],
+  import_newapi_pricing: () => snapshot(),
+  cancel_usage_history_import: (args: { runId: string }) => {
+    if (importReports.has(args.runId)) return false;
+    cancelledImports.add(args.runId);
+    pendingImports.delete(args.runId);
+    savePendingImports();
+    return true;
+  },
+  get_imported_usage: (): ImportedUsageView =>
+    importedHistory === null
+      ? {
+          totals: {
+            requests: 0,
+            failures: 0,
+            input_tokens: 0,
+            output_tokens: 0,
+            cache_read_tokens: 0,
+            cache_write_tokens: 0,
+            unpriced_requests: 0,
+            suspected_requests: 0,
+            aggregate_requests: 0,
+            cost: {},
+          },
+          first_day: null,
+          days: [],
+        }
+      : {
+          totals: {
+            requests: importedHistory.requests,
+            failures: 6,
+            input_tokens: 1_284_000,
+            output_tokens: 96_400,
+            cache_read_tokens: 812_000,
+            cache_write_tokens: 24_000,
+            unpriced_requests: 14,
+            suspected_requests: 3,
+            aggregate_requests: 7,
+            cost: { USD: 12.75 },
+          },
+          first_day: "2025-10-31",
+          /*
+           * Two days, oldest first, summing to the totals above. The page
+           * reads the first as the period's start: imported history extends
+           * the page's coverage further back than this device's own ledger,
+           * and the lede has to say so.
+           */
+          days: [
+            {
+              day: "2025-10-31",
+              requests: 208,
+              failures: 3,
+              cache_read_tokens: 401_000,
+              cache_write_tokens: 12_000,
+              input_tokens: 612_000,
+              output_tokens: 48_200,
+              unpriced_requests: 7,
+              cost: { USD: 6.4 },
+            },
+            {
+              day: "2025-11-01",
+              requests: 208,
+              failures: 3,
+              cache_read_tokens: 411_000,
+              cache_write_tokens: 12_000,
+              input_tokens: 672_000,
+              output_tokens: 48_200,
+              unpriced_requests: 7,
+              cost: { USD: 6.35 },
+            },
+          ],
+        },
+  clear_imported_usage: () => {
+    importedHistory = null;
+    for (const id of pendingImports.keys()) cancelledImports.add(id);
+    pendingImports.clear();
+    savePendingImports();
+    return 419;
+  },
   get_tray_snapshot: () => traySnapshot(),
   tray_set_provider_enabled: (args: { providerId?: string; enabled?: boolean }) => {
     const providerId = args.providerId ?? "";
@@ -1369,93 +1770,72 @@ const handlers: Record<string, (args: any) => Json | Promise<Json>> = {
     },
   ],
   /*
-   * The takeover page, one state per agent.
+   * The takeover page, one state per agent — and stateful, because a mock
+   * whose adopt/release answered with a constant flipped the row straight
+   * back on the next poll, making the two mutations read as no-ops. The
+   * per-agent phase (held / offerable / undetected) and its generation live
+   * in sessionStorage, the same honest stand-in the saved config uses.
    *
-   * Four agents, four different truths: `active` for the one already held,
-   * `ready` with a real diff for the one that can be adopted now,
-   * `not_detected` for the one whose config does not exist, `unsupported` for
-   * the one this build does not write. One state repeated four times would
-   * render one AgentRow four times and leave three branches unverified — the
-   * same trap the reconcile_accounts fixture exists to avoid.
+   * Four agents, four different truths in the initial state: `active` for the
+   * one already held, `ready` with a real diff for the one that can be
+   * adopted now, `not_detected` for the two whose config does not exist. One
+   * state repeated four times would render one AgentRow four times and leave
+   * three branches unverified — the same trap the reconcile_accounts fixture
+   * exists to avoid.
    */
-  takeover_status: () => [
-    {
-      agent: "claude",
+  takeover_status: () =>
+    (["claude", "codex", "opencode", "gemini"] as TakeoverAgent[]).map((agent) =>
+      takeoverViewFor(agent),
+    ),
+
+  takeover_adopt: ({ agent }: { agent: TakeoverAgent }) => {
+    adoptMockAgent(agent);
+    return takeoverViewFor(agent);
+  },
+
+  takeover_release: ({ agent, strategy }: { agent: TakeoverAgent; strategy: string }) => {
+    const previous = mockPhase(agent);
+    releaseMockAgent(agent);
+    // The report splits the managed fields by what the strategy would do to
+    // them; the fixture keeps the same two fields the claude/codex configs
+    // carry, and an undetected agent has nothing to report.
+    const fields = MANAGED_FIELDS[agent] ?? [];
+    const kept = strategy === "overwrite_with_managed" ? [] : fields.slice(0, 1);
+    const overwritten = strategy === "keep_external" ? fields.slice(1) : fields;
+    const skipped = strategy === "skip" ? fields : [];
+    return {
+      agent,
+      report: { strategy, kept_external: kept, overwritten, skipped },
+      conflicts: [],
       status: {
-        state: "active",
-        config_path: "C:\\Users\\operator\\.claude\\settings.json",
-        generation: 3,
+        state: previous.phase === "undetected" ? "not_detected" : "released",
+        ...(previous.phase === "undetected"
+          ? { searched: UNDETECTED[agent] ?? [], reason: "no configuration found" }
+          : { config_path: CONFIG_PATH[agent], generation: mockPhase(agent).generation }),
       },
-    },
-    {
-      agent: "codex",
-      status: {
-        state: "ready",
-        config_path: "C:\\Users\\operator\\.codex\\config.toml",
-        proposal: {
-          managed_fields: ["env.ANTHROPIC_BASE_URL", "env.ANTHROPIC_AUTH_TOKEN"],
-          changes: [
-            {
-              field_path: "env.ANTHROPIC_BASE_URL",
-              current: "https://relay.example.com",
-              managed: "http://127.0.0.1:8787",
-            },
-            {
-              field_path: "env.ANTHROPIC_AUTH_TOKEN",
-              current: "sk-relay-token",
-              managed: "zr-mock-gateway-token",
-            },
-          ],
-          fingerprint: "mock-takeover-1",
-        },
-      },
-    },
-    {
-      agent: "opencode",
-      status: {
-        state: "not_detected",
-        searched: [
-          "C:\\Users\\operator\\.config\\opencode\\opencode.json",
-          "C:\\Users\\operator\\opencode.json",
-        ],
-        reason: "no OpenCode configuration found",
-      },
-    },
-    {
-      agent: "gemini",
-      status: {
-        state: "not_detected",
-        searched: [
-          "C:\\Users\\operator\\.gemini\\settings.json",
-          "C:\\Users\\operator\\AppData\\Roaming\\Gemini\\settings.json",
-        ],
-        reason: "Gemini CLI is not installed on this machine",
-      },
-    },
-  ],
-  takeover_adopt: () => ({
-    agent: "codex",
-    status: {
-      state: "active",
-      config_path: "C:\\Users\\operator\\.codex\\config.toml",
-      generation: 4,
-    },
-  }),
-  takeover_release: () => ({
-    agent: "claude",
-    report: {
-      strategy: "keep_external",
-      kept_external: ["env.ANTHROPIC_BASE_URL"],
-      overwritten: ["env.ANTHROPIC_AUTH_TOKEN"],
-      skipped: [],
-    },
-    conflicts: [],
-    status: {
-      state: "released",
-      config_path: "C:\\Users\\operator\\.claude\\settings.json",
-      generation: 4,
-    },
-  }),
+    };
+  },
+
+  /*
+   * The model-menu drawer's two calls. The preview derives its fingerprint
+   * from the agent and the options, so the apply's guard is real in mock too:
+   * an apply whose fingerprint does not match the current option set is
+   * refused, exactly as a file that moved between preview and click is.
+   */
+  client_setup_preview: ({ agent, options }: { agent: TakeoverAgent; options: ClientSetupOptions }) =>
+    setupPreviewFor(agent, options),
+
+  client_setup_apply: ({ agent, options, expectedFingerprint }: {
+    agent: TakeoverAgent;
+    options: ClientSetupOptions;
+    expectedFingerprint: string;
+  }) => {
+    if (expectedFingerprint !== setupFingerprint(agent, options)) {
+      throw new Error("the client's configuration changed since the preview; preview again");
+    }
+    adoptMockAgent(agent);
+    return takeoverViewFor(agent);
+  },
 
   /*
    * The cutover page: a settled record, and previews where one agent is

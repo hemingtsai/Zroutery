@@ -22,7 +22,8 @@ import {
   type Provider,
   type Snapshot,
 } from "../api";
-import { describeBackendError, useI18n } from "../i18n";
+import { describeBackendError, useI18n, type TKey } from "../i18n";
+import { SaveFeedbackReset } from "../saveQueue";
 import {
   Badge,
   Banner,
@@ -53,6 +54,35 @@ const EFFORT_LEVELS = ["none", "minimal", "low", "medium", "high", "xhigh", "max
 
 /** Rows per page. The same page size the Activity log's pager (U8) cuts at. */
 const MODEL_PAGE_SIZE = 50;
+
+/**
+ * Hand a freshly unfolded add form to the reader.
+ *
+ * An unfolded form lands wherever it is mounted, so the page effect that
+ * opens one calls this with the element the form is mounted on: the landing
+ * scrolls into the viewport — a no-op when the reader is already there,
+ * which they are, because the head button they just pressed is only reachable
+ * at the top of the page — and then the form's first input takes the focus,
+ * so the next keystroke types into the form instead of hunting for a field
+ * that opened below the fold. Scroll before focus, so the focus call's own
+ * scroll-into-view only corrects the last few pixels.
+ *
+ * `firstControl` is a selector inside the landing, because which control is
+ * first is the page's knowledge. A null landing means the form folded before
+ * the effect ran — there is nothing left to hand over.
+ *
+ * Shared with the provider page's entry, which unfolds the same way, and
+ * unit-tested here; whether the landing really intersects the viewport is
+ * the interaction harness's question, which runs an actual browser.
+ */
+export function revealAddFormLanding(
+  landing: HTMLElement | null,
+  firstControl: string,
+): void {
+  if (!landing) return;
+  landing.scrollIntoView({ block: "nearest" });
+  landing.querySelector<HTMLElement>(firstControl)?.focus();
+}
 
 /**
  * Whether a capability set is still the shape an entry is created with.
@@ -146,6 +176,18 @@ export default function Models({
   const [syncing, setSyncing] = useState(false);
   // The add form unfolds from the page head; the list stays the subject.
   const [adding, setAdding] = useState(false);
+  /*
+   * …and when it opens, the reader is handed it: the landing under the head
+   * is brought into the viewport (a no-op from the top, where the trigger
+   * put them) and the focus lands in the form's first input. The behavior
+   * and its order live in `revealAddFormLanding`; StrictMode's double effect
+   * just lands the same focus twice.
+   */
+  const addLandingRef = useRef<HTMLDivElement | null>(null);
+  useEffect(() => {
+    if (!adding) return;
+    revealAddFormLanding(addLandingRef.current, "input");
+  }, [adding]);
 
   /**
    * Fill configured models' missing metadata from models.dev.
@@ -192,6 +234,7 @@ export default function Models({
           }
           if (
             (model.effort_levels ?? []).length === 0 &&
+            !model.reasoning_capability?.manual &&
             found.effort_levels?.length
           ) {
             model.effort_levels = found.effort_levels;
@@ -279,6 +322,13 @@ export default function Models({
             : cooling.has(r.id)
               ? "warn"
               : "ok";
+        // The price line under the name (A5): `modelPriceText` owns the
+        // states a reader must be able to tell apart — no price configured,
+        // a configured zero, and the side of a one-sided price that was
+        // never entered — plus the trimmed display and the raw `title`
+        // behind it. Resolved here like the other strings, so the
+        // per-keystroke render path stays free of it.
+        const price = modelPriceText(r.model.pricing, t);
         return {
           id: r.id,
           name: modelName(r.model),
@@ -288,23 +338,8 @@ export default function Models({
             (provider?.name ?? t("models.missing_provider")) +
             (provider?.enabled === false ? ` ${t("providers.provider_off")}` : "") +
             (r.model.tier ? ` · ${tierName(r.model.tier, t)}` : ` · ${t("models.no_tier")}`),
-          // A cell with nothing to report renders nothing. An unpriced model
-          // and a model with no traffic yet used to print an em dash each, and
-          // at thirty-one mostly-unused models the page carried sixty-two
-          // dashes of pure noise — the column belongs to the rows that have
-          // something to put in it, and the drawer holds the full story either
-          // way.
-          // The per-million unit lives in the string because a bare "4 / 20
-          // USD" made every reader do arithmetic the row could have done.
-          // Labels come from the dictionary, so the cell is localised without
-          // a locale-aware formatter.
-          price: r.model.pricing
-            ? t("models.price_cell", {
-                input: String(r.model.pricing.input_per_mtok),
-                output: String(r.model.pricing.output_per_mtok),
-                currency: r.model.pricing.currency,
-              })
-            : "",
+          price: price.line,
+          priceTitle: price.title,
           latency: healthRow ? ms(healthRow.avg_latency_ms) : "",
           // One lower-cased haystack per row, built in the same pass as the
           // other strings: the search box then costs a `includes` per row
@@ -510,6 +545,90 @@ export default function Models({
         }
       />
 
+      {/*
+       * The add form unfolds from the page head's action, the way cc-switch
+       * opens its wizard from the header button: the list is the page's
+       * subject, and a permanently expanded form under forty-four rows was
+       * furniture before it was a tool. It mounts here, above that list —
+       * the old berth under the pager surfaced it a whole page-length below
+       * the button that opened it once the catalogue grew (the review's O2)
+       * — so the landing is the head the reader is standing at, and the
+       * effect beside `adding` hands the focus to the form's first input.
+       * The layout harness unfolds it the same way a reader does, by
+       * clicking the head link.
+       */}
+      {adding && (
+        <div ref={addLandingRef}>
+          <Section title={t("models.add_section")} hint={t("models.add_hint")}>
+            <div className="controls">
+              <Select
+                ariaLabel={t("field.provider")}
+                value={draft.provider_id || null}
+                onChange={(provider_id) => setDraft({ ...draft, provider_id })}
+                placeholder={t("field.provider")}
+                options={config.providers.map((p) => ({
+                  value: p.id,
+                  // A decision model is added by name like any other model, but it
+                  // is worth saying which providers answer that way: it is the
+                  // difference between a chat entry and a typed-question one.
+                  label:
+                    p.kind === "decision"
+                      ? `${p.name} · ${t("providers.decision_dialect")}`
+                      : p.name,
+                }))}
+              />
+              <input
+                aria-label={t("field.model_name")}
+                placeholder="deepseek-chat"
+                className={nameError ? "input-error" : undefined}
+                value={draft.upstream_model}
+                onChange={(e) => {
+                  setDraft({ ...draft, upstream_model: e.currentTarget.value });
+                  setNameError(null);
+                }}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") void add();
+                }}
+              />
+              <Button
+                kind="primary"
+                onClick={() => void add()}
+                disabled={busy || !config.providers.length}
+              >
+                {t("models.add")}
+              </Button>
+            </div>
+            {draft.upstream_model.trim() && draft.provider_id && (
+              <p className="field-hint">
+                {t("models.exposed_as", {
+                  id: previewId(draft.provider_id, draft.upstream_model),
+                })}
+              </p>
+            )}
+            {providerById.get(draft.provider_id)?.kind === "decision" && (
+              <p className="field-hint">{t("providers.decision_no_catalogue")}</p>
+            )}
+            {nameError && <p className="field-hint field-hint-danger">{nameError}</p>}
+            {!config.providers.length && <p className="field-hint">{t("models.add_provider_first")}</p>}
+            {draft.provider_id && (
+              <CatalogueImport
+                key={draft.provider_id}
+                provider={providerById.get(draft.provider_id)}
+                configured={
+                  new Set(
+                    config.models
+                      .filter((m) => m.provider_id === draft.provider_id)
+                      .map((m) => m.upstream_model),
+                  )
+                }
+                save={save}
+                busy={busy}
+              />
+            )}
+          </Section>
+        </div>
+      )}
+
       {rows.length > 0 && (
         <div className="controls">
           <input
@@ -604,83 +723,6 @@ export default function Models({
         </div>
       )}
 
-      {/*
-       * The add form unfolds from the page head's action, the way cc-switch
-       * opens its wizard from the header button: the list is the page's
-       * subject, and a permanently expanded form under forty-four rows was
-       * furniture before it was a tool. The layout harness unfolds it the
-       * same way a reader does, by clicking the head link.
-       */}
-      {adding && (
-      <Section title={t("models.add_section")} hint={t("models.add_hint")}>
-        <div className="controls">
-          <Select
-            ariaLabel={t("field.provider")}
-            value={draft.provider_id || null}
-            onChange={(provider_id) => setDraft({ ...draft, provider_id })}
-            placeholder={t("field.provider")}
-            options={config.providers.map((p) => ({
-              value: p.id,
-              // A decision model is added by name like any other model, but it
-              // is worth saying which providers answer that way: it is the
-              // difference between a chat entry and a typed-question one.
-              label:
-                p.kind === "decision"
-                  ? `${p.name} · ${t("providers.decision_dialect")}`
-                  : p.name,
-            }))}
-          />
-          <input
-            aria-label={t("field.model_name")}
-            placeholder="deepseek-chat"
-            className={nameError ? "input-error" : undefined}
-            value={draft.upstream_model}
-            onChange={(e) => {
-              setDraft({ ...draft, upstream_model: e.currentTarget.value });
-              setNameError(null);
-            }}
-            onKeyDown={(e) => {
-              if (e.key === "Enter") void add();
-            }}
-          />
-          <Button
-            kind="primary"
-            onClick={() => void add()}
-            disabled={busy || !config.providers.length}
-          >
-            {t("models.add")}
-          </Button>
-        </div>
-        {draft.upstream_model.trim() && draft.provider_id && (
-          <p className="field-hint">
-            {t("models.exposed_as", {
-              id: previewId(draft.provider_id, draft.upstream_model),
-            })}
-          </p>
-        )}
-        {providerById.get(draft.provider_id)?.kind === "decision" && (
-          <p className="field-hint">{t("providers.decision_no_catalogue")}</p>
-        )}
-        {nameError && <p className="field-hint field-hint-danger">{nameError}</p>}
-        {!config.providers.length && <p className="field-hint">{t("models.add_provider_first")}</p>}
-        {draft.provider_id && (
-          <CatalogueImport
-            key={draft.provider_id}
-            provider={providerById.get(draft.provider_id)}
-            configured={
-              new Set(
-                config.models
-                  .filter((m) => m.provider_id === draft.provider_id)
-                  .map((m) => m.upstream_model),
-              )
-            }
-            save={save}
-            busy={busy}
-          />
-        )}
-      </Section>
-      )}
-
       {open && (
         <ModelDrawer
           row={open}
@@ -720,8 +762,8 @@ type ListTone = "ok" | "warn" | "danger" | "off";
  * with its parent turned four hundred rows of DOM into the price of typing a
  * model name.
  *
- * The markup is the row's own button, unchanged — a component boundary is not
- * a node, so the list draws exactly what it drew before.
+ * The markup is the row's own button — a component boundary is not a node,
+ * so wrapping the list's rows in this component draws no extra wrapper.
  */
 const ModelListRow = memo(function ModelListRow({
   id,
@@ -729,6 +771,7 @@ const ModelListRow = memo(function ModelListRow({
   status,
   providerLine,
   price,
+  priceTitle,
   latency,
   selected,
   onOpen,
@@ -738,6 +781,7 @@ const ModelListRow = memo(function ModelListRow({
   status: ListTone;
   providerLine: string;
   price: string;
+  priceTitle: string | null;
   latency: string;
   selected: boolean;
   onOpen: (id: string) => void;
@@ -752,9 +796,11 @@ const ModelListRow = memo(function ModelListRow({
        * replaced by it in the accessibility tree: the dot beside the model is
        * a colour, and a colour is invisible to a screen reader. Without this
        * the row announced only "Open <id>", and whether the model was enabled
-       * was nowhere in the sentence.
+       * was nowhere in the sentence. The price line rides along for the same
+       * reason — it is one of the row's lines now, so it is part of the
+       * sentence, including the word that says no price was configured.
        */
-      aria-label={`${t("models.open_row", { id: name })} — ${providerLine} — ${
+      aria-label={`${t("models.open_row", { id: name })} — ${providerLine} — ${price} — ${
         status === "off" ? t("status.disabled") : t("status.enabled")
       }`}
     >
@@ -774,8 +820,18 @@ const ModelListRow = memo(function ModelListRow({
           {name}
         </span>
         <span className="row-sub">{providerLine}</span>
+        {/*
+         * The price as the name block's second sub-line (A5), where the
+         * 820px window cannot press it into a 60px column that wrapped it
+         * over three or four lines. It always says something — a model with
+         * no pricing announces that rather than a blank — the numbers carry
+         * no binary tail, and the stored value behind a trimmed number is
+         * one hover away in the title.
+         */}
+        <span className="row-sub" title={priceTitle ?? undefined}>
+          {price}
+        </span>
       </div>
-      <span className="col-num">{price}</span>
       <span className="col-num">{latency}</span>
     </button>
   );
@@ -813,6 +869,13 @@ function ModelDrawer({
   const { t } = useI18n();
   const [renameError, setRenameError] = useState<string | null>(null);
   const status = !m.enabled || provider?.enabled === false ? "off" : "ok";
+  const dialect = provider?.kind === "anthropic" ? "anthropic"
+    : provider?.api_surface === "responses" ? "open_a_i_responses" : "open_a_i";
+  const evidence = m.reasoning_capability;
+  const currentEvidence = evidence?.schema_version === 1
+    && evidence.provider_id === provider?.id && evidence.upstream_model === m.upstream_model
+    && evidence.dialect === dialect ? evidence : null;
+  const displayedEfforts = currentEvidence?.effort_levels ?? m.effort_levels ?? [];
   // A decision model answers the Auto Mode's questions and cannot answer a
   // request that wants prose, so no tier exists for it to hold. The drawer
   // used to show the tier select disabled with a "—" in it — a control that
@@ -878,6 +941,9 @@ function ModelDrawer({
 
   return (
     <Drawer title={<><StatusDot tone={status} /> <span>{modelName(m)}</span></>} onClose={onClose}>
+      {/* A drawer opened for one model starts with no verdict inherited from
+          the surface before it. */}
+      <SaveFeedbackReset />
       <KeyValue rows={rows} />
 
       <Section title={t("models.performance")}>
@@ -1041,7 +1107,7 @@ function ModelDrawer({
         <div className="field-label">{t("models.effort_levels")}</div>
         <div className="field-actions">
           {EFFORT_LEVELS.map((level) => {
-            const declared = (m.effort_levels ?? []).includes(level);
+            const declared = displayedEfforts.includes(level);
             return (
               <Button
                 key={level}
@@ -1050,13 +1116,27 @@ function ModelDrawer({
                 disabled={busy}
                 onClick={() =>
                   onUpdate((model) => {
-                    const current = model.effort_levels ?? [];
+                    const current = currentEvidence?.effort_levels ?? model.effort_levels ?? [];
                     model.effort_levels = declared
                       ? current.filter((value) => value !== level)
                       : EFFORT_LEVELS.filter(
                           (candidate) =>
                             candidate === level || current.includes(candidate),
-                        );
+                         );
+                    if (provider) {
+                      model.reasoning_capability = {
+                        schema_version: 1,
+                        source: "manual model settings",
+                        observed_at: Math.floor(Date.now() / 1000),
+                        provider_id: provider.id,
+                        upstream_model: model.upstream_model,
+                        dialect,
+                        effort_levels: [...model.effort_levels],
+                        token_budget: currentEvidence?.token_budget ?? false,
+                        effort_budgets: currentEvidence?.effort_budgets ?? {},
+                        manual: true,
+                      };
+                    }
                   })
                 }
               >
@@ -1397,4 +1477,89 @@ function isPriced(pricing: Pricing): boolean {
     pricing.cache_read_per_mtok !== null ||
     pricing.cache_write_per_mtok !== null
   );
+}
+
+/**
+ * A price as the operator typed it, not as the binary double stored it.
+ *
+ * Per-token rates are decimal sentences ("4", "0.02", "1.47") that a double
+ * smears with a binary tail — `String` of the stored value printed
+ * `1.4700000000000002` straight into the row. Twelve significant digits
+ * cover every rate a person enters and shave the tail off; whatever
+ * survives is printed in full decimal, because `String` reaches for
+ * exponent notation below a millionth and at 1e21 and a price line never
+ * carries an "e".
+ */
+export function formatPriceNumber(value: number): string {
+  if (!Number.isFinite(value)) return String(value);
+  if (value === 0) return "0";
+  const cleaned = Number(value.toPrecision(12));
+  const raw = String(cleaned);
+  if (!raw.includes("e")) return raw;
+  // Expand the exponent by hand: take the mantissa's digits and move the
+  // decimal point `exponent` places from where the mantissa kept it.
+  const [mantissa, exponent] = raw.split("e");
+  const shift = Number(exponent);
+  const negative = mantissa.startsWith("-");
+  const digits = mantissa.replace(/[-+.]/g, "");
+  const dot = mantissa.indexOf(".");
+  const point = (dot < 0 ? digits.length : dot - (negative ? 1 : 0)) + shift;
+  const body =
+    point <= 0
+      ? `0.${"0".repeat(-point)}${digits}`
+      : point >= digits.length
+        ? `${digits}${"0".repeat(point - digits.length)}`
+        : `${digits.slice(0, point)}.${digits.slice(point)}`;
+  return `${negative ? "-" : ""}${body}`;
+}
+
+/**
+ * The sentence a model row prints under its name for its price, and the raw
+ * sentence its `title` carries when the printed numbers were trimmed.
+ *
+ * Three states the review's O4 found blurred together, kept apart here:
+ *
+ * - no `pricing` at all — the row says so ("未配置价格" / "No price
+ *   configured") rather than going blank or printing a zero it never
+ *   measured;
+ * - a price whose both sides are zero — a real, configured zero (a free
+ *   model), printed as the zero it is;
+ * - a zero beside a configured rate — that is the side a price was never
+ *   entered into (the editor's unset default), so it says "not set"
+ *   instead of counterfeiting a measured zero.
+ *
+ * The per-million unit is stated once, at the end, in every state. The
+ * `title` repeats the sentence with the stored values untrimmed, and is
+ * omitted when there is nothing behind the printed numbers to reveal.
+ */
+export function modelPriceText(
+  pricing: Pricing | null,
+  t: (key: TKey, params?: Record<string, string | number>) => string,
+): { line: string; title: string | null } {
+  if (!pricing) return { line: t("models.price_missing"), title: null };
+  // One side of the price, as printed (`raw: false`) or as stored. A
+  // non-zero always prints; a zero prints only when it is the whole price —
+  // beside a configured rate it means "never entered", not "known free".
+  const side = (value: number, other: number, raw: boolean): string => {
+    if (value !== 0) return raw ? String(value) : formatPriceNumber(value);
+    return other !== 0 ? t("models.price_side_unset") : "0";
+  };
+  const input = side(pricing.input_per_mtok, pricing.output_per_mtok, false);
+  const output = side(pricing.output_per_mtok, pricing.input_per_mtok, false);
+  const line = t("models.price_cell", {
+    input,
+    output,
+    currency: pricing.currency,
+  });
+  const inputRaw = side(pricing.input_per_mtok, pricing.output_per_mtok, true);
+  const outputRaw = side(pricing.output_per_mtok, pricing.input_per_mtok, true);
+  const title =
+    input === inputRaw && output === outputRaw
+      ? null
+      : t("models.price_cell", {
+          input: inputRaw,
+          output: outputRaw,
+          currency: pricing.currency,
+        });
+  return { line, title };
 }

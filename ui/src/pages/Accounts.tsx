@@ -37,6 +37,7 @@ import {
   type ReconcileReport,
   type Snapshot,
 } from "../api";
+import type { TaskKind } from "../saveQueue";
 
 /** A whole number of seconds, as a short relative phrase. */
 function ago(unix_secs: number): string {
@@ -53,7 +54,7 @@ export default function Accounts({
   busy,
 }: {
   snapshot: Snapshot;
-  run: (task: () => Promise<Snapshot>) => Promise<boolean>;
+  run: (task: () => Promise<Snapshot>, kind?: TaskKind) => Promise<boolean>;
   busy: boolean;
 }) {
   const { t } = useI18n();
@@ -106,8 +107,9 @@ export default function Accounts({
       // The reconciler published into the account store, which is where the
       // snapshot's balances and per-account figures are read from. Re-read the
       // snapshot rather than patching it here, so the page cannot end up showing
-      // a probe result beside balances from before it ran.
-      await run(api.snapshot);
+      // a probe result beside balances from before it ran. The re-read is an
+      // observation: it claims no save, and nothing here saved anything.
+      await run(api.snapshot, "observe");
     } catch (e) {
       notify("error", describeBackendError(t, errorText(e)));
     } finally {
@@ -136,7 +138,9 @@ export default function Accounts({
       const reward =
         view.reward_amount !== null ? ` (+${view.reward_amount} ${view.reward_unit ?? ""})` : "";
       notify("ok", `${label}${reward}`);
-      await run(api.snapshot);
+      // A check-in is a runtime event, not a configuration write; the re-read
+      // that follows is an observation and claims no save.
+      await run(api.snapshot, "observe");
     } catch (e) {
       notify("error", `${t("accounts.checkin_api_failed")}: ${describeBackendError(t, errorText(e))}`);
     } finally {

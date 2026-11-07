@@ -286,6 +286,18 @@ export interface ModelEntry {
    * picker order. Filled from models.dev on import and correctable by hand.
    */
   effort_levels: string[];
+  reasoning_capability?: {
+    schema_version: number;
+    source: string;
+    observed_at: number;
+    provider_id: string;
+    upstream_model: string;
+    dialect: string;
+    effort_levels: string[];
+    token_budget: boolean;
+    effort_budgets?: Record<string, number>;
+    manual?: boolean;
+  } | null;
   /** Entered by hand, like the tier. Without it a request is logged unpriced. */
   pricing: Pricing | null;
 }
@@ -651,6 +663,156 @@ export interface RequestRecord {
   account_id?: string;
   inference_key_id?: string;
   accounting?: RequestAccounting;
+  upstream_declared?: UpstreamModelDeclaration | null;
+  /** Source of the read-only usage view; absent on ordinary local snapshots. */
+  usage_source?: string;
+}
+
+export type DeclaredIdentity =
+  | { state: "missing" }
+  | { state: "declared"; value: string }
+  | { state: "auto_only"; value: string }
+  | { state: "conflicting"; value: string[] };
+
+export interface UpstreamModelDeclaration {
+  schema_version: number;
+  model: DeclaredIdentity;
+  model_version: DeclaredIdentity;
+}
+
+export type UsageEvidence = "absent" | "partial" | "measured" | "invalid" | "conflicting";
+
+/** Immutable per-send facts; provider configuration is never used to rebuild old identities. */
+export interface UsageAttempt {
+  id: string;
+  request_id: string | null;
+  execution: {
+    provider_id: string;
+    provider_name: string;
+    model_id: string;
+    model_name: string;
+    upstream_model: string;
+    dialect: string;
+    upstream_protocol?: string | null;
+    account_id: string | null;
+    inference_key_id: string | null;
+    binding_version: string | null;
+    pricing: Pricing | null;
+  };
+  declared?: UpstreamModelDeclaration | null;
+  started_at: string;
+  finished_at: string | null;
+  state: "in_flight" | "served" | "failed" | "cancelled" | "interrupted";
+  sent: boolean;
+  usage: Usage | null;
+  /** The stored wire evidence; missing on legacy attempts. */
+  usage_evidence?: UsageEvidence | null;
+  cost: Cost | null;
+}
+
+export interface UsageSourceView {
+  source_name: string;
+  revision: number;
+  summary: StatsSummary;
+  recent: RequestRecord[];
+  days: UsageDay[];
+}
+
+export interface UsageSourcesView {
+  local: UsageSourceView;
+  standby: UsageSourceView | null;
+}
+
+/**
+ * What an import from another tool's history database would store.
+ *
+ * `requests` counts rows that describe one call, `aggregates` rows that describe
+ * a whole day because the source pruned the detail. `suspected` counts rows the
+ * source has no proof of being distinct; they are stored and shown but kept out
+ * of every total. `covered_totals` counts day totals skipped because that day
+ * still has detail, so the same usage is never counted twice.
+ */
+export interface UsageImportPreview {
+  source: string;
+  /** The copy being imported: the importer's identity for it. */
+  instance: string;
+  source_version: number;
+  requests: number;
+  aggregates: number;
+  suspected: number;
+  covered_totals: number;
+  priced: number;
+  unpriced: number;
+  failures: number;
+  days: string[];
+  warnings: string[];
+  /** Durable, unpublished snapshot. Confirmation never reopens the source. */
+  run_id: string | null;
+  fingerprint: string | null;
+  range: UsageImportRange;
+  cancelled: boolean;
+}
+
+/** UTC, half-open bounds; omitted bounds read all available history. */
+export interface UsageImportRange {
+  from?: string | null;
+  until?: string | null;
+}
+
+/** What one commit changed. */
+export interface UsageImportOutcome {
+  inserted: number;
+  updated: number;
+  unchanged: number;
+  revision: number;
+  cancelled: boolean;
+}
+
+/**
+ * A history source the backend can offer without a file dialog.
+ *
+ * `source` is the adapter family the path belongs to (`ccswitch`,
+ * `claudecode`); `recent` marks a path that was read on this machine before.
+ * Discovery only checks that the path exists — reading it is still the
+ * preview's job.
+ */
+export interface UsageHistorySourceOffer {
+  source: string;
+  label: string;
+  path: string;
+  recent: boolean;
+}
+
+/**
+ * Imported history, counted apart from this device's own usage.
+ *
+ * `suspected_requests` are excluded from `requests`; `aggregate_requests` is the
+ * part of `requests` that came from a day total; `unpriced_requests` had tokens
+ * but no price, and are not free.
+ */
+export interface ImportedUsageTotals {
+  requests: number;
+  failures: number;
+  input_tokens: number;
+  output_tokens: number;
+  cache_read_tokens: number;
+  cache_write_tokens: number;
+  unpriced_requests: number;
+  suspected_requests: number;
+  aggregate_requests: number;
+  cost: Record<string, number>;
+}
+
+export interface ImportedUsageView {
+  totals: ImportedUsageTotals;
+  days: UsageDay[];
+  /**
+   * The earliest counted imported day in the whole store, `YYYY-MM-DD`.
+   *
+   * `days` is windowed; an import older than the window must still name the
+   * period the page's figures cover, so the start is reported separately.
+   */
+  first_day?: string | null;
 }
 
 /**
@@ -939,6 +1101,22 @@ export interface Account {
   maintenance: Maintenance;
   binding?: AccountBinding | null;
   probe_kind?: "none" | "new_api" | null;
+  effective_rates?: EffectiveRate[];
+}
+
+export interface EffectiveRate {
+  schema_version: number;
+  id: string;
+  upstream_model: string;
+  dialect: string;
+  binding_version: string;
+  inference_key_id: string | null;
+  group: string | null;
+  source: "public_catalogue" | "verified_effective" | "manual_override" | "manual_fallback";
+  observed_at: number;
+  expires_at: number | null;
+  evidence: string;
+  pricing: Pricing;
 }
 
 export interface RemoteIdentity {
@@ -1806,8 +1984,67 @@ export const api = {
    * than asking again whenever the reader changes the range.
    */
   usageDays: (days: number) => invoke<UsageDay[]>("get_usage_days", { days }),
+  usageSources: (days: number) => invoke<UsageSourcesView>("get_usage_sources", { days }),
+  chooseStandbyUsageDatabase: () => invoke<string | null>("choose_standby_usage_database"),
+  /**
+   * History sources this machine already has, plus paths used before. The
+   * backend only checks that each path exists; nothing is read here.
+   */
+  discoverUsageHistorySources: () =>
+    invoke<UsageHistorySourceOffer[]>("discover_usage_history_sources"),
+  /**
+   * Pick another tool's history source. The native dialog returns a path and
+   * nothing else; reading it is the preview step's job, so an unreadable path
+   * reports its reason beside the confirmation screen.
+   *
+   * `folder` selects a directory of client transcripts, anything else a
+   * database file. The backend decides which adapter the path belongs to; the
+   * caller never names the tool.
+   */
+  pickUsageHistorySource: (kind: "file" | "folder" = "file") =>
+    invoke<string | null>("pick_usage_history_source", { kind }),
+  /**
+   * Stage a read-only source snapshot without publishing history.
+   * `instance` defaults to the file's stem on the backend; pass it only when
+   * correcting the label a person confirmed.
+   */
+  previewUsageHistoryImport: (
+    path: string,
+    run_id: string,
+    instance?: string,
+    range: UsageImportRange = {},
+  ) =>
+    invoke<UsageImportPreview>("preview_usage_history_import", {
+      path,
+      runId: run_id,
+      instance: instance ?? null,
+      range,
+    }),
+  /**
+   * Atomically publish the exact prepared snapshot. A stale history revision
+   * requires a fresh preview; a repeated confirmation returns its saved report.
+   */
+  commitUsageHistoryImport: (run_id: string, fingerprint: string) =>
+    invoke<UsageImportOutcome>("commit_usage_history_import", {
+      runId: run_id,
+      fingerprint,
+    }),
+  /** True when cancelled; false when publication already crossed its commit point. */
+  cancelUsageHistoryImport: (run_id: string) =>
+    invoke<boolean>("cancel_usage_history_import", { runId: run_id }),
+  /** Prepared snapshots survive a restart and can be confirmed without rereading. */
+  pendingUsageHistoryImports: () =>
+    invoke<UsageImportPreview[]>("pending_usage_history_imports"),
+  /** Imported history inside the same `days` window the local card uses. */
+  importedUsage: (days: number) => invoke<ImportedUsageView>("get_imported_usage", { days }),
+  /**
+   * Clear imported history only. Local usage, spend, wallet and health stay.
+   */
+  clearImportedUsage: () => invoke<number>("clear_imported_usage"),
   usageHistory: (query: UsageHistoryQuery = {}) =>
     invoke<UsageHistoryPage>("query_usage_history", { query }),
+  usageAttempts: (request_id: string) =>
+    invoke<UsageAttempt[]>("get_usage_attempts", { requestId: request_id }),
   logs: () => invoke<string[]>("get_logs"),
   /**
    * Live counters and the stored pointer. Read-only.
@@ -2126,10 +2363,10 @@ export const api = {
    * `snapshot.newapi_available` is true. */
   previewNewapiPricing: (provider_id: string, account_id: string | null = null) =>
     invoke<NewApiPrice[]>("preview_newapi_pricing", { providerId: provider_id, accountId: account_id }),
-  /** Apply the panel's per-token prices to matching models. Call only when
+  /** Explicitly use this public quote as an estimated fallback for one account/key. Call only when
    * `snapshot.newapi_available` is true. */
-  importNewapiPricing: (provider_id: string, account_id: string | null = null, group = "default") =>
-    invoke<Snapshot>("import_newapi_pricing", { providerId: provider_id, accountId: account_id, group }),
+  importNewapiPricing: (provider_id: string, account_id: string, group: string, inference_key_id: string | null = null) =>
+    invoke<Snapshot>("import_newapi_pricing", { providerId: provider_id, accountId: account_id, group, inferenceKeyId: inference_key_id }),
   /** Probes every tier member, so it costs one tiny request each. */
   runElection: () => invoke<Snapshot>("run_election"),
   start: () => invoke<Snapshot>("start_proxy"),

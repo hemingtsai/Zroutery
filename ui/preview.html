@@ -1,0 +1,26 @@
+<!doctype html>
+<!--
+  The dashboard, in a browser, against a read-only copy of the running app's
+  real state.
+
+  Identical to index.html except that live-bridge.ts loads first, so
+  `window.__TAURI_INTERNALS__` exists before the application asks for it and
+  every command goes to src-tauri/examples/preview.rs instead of the Tauri
+  runtime. Vite serves this as a dev entry point; `vite build` only follows
+  index.html, so neither this file nor the bridge reaches dist/.
+
+  Start the preview server, keep `pnpm --dir ui dev` running, then open
+  http://localhost:5174/preview.html
+-->
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Zroutery (live preview)</title>
+    <script type="module" src="/live-bridge.ts"></script>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>

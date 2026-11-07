@@ -1,10 +1,20 @@
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { api, deepLinkCurrent, errorText, gatewayAction, onDeepLink, onGatewayStateChanged, type AppConfig, type Snapshot } from "./api";
-import { Banner, MenuItem, Popover, Segment, StatusDot, Tabs, ToastProvider, useToast } from "./components";
+import { applySystemAccent } from "./accent";
+import { Banner, MenuItem, Popover, StatusDot, Tabs, ToastProvider, useToast } from "./components";
 import { describeBackendError, I18nProvider, useI18n } from "./i18n";
 import { ModeContext, loadMode, storeMode, type UiMode } from "./mode";
-import { createSaveQueue, SaveStatusContext, type SaveQueue, type SaveStatus } from "./saveQueue";
+import {
+  createSaveQueue,
+  createSaveVerdict,
+  SaveFeedbackResetContext,
+  SaveStatusContext,
+  type SaveQueue,
+  type SaveStatus,
+  type SaveVerdict,
+} from "./saveQueue";
 import { applySkin, loadSkin, SkinContext, storeSkin, type Skin } from "./skin";
+import { applyTheme, loadThemePref, storeThemePref, type ThemePref } from "./theme";
 import { routeForDeepLink, taskFor, type Page } from "./navigation";
 const Overview = lazy(() => import("./pages/Overview"));
 const Models = lazy(() => import("./pages/Models"));
@@ -45,24 +55,8 @@ const NAV: { id: Page; labelKey: Parameters<ReturnType<typeof useI18n>["t"]>[0] 
   { id: "settings", labelKey: "nav.settings" },
 ];
 
-/**
- * The nav entries simple mode keeps: the dashboard, the usage ledger, and the
- * settings. Everything else keeps working — a deep link or a bookmark still
- * opens its page — the short list just stops advertising doors a first user
- * has no reason to look for.
- */
-const SIMPLE_NAV_IDS: readonly Page[] = ["overview", "activity", "settings"];
-
-/**
- * The pages a `zroutery://` link may not open while simple mode is on.
- *
- * Models, client setup and their sub-areas are the geek-only surfaces. A link
- * naming one of them is answered with a notice rather than a navigation: the
- * window is already forward, so saying where the page lives is the honest
- * answer, and "stay" is the only response that does not throw away the page
- * the reader was on.
- */
-const GEEK_ONLY_PAGES: readonly Page[] = ["models", "takeover", "routing", "cutover", "accounts"];
+// Both modes keep the six task doors. Basic setup cannot depend on discovering
+// an interface-mode switch; advanced controls remain inside their task pages.
 
 /**
  * The quirks the provider drawer offers as toggles.
@@ -105,27 +99,8 @@ function countAdvanced(config: AppConfig): number {
   return n;
 }
 
-type ThemePref = "system" | "light" | "dark";
-
-/**
- * How many notification banners the shell shows before collapsing the rest.
- *
- * Two is the width of the window's usable height at 820x560: a third banner
- * pushes the first section below the fold, and a notification that costs the
- * page its content is a notification that gets dismissed without being read.
- */
+/** How many notification banners fit above the first useful section. */
 const MAX_BANNERS = 2;
-
-function loadThemePref(): ThemePref {
-  const stored = localStorage.getItem("zroutery-theme");
-  return stored === "light" || stored === "dark" ? stored : "system";
-}
-
-/** The concrete theme a preference resolves to right now. */
-function resolveTheme(pref: ThemePref): "light" | "dark" {
-  if (pref !== "system") return pref;
-  return window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
-}
 
 export default function App() {
   return (
@@ -153,11 +128,18 @@ function Shell() {
   const [skin, setSkin] = useState<Skin>(loadSkin);
   useEffect(() => {
     applySkin(skin);
-    storeSkin(skin);
   }, [skin]);
-  // The deep-link listener registers once, so it reads the mode it was current
-  // when it fired through a ref rather than re-registering on every switch.
-  const modeRef = useRef(mode);
+  const changeSkin = (next: Skin) => {
+    if (next === skin) return;
+    storeSkin(next);
+    applySkin(next);
+    setSkin(next);
+  };
+  const changeThemePref = (next: ThemePref) => {
+    storeThemePref(next);
+    applyTheme(next);
+    setThemePref(next);
+  };
   const [error, setError] = useState<string | null>(null);
   const [pollError, setPollError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -172,10 +154,9 @@ function Shell() {
 
   useEffect(() => {
     const apply = () => {
-      document.documentElement.dataset.theme = resolveTheme(themePref);
+      applyTheme(themePref);
     };
     apply();
-    localStorage.setItem("zroutery-theme", themePref);
     // "Follow system" has to keep following: listen while it is the preference.
     const media = window.matchMedia("(prefers-color-scheme: dark)");
     media.addEventListener("change", apply);
@@ -183,8 +164,31 @@ function Shell() {
   }, [themePref]);
 
   useEffect(() => {
-    modeRef.current = mode;
-  }, [mode]);
+    let active = true;
+    const readAccent = async () => {
+      try {
+        const accent = await api.systemAccent();
+        if (active) applySystemAccent(accent, document.documentElement.style);
+      } catch {
+        if (active) applySystemAccent(null, document.documentElement.style);
+      }
+    };
+    const onVisibility = () => {
+      if (document.visibilityState === "visible") void readAccent();
+    };
+    const systemTheme = window.matchMedia("(prefers-color-scheme: dark)");
+    const onFocus = () => void readAccent();
+    void readAccent();
+    document.addEventListener("visibilitychange", onVisibility);
+    systemTheme.addEventListener("change", onFocus);
+    window.addEventListener("focus", onFocus);
+    return () => {
+      active = false;
+      document.removeEventListener("visibilitychange", onVisibility);
+      systemTheme.removeEventListener("change", onFocus);
+      window.removeEventListener("focus", onFocus);
+    };
+  }, [themePref]);
 
   /**
    * Switch the interface mode — the one handler behind both entrances.
@@ -222,42 +226,54 @@ function Shell() {
   }, [t]);
 
   const queueRef = useRef<SaveQueue | null>(null);
+  const verdictRef = useRef<SaveVerdict | null>(null);
   if (!queueRef.current) {
+    // The verdict is the queue's truth phrased for a drawer's foot. Only a
+    // configuration write may speak there: reads and observations — the
+    // startup snapshot, a balance refresh, an account probe — apply their
+    // snapshot and claim nothing, and a freshly mounted drawer inherits
+    // nothing (see `SaveFeedbackReset` in the drawers themselves).
+    const verdict = createSaveVerdict(setSaveStatus);
+    verdictRef.current = verdict;
     queueRef.current = createSaveQueue({
-      begin: () => {
+      begin: (kind) => {
         saving.current = true;
         configEpoch.current += 1;
         setBusy(true);
         setError(null);
-        setSaveStatus({ phase: "saving" });
+        verdict.begin(kind);
       },
       apply: (next) => {
         configEpoch.current += 1;
         configRef.current = next.config;
         setSnapshot(next);
       },
-      fail: (cause, dropped) => {
+      fail: (cause, dropped, kind) => {
         setError(errorText(cause));
-        setSaveStatus({ phase: "error", message: errorText(cause) });
-        if (dropped > 0) {
+        verdict.fail(errorText(cause), kind);
+        // Only a write holds edits behind it; its failure is theirs too. An
+        // observation failed alone, and the surface that asked for it says so.
+        if (kind === "write" && dropped > 0) {
           notify("error", translate.current("toast.queued_discarded"));
         }
       },
-      finish: () => {
+      finish: (kind) => {
         saving.current = false;
         setBusy(false);
-        // A failed save just wrote the error phase; a success (or the tail of a
-        // failure chain) stamps the moment. Keeping the error wins here.
-        setSaveStatus((s) =>
-          s.phase === "error" ? s : { phase: "saved", at: Date.now() },
-        );
+        verdict.finish(kind);
       },
     });
   }
   const run = queueRef.current.run;
 
+  // A drawer that mounts clears the verdict instead of inheriting it, so one
+  // entity's "saved" never greets the next entity's drawer.
+  const resetSaveFeedback = useCallback(() => verdictRef.current?.reset(), []);
+
+  // The first read is an observation: it fills the pages and claims nothing.
+  // A drawer opened afterwards must not meet a "saved" stamp it never earned.
   useEffect(() => {
-    void run(api.snapshot);
+    void run(api.snapshot, "observe");
   }, [run]);
 
   /**
@@ -342,18 +358,6 @@ function Shell() {
     const open = (url: string) => {
       const target = pageForLink(url);
       if (!target) return;
-      // Simple mode filters visibility, not behaviour, and a link is outside
-      // the window: refusing it would break a bookmark that works in geek
-      // mode, and opening it would land a first user on a surface the short
-      // nav never mentioned. So the page stays where it is and the notice says
-      // where the surface lives — through the ref, because the listener was
-      // registered once and the mode may have changed since.
-      if (modeRef.current === "simple" && GEEK_ONLY_PAGES.includes(target)) {
-        // info, not ok: the link worked and the app is describing where the
-        // surface lives — a notice, not an accomplishment.
-        notify("info", translate.current("mode.geek_only_page"));
-        return;
-      }
       setPage(target);
     };
 
@@ -382,16 +386,7 @@ function Shell() {
     };
   }, []);
 
-  /*
-   * The nav the current mode presents. Geek mode lists everything; simple
-   * mode keeps the three doors a first user needs. The page title is still
-   * looked up in the full NAV, so a page a link opened stays named even when
-   * the short list does not mention it.
-   */
-  const visibleNav = useMemo(
-    () => (mode === "simple" ? NAV.filter((item) => SIMPLE_NAV_IDS.includes(item.id)) : NAV),
-    [mode],
-  );
+  const visibleNav = NAV;
 
   /*
    * Alt+1..9 jumps straight to the page at that position in the nav.
@@ -470,7 +465,10 @@ function Shell() {
     }
     configRef.current = fresh.config;
     setSnapshot(fresh);
-    void run(gatewayAction(fresh.server) === "start" ? api.start : api.stop);
+    // Starting or stopping the gateway is a runtime action, not a
+    // configuration write: the status dot and the menu answer it, and the save
+    // vocabulary says nothing.
+    void run(gatewayAction(fresh.server) === "start" ? api.start : api.stop, "observe");
   }, [busy, run]);
 
   /**
@@ -610,6 +608,7 @@ function Shell() {
     <ModeContext.Provider value={mode}>
     <SkinContext.Provider value={skin}>
     <SaveStatusContext.Provider value={saveStatus}>
+    <SaveFeedbackResetContext.Provider value={resetSaveFeedback}>
     <div className="shell">
       <nav className="sidebar" aria-label={t("nav.main_aria")}>
         <div className="sidebar-brand">
@@ -648,22 +647,12 @@ function Shell() {
         <div className="sidebar-spacer" />
 
         {/*
-          * The mode switch lives at the foot of the nav because the mode is a
-          * property of the nav itself — it decides how long the list above is.
-          * One Segment, the same control the settings row renders: two doors
-          * into one state, and a switch that is one click either way.
+          * No mode switch here any more. It used to close the nav because the
+          * mode decided how long this list was; since both modes keep the same
+          * six doors (see the visibleNav note above) the switch is a plain
+          * preference, and preferences belong in Settings — where the same
+          * Segment already renders in the Appearance section for both modes.
           */}
-        <div className="sidebar-mode">
-          <Segment<UiMode>
-            ariaLabel={t("mode.toggle_aria")}
-            value={mode}
-            onChange={applyMode}
-            options={[
-              { value: "simple", label: t("mode.simple") },
-              { value: "geek", label: t("mode.geek") },
-            ]}
-          />
-        </div>
       </nav>
 
       <div className="main">
@@ -779,7 +768,7 @@ function Shell() {
                   <MenuItem
                     active={themePref === "system"}
                     onClick={() => {
-                      setThemePref("system");
+                      changeThemePref("system");
                       close();
                     }}
                   >
@@ -788,7 +777,7 @@ function Shell() {
                   <MenuItem
                     active={themePref === "light"}
                     onClick={() => {
-                      setThemePref("light");
+                      changeThemePref("light");
                       close();
                     }}
                   >
@@ -797,7 +786,7 @@ function Shell() {
                   <MenuItem
                     active={themePref === "dark"}
                     onClick={() => {
-                      setThemePref("dark");
+                      changeThemePref("dark");
                       close();
                     }}
                   >
@@ -855,12 +844,11 @@ function Shell() {
                 snapshot={snapshot}
                 onNavigate={setPage}
                 // The pool drags on the simple home save through the same
-                // queue as every page, and the add-models hand-off switches
-                // the mode the same way the settings row does.
+                // queue as every page. The add-models hand-off navigates only;
+                // the mode is a Settings preference and stays out of the way.
                 save={save}
                 run={run}
                 busy={busy}
-                onModeChange={applyMode}
               />
             )}
             {taskPage === "models" && <Tabs value={page} onChange={(next) => setPage(next as Page)} ariaLabel={t("task.models")}
@@ -869,18 +857,12 @@ function Shell() {
                 { value: "routing", label: t("task.rules"), content: <Routing snapshot={snapshot} save={save} run={run} busy={busy} /> },
               ]} />}
             {taskPage === "providers" && <Tabs
-              // Simple mode keeps only the connections tab. A reader standing
-              // on the observations tab when the mode narrows is clamped to the
-              // tab that remains rather than shown a tab the strip does not
-              // list; switching back restores where they were.
-              value={mode === "simple" && page === "accounts" ? "providers" : page}
+              value={page}
               onChange={(next) => setPage(next as Page)}
               ariaLabel={t("task.providers")}
               tabs={[
                 { value: "providers", label: t("task.connections"), content: <Providers snapshot={snapshot} save={save} run={run} busy={busy} /> },
-                ...(mode === "geek"
-                  ? [{ value: "accounts", label: t("task.accounts"), content: <Accounts snapshot={snapshot} run={run} busy={busy} /> }]
-                  : []),
+                { value: "accounts", label: t("task.accounts"), content: <Accounts snapshot={snapshot} run={run} busy={busy} /> },
               ]} />}
             {taskPage === "takeover" && <Tabs value={page} onChange={(next) => setPage(next as Page)} ariaLabel={t("task.clients")}
               tabs={[
@@ -895,9 +877,9 @@ function Shell() {
                 run={run}
                 busy={busy}
                 themePref={themePref}
-                onThemePref={setThemePref}
+                onThemePref={changeThemePref}
                 skin={skin}
-                onSkinChange={setSkin}
+                onSkinChange={changeSkin}
                 mode={mode}
                 onModeChange={applyMode}
               />
@@ -907,6 +889,7 @@ function Shell() {
         </main>
       </div>
     </div>
+    </SaveFeedbackResetContext.Provider>
     </SaveStatusContext.Provider>
     </SkinContext.Provider>
     </ModeContext.Provider>

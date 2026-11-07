@@ -116,31 +116,30 @@ export default function Settings({
   const generalPane = (
     <>
         <Section title={t("appearance.title")}>
-          {simpleOnly && (
-            /*
-              * The mode row, in simple mode only: the reader it serves is the
-              * one who wants out of simple mode or reassurance about what it
-              * does. It is the same Segment the sidebar foot carries — two
-              * entrances, one state.
-              */
-            <div className="setting-row">
-              <div className="setting-left">
-                <span className="setting-title">{t("mode.toggle_aria")}</span>
-                <span className="setting-desc">{t("mode.settings_hint")}</span>
-              </div>
-              <div className="setting-right">
-                <Segment<UiMode>
-                  ariaLabel={t("mode.toggle_aria")}
-                  value={mode}
-                  onChange={onModeChange}
-                  options={[
-                    { value: "simple", label: t("mode.simple") },
-                    { value: "geek", label: t("mode.geek") },
-                  ]}
-                />
-              </div>
+          {/*
+            * The mode row, first in Appearance: the interface mode is the
+            * broadest of the appearance preferences, and it now lives only
+            * here — the sidebar foot no longer carries a switch. Both modes
+            * see it, so a geek reader can step down to simple the same way a
+            * simple reader steps up.
+            */}
+          <div className="setting-row">
+            <div className="setting-left">
+              <span className="setting-title">{t("mode.toggle_aria")}</span>
+              <span className="setting-desc">{t("mode.settings_hint")}</span>
             </div>
-          )}
+            <div className="setting-right">
+              <Segment<UiMode>
+                ariaLabel={t("mode.toggle_aria")}
+                value={mode}
+                onChange={onModeChange}
+                options={[
+                  { value: "simple", label: t("mode.simple") },
+                  { value: "geek", label: t("mode.geek") },
+                ]}
+              />
+            </div>
+          </div>
           <div className="setting-row">
             <div className="setting-left">
               <span className="setting-title">{t("settings.language")}</span>

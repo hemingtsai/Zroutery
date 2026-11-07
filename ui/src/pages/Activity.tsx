@@ -23,8 +23,17 @@ import {
   type ClientTotals,
   type Snapshot,
   type UsageDay,
+  type UsageImportOutcome,
+  type UsageImportPreview,
+  type UsageHistorySourceOffer,
+  type ImportedUsageView,
+  type UsageSourceView,
+  type UsageSourcesView,
   type AppConfig,
+  type UsageAttempt,
+  type DeclaredIdentity,
 } from "../api";
+import type { TaskKind } from "../saveQueue";
 import {
   Badge,
   Button,
@@ -82,6 +91,20 @@ const recordClientId = (record: RequestRecord): string | null =>
 
 /** An id this long does not fit a cell; the full value rides on the title. */
 const truncateId = (id: string) => (id.length > 24 ? `${id.slice(0, 23)}…` : id);
+
+/**
+ * A bare `YYYY-MM-DD` day in the reader's own date style.
+ *
+ * A day string is a local calendar fact, not a moment: parsing it as a Date
+ * in UTC and printing it in local time can move it a day backwards west of
+ * Greenwich, which would name the wrong start.
+ */
+function dayLabel(day: string): string {
+  const [year, month, date] = day.split("-").map(Number);
+  return new Date(year, month - 1, date).toLocaleDateString([], {
+    dateStyle: "medium",
+  });
+}
 
 /*
  * A saved-file path shown in one line: the file name and the separator before
@@ -194,11 +217,11 @@ export default function Activity({
   busy,
 }: {
   snapshot: Snapshot;
-  run: (task: () => Promise<Snapshot>) => Promise<boolean>;
+  run: (task: () => Promise<Snapshot>, kind?: TaskKind) => Promise<boolean>;
   save: (mutate: (config: AppConfig) => AppConfig | null) => Promise<boolean>;
   busy: boolean;
 }) {
-  const { summary, recent, health } = snapshot;
+  const { summary: localSummary, recent: localRecent, health } = snapshot;
   const { t } = useI18n();
   // Simple mode keeps the usage ledger alone: the internal log and the budgets
   // are advanced surfaces. The mode only filters visibility — the panes keep
@@ -226,9 +249,46 @@ export default function Activity({
    * so "stopped following" and "there is nothing logged" never render the same.
    */
   const [logs, setLogs] = useState<string[] | null>(null);
-  const [history, setHistory] = useState<"export" | "import" | null>(null);
+  const [history, setHistory] = useState<"export" | "import" | "imported" | null>(null);
   const [archive, setArchive] = useState("");
   const [historyError, setHistoryError] = useState<string | null>(null);
+  const [usageSource, setUsageSource] = useState<"local" | "standby">("local");
+  const [usageSources, setUsageSources] = useState<UsageSourcesView | null>(null);
+  const [usageSourceError, setUsageSourceError] = useState<string | null>(null);
+  const [standbyPath, setStandbyPath] = useState<string | null>(null);
+  const [usageRefresh, setUsageRefresh] = useState(0);
+  /*
+   * Imported history: what another tool recorded, read from its database and
+   * stored apart from this device's own usage. `imported` is the standing
+   * total; `preview` is the row set a person is being asked to accept, and
+   * `report` is what the accepted commit actually did.
+   */
+  const [imported, setImported] = useState<ImportedUsageView | null>(null);
+  const [importSource, setImportSource] = useState<{
+    path: string;
+    preview: UsageImportPreview;
+  } | null>(null);
+  const [importReport, setImportReport] = useState<UsageImportOutcome | null>(null);
+  const [importError, setImportError] = useState<string | null>(null);
+  const [importBusy, setImportBusy] = useState(false);
+  const [importPhase, setImportPhase] = useState<"reading" | "publishing" | null>(null);
+  const [importCancelling, setImportCancelling] = useState(false);
+  const [pendingImports, setPendingImports] = useState<UsageImportPreview[]>([]);
+  const [importInstance, setImportInstance] = useState("");
+  const [importFrom, setImportFrom] = useState("");
+  const [importUntil, setImportUntil] = useState("");
+  const importRun = useRef<string | null>(null);
+  const importEpoch = useRef(0);
+  useEffect(() => () => {
+    importEpoch.current++;
+    if (importRun.current) void api.cancelUsageHistoryImport(importRun.current).catch(() => {});
+  }, []);
+  /*
+   * Sources the backend can name without a dialog: the tools' own default
+   * locations, plus any path read on this machine before. Discovery only says
+   * where to look; reading is still the preview's job.
+   */
+  const [importOffers, setImportOffers] = useState<UsageHistorySourceOffer[]>([]);
   /*
    * The file the last successful native export was written to, kept so the
    * path survives its toast: the full string rides on the hint line's title,
@@ -251,10 +311,67 @@ export default function Activity({
     if (Date.now() - usageLoadedAt.current < 10_000) return;
     usageLoadedAt.current = Date.now();
     api
-      .usageDays(HEATMAP_DAYS)
-      .then(setUsageDays)
-      .catch(() => setUsageDays((current) => current ?? []));
-  }, [summary.requests]);
+      .usageSources(HEATMAP_DAYS)
+      .then((sources) => {
+        setUsageSources(sources);
+        setUsageSourceError(null);
+      })
+      .catch((error) => {
+        setUsageSourceError(String(error));
+        if (!usageSources) {
+          api.usageDays(HEATMAP_DAYS).then(setUsageDays).catch(() => setUsageDays([]));
+        }
+      });
+  }, [localSummary.requests, usageSource, usageRefresh]);
+
+  useEffect(() => {
+    const timer = window.setInterval(() => setUsageRefresh((value) => value + 1), 10_000);
+    return () => window.clearInterval(timer);
+  }, []);
+
+  /*
+   * Imported history is a separate store, so it is read separately, and a
+   * backend from before the import commands simply rejects the call. In that
+   * case the card stays absent: "nothing was imported" and "this build cannot
+   * import" are different claims, and only the first one is a measurement.
+   */
+  useEffect(() => {
+    let live = true;
+    api
+      .importedUsage(HEATMAP_DAYS)
+      .then((view) => {
+        if (live) setImported(view);
+      })
+      .catch(() => {
+        if (live) setImported(null);
+      });
+    return () => {
+      live = false;
+    };
+  }, [usageRefresh]);
+
+  const standbyAvailable = usageSources?.standby !== null && usageSources?.standby !== undefined;  const activeSummary = usageSources
+    ? selectSourceSummary(usageSources, usageSource)
+    : localSummary;
+  const recent = usageSources
+    ? selectSourceRecords(usageSources, usageSource)
+    : localRecent;
+
+  useEffect(() => {
+    if (usageSources) setUsageDays(selectSourceDays(usageSources, usageSource));
+  }, [usageSources, usageSource]);
+
+  useEffect(() => {
+    setStreamClient(null);
+    setStreamModel(null);
+    setFacetProvider(null);
+    setFacetModel(null);
+    setPage(0);
+  }, [usageSource]);
+
+  useEffect(() => {
+    if (!standbyAvailable && usageSource === "standby") setUsageSource("local");
+  }, [standbyAvailable, usageSource]);
 
   /*
    * The measure the traffic chart draws, owned here rather than inside
@@ -317,12 +434,211 @@ export default function Activity({
 
   const importArchive = async () => {
     if (!archive.trim()) return;
-    const ok = await run(() => api.importUsageHistory(archive));
+    // Importing history writes the usage store, never the configuration, so
+    // the task is an observation here: it claims no "saved" anywhere.
+    const ok = await run(() => api.importUsageHistory(archive), "observe");
     if (ok) {
       setHistory(null);
       setArchive("");
     }
   };
+
+  /*
+   * Importing another tool's history is a confirmation, not a one-click
+   * action: the database is read first, its counts are shown, and only the
+   * accepted preview is written. A file the importer cannot understand stops
+   * here with its reason — the picker deliberately returns a path and nothing
+   * else, so the failure lands beside the screen that can act on it.
+   */
+  const loadImportOffers = async () => {
+    try {
+      setImportOffers(await api.discoverUsageHistorySources());
+    } catch {
+      // The list is a shortcut, not the way in: when it cannot be read the
+      // two pick buttons still name both kinds of source.
+      setImportOffers([]);
+    }
+  };
+
+  const openImportDrawer = () => {
+    setImportError(null);
+    setImportReport(null);
+    setImportSource(null);
+    setHistory("imported");
+    void loadImportOffers();
+    void api.pendingUsageHistoryImports().then(setPendingImports).catch((error) => {
+      setImportError(String(error));
+    });
+  };
+
+  const previewImport = async (path: string) => {
+    if (importRun.current) return;
+    const epoch = ++importEpoch.current;
+    const runId = crypto.randomUUID();
+    importRun.current = runId;
+    setImportBusy(true);
+    setImportPhase("reading");
+    setImportError(null);
+    setImportReport(null);
+    setImportSource(null);
+    try {
+      const from = importFrom ? new Date(`${importFrom}T00:00:00`) : null;
+      const until = importUntil ? new Date(`${importUntil}T00:00:00`) : null;
+      // Date inputs are local days; the backend's range is half-open UTC.
+      if (until) until.setDate(until.getDate() + 1);
+      if (from && until && from >= until) throw new Error(t("activity.import_bad_range"));
+      const preview = await api.previewUsageHistoryImport(path, runId, importInstance.trim() || undefined, {
+        from: from?.toISOString() ?? null,
+        until: until?.toISOString() ?? null,
+      });
+      if (epoch !== importEpoch.current) {
+        await api.cancelUsageHistoryImport(runId);
+        return;
+      }
+      if (preview.cancelled) return;
+      setImportSource({ path, preview });
+      // Reading it remembered the path, so the list now marks it as used.
+      void loadImportOffers();
+    } catch (error) {
+      if (epoch === importEpoch.current) setImportError(String(error));
+    } finally {
+      if (epoch === importEpoch.current) {
+        importRun.current = null;
+        setImportBusy(false);
+        setImportPhase(null);
+      }
+    }
+  };
+
+  const pickImportSource = async (kind: "file" | "folder") => {
+    const epoch = ++importEpoch.current;
+    setImportError(null);
+    setImportReport(null);
+    setImportSource(null);
+    try {
+      const path = await api.pickUsageHistorySource(kind);
+      if (epoch === importEpoch.current && path !== null) await previewImport(path);
+    } catch (error) {
+      setImportError(String(error));
+    }
+  };
+
+  const applyImport = async () => {
+    if (!importSource?.preview.run_id || !importSource.preview.fingerprint || importRun.current) return;
+    const epoch = ++importEpoch.current;
+    const runId = importSource.preview.run_id;
+    importRun.current = runId;
+    setImportBusy(true);
+    setImportPhase("publishing");
+    setImportError(null);
+    try {
+      const outcome = await api.commitUsageHistoryImport(runId, importSource.preview.fingerprint);
+      if (epoch !== importEpoch.current) return;
+      setImportReport(outcome);
+      setImportSource(null);
+      setPendingImports((items) => items.filter((item) => item.run_id !== runId));
+      // The merged curve is read from the same command the poll uses, and the
+      // poll is throttled to ten seconds. An import is exactly the moment the
+      // throttle must not hide its own result, so the next read is not skipped.
+      usageLoadedAt.current = 0;
+      setUsageRefresh((value) => value + 1);
+      if (!outcome.cancelled) {
+        notify("info", t("activity.imported_rows", { n: num(outcome.inserted + outcome.updated) }));
+      }
+    } catch (error) {
+      if (epoch === importEpoch.current) setImportError(String(error));
+    } finally {
+      if (epoch === importEpoch.current) {
+        importRun.current = null;
+        setImportBusy(false);
+        setImportPhase(null);
+      }
+    }
+  };
+
+  const cancelImport = async () => {
+    const id = importRun.current ?? importSource?.preview.run_id;
+    if (!id) return;
+    const epoch = importEpoch.current;
+    setImportCancelling(true);
+    try {
+      const cancelled = await api.cancelUsageHistoryImport(id);
+      if (epoch !== importEpoch.current) return;
+      if (cancelled) {
+        importEpoch.current++;
+        importRun.current = null;
+        setImportBusy(false);
+        setImportPhase(null);
+        setImportSource(null);
+        setImportReport({ inserted: 0, updated: 0, unchanged: 0, revision: 0, cancelled: true });
+        setPendingImports((items) => items.filter((item) => item.run_id !== id));
+      }
+    } catch (error) {
+      if (epoch === importEpoch.current) setImportError(String(error));
+    } finally {
+      setImportCancelling(false);
+    }
+  };
+
+  const closeHistory = () => {
+    if (importRun.current) void api.cancelUsageHistoryImport(importRun.current).catch((error) => {
+      notify("error", String(error));
+    });
+    importEpoch.current++;
+    importRun.current = null;
+    setImportBusy(false);
+    setImportPhase(null);
+    setImportCancelling(false);
+    setHistory(null);
+    setImportReport(null);
+    setImportError(null);
+    setImportSource(null);
+  };
+
+  const clearImportedNow = async () => {
+    try {
+      const removed = await api.clearImportedUsage();
+      setImportReport(null);
+      setImportSource(null);
+      setPendingImports([]);
+      usageLoadedAt.current = 0;
+      setUsageRefresh((value) => value + 1);
+      notify("info", t("activity.import_cleared", { n: num(removed) }));
+    } catch (error) {
+      setImportError(String(error));
+    }
+  };
+
+  const clearImported = () =>
+    setConfirm({
+      title: t("activity.import_clear"),
+      body: t("activity.import_clear_body"),
+      confirmLabel: t("activity.import_clear"),
+      danger: true,
+      onConfirm: () => void clearImportedNow(),
+    });
+
+  const importedRows =
+    imported === null ? 0 : imported.totals.requests + imported.totals.suspected_requests;
+
+  /*
+   * The earliest imported day, when there is imported history to show. The
+   * lede's period is a claim about what the page's totals cover, and after an
+   * import the page covers more than this device's own ledger: saying only
+   * "since this installer ran" hides the older history the reader just added.
+   * The store answers with its own first day rather than the window's, because
+   * an import older than the chart window still moved the start. The headline
+   * figures already include that history; this sentence says how far back it
+   * reaches, while the row below still keeps the imported counts separable.
+   * A backend from before the store-wide field only has the windowed list, and
+   * its first row is then the one answer it can give.
+   */
+  const importedStart =
+    imported?.first_day ?? imported?.days?.[0]?.day ?? null;
+  const localSince = new Date(localSummary.since).toLocaleString([], {
+    dateStyle: "medium",
+    timeStyle: "short",
+  });
 
   const clearClient = (client_id: string, client_name: string) =>
     setConfirm({
@@ -330,7 +646,8 @@ export default function Activity({
       body: t("activity.clear_client_body", { name: client_name || client_id }),
       confirmLabel: t("activity.clear_client"),
       danger: true,
-      onConfirm: () => void run(() => api.clearClientUsage(client_id)),
+      onConfirm: () =>
+        void run(() => api.clearClientUsage(client_id), "observe"),
     });
 
   const loadLogs = useCallback(async () => {
@@ -348,8 +665,8 @@ export default function Activity({
   }, [logs !== null, loadLogs]);
 
   const successRate =
-    summary.requests > 0
-      ? Math.round(((summary.requests - summary.failures) / summary.requests) * 1000) / 10
+    activeSummary.requests > 0
+      ? Math.round(((activeSummary.requests - activeSummary.failures) / activeSummary.requests) * 1000) / 10
       : null;
 
   /*
@@ -368,15 +685,15 @@ export default function Activity({
    * say (the upstream reported no cache reads), and hiding that behind "—"
    * would claim we cannot know what the counters do say.
    */
-  const cacheInputTokens = summary.input_tokens;
+  const cacheInputTokens = activeSummary.input_tokens;
   const cacheHitRate =
     cacheInputTokens > 0
-      ? Math.round((summary.cache_read_tokens / cacheInputTokens) * 1000) / 10
+      ? Math.round((activeSummary.cache_read_tokens / cacheInputTokens) * 1000) / 10
       : null;
 
   const classifier = (() => {
     // Every side kind is Auto review traffic, whatever protocol it was asked in.
-    const sides = summary.per_kind.filter((k) => isSideKind(k.kind as RequestKind));
+    const sides = activeSummary.per_kind.filter((k) => isSideKind(k.kind as RequestKind));
     if (sides.length === 0) return undefined;
     return {
       kind: "auto_mode",
@@ -405,11 +722,11 @@ export default function Activity({
    * reader is asked to click must hold still between polls, and "where did
    * it go" is answered loudest-first anyway.
    */
-  const majorClients = summary.per_client
+  const majorClients = activeSummary.per_client
     .filter((c) => !isStray(c))
     .sort((a, b) => b.requests - a.requests || a.client_id.localeCompare(b.client_id));
-  const strayClients = summary.per_client.filter(isStray);
-  const ledgerModels = [...summary.per_model].sort(
+  const strayClients = activeSummary.per_client.filter(isStray);
+  const ledgerModels = [...activeSummary.per_model].sort(
     (a, b) => b.requests - a.requests || a.model_id.localeCompare(b.model_id),
   );
 
@@ -449,7 +766,9 @@ export default function Activity({
    * furniture, the very thing that made the old health section feel like a
    * "no data" stall parked mid-page.
    */
-  const healthByModel = new Map(health.map((h) => [h.model_id, h]));
+  const healthByModel = new Map(
+    (usageSource === "local" ? health : []).map((item) => [item.model_id, item]),
+  );
 
   /*
    * The request list is a window over a much longer ledger, so it reads a
@@ -544,10 +863,24 @@ export default function Activity({
         : true),
   );
 
+  const chooseStandby = async () => {
+    try {
+      const path = await api.chooseStandbyUsageDatabase();
+      if (path) {
+        setStandbyPath(path);
+        usageLoadedAt.current = 0;
+        setUsageRefresh((value) => value + 1);
+        setUsageSource("standby");
+      }
+    } catch (error) {
+      setUsageSourceError(String(error));
+    }
+  };
+
   /* The strip's subject in words, resolved while the row that set it exists. */
   const streamSubject = (() => {
     if (streamClient !== null) {
-      const client = summary.per_client.find((c) => c.client_id === streamClient);
+      const client = activeSummary.per_client.find((c) => c.client_id === streamClient);
       return client ? clientLabel(client) : streamClient;
     }
     if (streamModel !== null) return modelLabel(streamModel);
@@ -652,7 +985,7 @@ export default function Activity({
    */
   const clientCut = (
     <>
-      {summary.per_client.length === 0 ? (
+      {activeSummary.per_client.length === 0 ? (
         <p className="empty">{t("activity.nothing")}</p>
       ) : (
         <>
@@ -665,7 +998,7 @@ export default function Activity({
                     <th scope="col">{t("models.requests")}</th>
                     <th scope="col">{t("field.input")} / {t("field.output")}</th>
                     <th scope="col">{t("activity.spend")}</th>
-                    <th scope="col">{t("common.actions")}</th>
+                    {usageSource === "local" && <th scope="col">{t("common.actions")}</th>}
                   </tr>
                 </thead>
                 <tbody>
@@ -675,13 +1008,13 @@ export default function Activity({
                       className={`selectable${streamClient === client.client_id ? " selected" : ""}`}
                       onClick={rowActivate(() => toggleStreamClient(client.client_id))}
                     >
-                      <td>
+                      {usageSource === "local" && <td>
                         <ClientNameCell
                           client={client}
                           pressed={streamClient === client.client_id}
                           onToggle={() => toggleStreamClient(client.client_id)}
                         />
-                      </td>
+                      </td>}
                       <td className="mono nowrap">
                         {num(client.requests)}
                         {client.failures > 0 && (
@@ -692,17 +1025,19 @@ export default function Activity({
                         {num(client.input_tokens)} / {num(client.output_tokens)}
                       </td>
                       <td className="mono nowrap">{totalsText(client.cost)}</td>
-                      <td>
-                        <Button
-                          kind="ghost"
-                          ariaLabel={t("activity.clear_client_named", {
-                            name: client.client_name || client.client_id,
-                          })}
-                          onClick={() => clearClient(client.client_id, client.client_name)}
-                        >
-                          {t("activity.clear_client")}
-                        </Button>
-                      </td>
+                      {usageSource === "local" && (
+                        <td>
+                          <Button
+                            kind="ghost"
+                            ariaLabel={t("activity.clear_client_named", {
+                              name: client.client_name || client.client_id,
+                            })}
+                            onClick={() => clearClient(client.client_id, client.client_name)}
+                          >
+                            {t("activity.clear_client")}
+                          </Button>
+                        </td>
+                      )}
                     </tr>
                   ))}
                 </tbody>
@@ -720,13 +1055,13 @@ export default function Activity({
                         className={`selectable${streamClient === client.client_id ? " selected" : ""}`}
                         onClick={rowActivate(() => toggleStreamClient(client.client_id))}
                       >
-                        <td>
+                        {usageSource === "local" && <td>
                           <ClientNameCell
                             client={client}
                             pressed={streamClient === client.client_id}
                             onToggle={() => toggleStreamClient(client.client_id)}
                           />
-                        </td>
+                        </td>}
                         <td className="mono nowrap">
                           {num(client.requests)}
                           {client.failures > 0 && (
@@ -866,8 +1201,15 @@ export default function Activity({
 
   const usagePane = (
     <>
-      {summary.requests > 0 && (
-        <Section title={t("activity.traffic")} hint={t("activity.traffic_hint")}>
+      {activeSummary.requests > 0 && (
+        <Section
+          title={t("activity.traffic")}
+          hint={
+            usageSource === "local" && importedRows > 0
+              ? t("activity.traffic_hint_imported")
+              : t("activity.traffic_hint")
+          }
+        >
           <UsageCharts
             days={usageDays}
             metric={chartMetric}
@@ -914,7 +1256,7 @@ export default function Activity({
        * requests a sum is made of — and clicking a ledger row is the walk
        * from the second level to the third.
        */}
-      {(summary.per_client.length > 0 || summary.per_model.length > 0) && (
+      {(activeSummary.per_client.length > 0 || activeSummary.per_model.length > 0) && (
         <Section
           title={t("activity.ledger")}
           hint={t("activity.ledger_hint")}
@@ -936,16 +1278,31 @@ export default function Activity({
                   { value: "model", label: t("activity.by_model") },
                 ]}
               />
-              <button type="button" className="linky" onClick={() => void openExport()}>
-                {t("activity.export_history")}
-              </button>
-              <button type="button" className="linky" onClick={openImport}>
-                {t("activity.import_history")}
-              </button>
+              {usageSource === "local" && (
+                <>
+                  <button type="button" className="linky" onClick={() => void openExport()}>
+                    {t("activity.export_history")}
+                  </button>
+                  <button type="button" className="linky" onClick={openImport}>
+                    {t("activity.import_history")}
+                  </button>
+                </>
+              )}
             </div>
           }
         >
           {historyError && <p className="field-error">{historyError}</p>}
+          {/*
+            The headline and the curve carry imported history; this split does
+            not. The imported store records no request kind and no attribution
+            evidence, so a row built from it would claim a family and a
+            confidence it never had. Saying which cut is local is cheaper than
+            inventing the columns, and it keeps a reader who adds the rows up
+            from concluding the page disagrees with itself.
+          */}
+          {usageSource === "local" && importedRows > 0 && (
+            <p className="field-hint">{t("activity.ledger_local_only")}</p>
+          )}
           {/*
             Where the last native export landed. The toast is the moment's
             confirmation; this line is the record — the short form in the
@@ -1105,19 +1462,23 @@ export default function Activity({
       */}
       <PageHead
         lede={
-          summary.requests === 0
-            ? t("activity.lede_none")
-            : t("activity.lede_since", {
-                since: new Date(summary.since).toLocaleString([], {
-                  dateStyle: "medium",
-                  timeStyle: "short",
-                }),
-              })
+          importedStart !== null && usageSource === "local"
+            ? localSummary.requests === 0
+              ? t("activity.lede_imported_only", {
+                  imported: dayLabel(importedStart),
+                })
+              : t("activity.lede_imported", {
+                  since: localSince,
+                  imported: dayLabel(importedStart),
+                })
+            : activeSummary.requests === 0
+              ? t("activity.lede_none")
+              : t("activity.lede_since", { since: localSince })
         }
         // Nothing to reset while nothing has been counted; a destructive
         // button that can only clear zeros teaches doubt about every other.
         actions={
-          summary.requests === 0 ? undefined : (
+          usageSource !== "local" || activeSummary.requests === 0 ? undefined : (
             <Button
               kind="ghost"
               onClick={() =>
@@ -1126,7 +1487,9 @@ export default function Activity({
                   body: t("confirm.reset_stats_body"),
                   confirmLabel: t("activity.reset"),
                   danger: true,
-                  onConfirm: () => void run(api.clearStats),
+                  // Clearing counters touches the usage store, not the
+                  // configuration, so it claims no save.
+                  onConfirm: () => void run(api.clearStats, "observe"),
                 })
               }
             >
@@ -1136,7 +1499,59 @@ export default function Activity({
         }
       />
 
-      {summary.requests > 0 && (
+      <div className="usage-source-row">
+        <Segment<"local" | "standby">
+          ariaLabel={t("activity.usage_source")}
+          value={standbyAvailable ? usageSource : "local"}
+          onChange={setUsageSource}
+          options={[
+            { value: "local", label: t("activity.source_local") },
+            ...(standbyAvailable ? [{ value: "standby" as const, label: t("activity.source_standby") }] : []),
+          ]}
+        />
+        <button type="button" className="linky" onClick={() => void chooseStandby()}>
+          {t("activity.choose_standby_db")}
+        </button>
+        {!standbyAvailable && <span className="field-hint">{t("activity.standby_not_found")}</span>}
+      </div>
+      {standbyPath && <p className="field-hint">{t("activity.standby_selected", { path: standbyPath })}</p>}
+      {usageSourceError && (
+        <p className="field-error" role="status">
+          {t("activity.standby_load_failed", { error: usageSourceError })}
+        </p>
+      )}
+      {usageSource !== "local" && standbyAvailable && (
+        <p className="field-hint">{t("activity.external_read_only")}</p>
+      )}
+      {/*
+       * Imported history is a second store, not a second window onto this one.
+       * The row names the entry point and, once anything is stored, how much
+       * came from another tool — a total that quietly absorbed it would be a
+       * figure nobody could trace back.
+       */}
+      {usageSource === "local" && (
+        <div
+          className="usage-source-row"
+          data-history-import
+          role="group"
+          aria-label={t("activity.imported_history")}
+        >
+          <button type="button" className="linky" onClick={openImportDrawer}>
+            {t("activity.import_source")}
+          </button>
+          {imported !== null && importedRows > 0 && (
+            <span className="field-hint">
+              {t("activity.imported_totals", {
+                requests: num(imported.totals.requests),
+                unpriced: num(imported.totals.unpriced_requests),
+                suspected: num(imported.totals.suspected_requests),
+              })}
+            </span>
+          )}
+        </div>
+      )}
+
+      {activeSummary.requests > 0 && (
         <div className="kpi-row" role="group" aria-label={t("activity.kpi_row")}>
           {/*
             The KPI row, cc-switch's UsageHero converted: the page's headline
@@ -1159,8 +1574,8 @@ export default function Activity({
           */}
           <Kpi
             label={t("activity.metric_requests")}
-            value={compactCount(summary.requests)}
-            title={`${num(summary.requests)} · ${t("activity.n_failed", { n: summary.failures })}`}
+            value={compactCount(activeSummary.requests)}
+            title={`${num(activeSummary.requests)} · ${t("activity.n_failed", { n: activeSummary.failures })}`}
             selected={chartMetric === "requests"}
             onSelect={() => setChartMetric("requests")}
           />
@@ -1171,8 +1586,8 @@ export default function Activity({
               successRate === null
                 ? undefined
                 : t("activity.ok_failed", {
-                    ok: summary.requests - summary.failures,
-                    failed: summary.failures,
+                    ok: activeSummary.requests - activeSummary.failures,
+                    failed: activeSummary.failures,
                   })
             }
           />
@@ -1182,14 +1597,14 @@ export default function Activity({
             title={
               cacheHitRate === null
                 ? undefined
-                : `${t("activity.cache_read")} ${num(summary.cache_read_tokens)} / ${t("activity.input_tokens")} ${num(cacheInputTokens)}`
+                : `${t("activity.cache_read")} ${num(activeSummary.cache_read_tokens)} / ${t("activity.input_tokens")} ${num(cacheInputTokens)}`
             }
             help={t("activity.kpi_cache_help")}
           />
           <Kpi
             label={t("activity.metric_tokens")}
-            value={compactCount(summary.input_tokens + summary.output_tokens)}
-            title={`${t("activity.input_tokens")} ${num(summary.input_tokens)} · ${t("activity.output_tokens")} ${num(summary.output_tokens)}`}
+            value={compactCount(activeSummary.input_tokens + activeSummary.output_tokens)}
+            title={`${t("activity.input_tokens")} ${num(activeSummary.input_tokens)} · ${t("activity.output_tokens")} ${num(activeSummary.output_tokens)}`}
             selected={chartMetric === "tokens"}
             onSelect={() => setChartMetric("tokens")}
           />
@@ -1205,10 +1620,10 @@ export default function Activity({
           */}
           <Kpi
             label={t("activity.estimated")}
-            value={totalsText(summary.cost)}
+            value={totalsText(activeSummary.cost)}
             title={
-              summary.unpriced_requests > 0
-                ? `${totalsText(summary.cost)} · ${t("activity.kpi_unpriced", { n: summary.unpriced_requests })}`
+              activeSummary.unpriced_requests > 0
+                ? `${totalsText(activeSummary.cost)} · ${t("activity.kpi_unpriced", { n: activeSummary.unpriced_requests })}`
                 : undefined
             }
           />
@@ -1223,7 +1638,7 @@ export default function Activity({
        * a promise with nothing behind it. The detail drawer keeps the real
        * per-request accounting facts, where "unknown cost" means something.
        */}
-      {snapshot.accounting && (
+      {usageSource === "local" && snapshot.accounting && (
         <>
           <p className={snapshot.accounting.available ? "field-hint" : "field-error"} role="status">
             {t(snapshot.accounting.durable ? "accounting.durable" : "accounting.unavailable")}
@@ -1242,7 +1657,7 @@ export default function Activity({
        * same scope on different windows, and the badge when the limit is
        * passed. Editing stays on the geek tab — this line claims no lever.
        */}
-      {simpleOnly && snapshot.budgets.length > 0 && (
+      {usageSource === "local" && simpleOnly && snapshot.budgets.length > 0 && (
         <>
           {snapshot.budgets.map(({ budget, spent, used }) => (
             <p className="field-hint" key={budget.id}>
@@ -1271,11 +1686,11 @@ export default function Activity({
         request the reader was reading.
       */}
       <Tabs
-        value={simpleOnly ? "usage" : tab}
+        value={simpleOnly || usageSource === "standby" ? "usage" : tab}
         onChange={(next) => setTab(next as typeof tab)}
         ariaLabel={t("activity.tab_group")}
         tabs={
-          simpleOnly
+          simpleOnly || usageSource === "standby"
             ? [{ value: "usage", label: t("activity.tab_usage"), content: usagePane }]
             : [
                 { value: "usage", label: t("activity.tab_usage"), content: usagePane },
@@ -1287,29 +1702,203 @@ export default function Activity({
 
       {history && (
         <Drawer
-          title={history === "export" ? t("activity.export_history") : t("activity.import_history")}
-          onClose={() => setHistory(null)}
+          showSaveStatus={false}
+          title={
+            history === "export"
+              ? t("activity.export_history")
+              : history === "imported"
+                ? t("activity.import_source_title")
+                : t("activity.import_history")
+          }
+          onClose={closeHistory}
         >
-          <p className="field-hint">
-            {history === "export" ? t("activity.export_hint") : t("activity.import_hint")}
-          </p>
-          <textarea
-            className="text-input"
-            style={{ width: "100%", minHeight: 280, fontFamily: "var(--font-mono)" }}
-            value={archive}
-            readOnly={history === "export"}
-            placeholder={history === "import" ? t("activity.import_placeholder") : undefined}
-            onChange={(event) => setArchive(event.target.value)}
-          />
-          <div className="controls" style={{ marginTop: 12 }}>
-            {history === "export" ? (
-              <Button onClick={() => void api.copy(archive)}>{t("common.copy")}</Button>
-            ) : (
-              <Button onClick={() => void importArchive()} disabled={!archive.trim()}>
-                {t("activity.import_history")}
-              </Button>
-            )}
-          </div>
+          {history === "imported" ? (
+            <>
+              {importError && (
+                <p className="field-error" role="status">
+                  {t("activity.import_error", { error: importError })}
+                </p>
+              )}
+              <p className="field-hint">{t("activity.import_source_hint")}</p>
+              <ol className="import-steps" aria-label={t("activity.import_source_title")}>
+                {["activity.import_step_source", "activity.import_step_review", "activity.import_step_done"].map((key, index) => (
+                  <li key={key} aria-current={index === (importReport ? 2 : importSource ? 1 : 0) ? "step" : undefined}>
+                    <span>{index + 1}</span>{t(key as "activity.import_step_source")}
+                  </li>
+                ))}
+              </ol>
+              {importPhase && (
+                <div className="import-progress" role="status" aria-live="polite">
+                  <span>{t(importPhase === "reading" ? "activity.import_reading" : "activity.import_publishing")}</span>
+                  <Button kind="ghost" disabled={importCancelling} onClick={() => void cancelImport()}>{t("common.cancel")}</Button>
+                </div>
+              )}
+              {importSource ? (
+                <>
+                  <p className="field-hint">
+                    {t("activity.import_source_copy", {
+                      name: importSource.preview.instance,
+                      source:
+                         importSource.preview.source === "claudecode"
+                           ? "Claude Code"
+                           : importSource.preview.source === "opencode" ? "OpenCode" : "CC Switch",
+                    })}
+                  </p>
+                  {/*
+                   * The four counts that decide whether to accept: what would be
+                   * written, what the source itself could not price, and what it
+                   * cannot prove is distinct. Same `num` formatting as the KPI
+                   * row so a figure reads the same on both surfaces.
+                   */}
+                  <div className="import-metrics" role="group" aria-label={t("activity.import_source_title")}>
+                    <Kpi
+                      label={t("activity.import_preview_requests")}
+                      value={num(importSource.preview.requests)}
+                    />
+                    <Kpi
+                      label={t("activity.import_preview_aggregates")}
+                      value={num(importSource.preview.aggregates)}
+                    />
+                    <Kpi
+                      label={t("activity.import_preview_suspected")}
+                      value={num(importSource.preview.suspected)}
+                    />
+                    <Kpi
+                      label={t("activity.import_preview_unpriced")}
+                      value={num(importSource.preview.unpriced)}
+                    />
+                    <Kpi
+                      label={t("activity.import_preview_days")}
+                      value={num(importSource.preview.days.length)}
+                    />
+                  </div>
+                  <p className="field-hint">{t("activity.import_snapshot_ready")}</p>
+                  {importSource.preview.warnings.length > 0 && (
+                    <ul className="field-hint">
+                      {importSource.preview.warnings.map((warning) => (
+                        <li key={warning}>{warning}</li>
+                      ))}
+                    </ul>
+                  )}
+                  <div className="controls" style={{ marginTop: 12 }}>
+                    <Button kind="primary" onClick={() => void applyImport()} disabled={importBusy}>
+                      {t("activity.import_confirm", {
+                        n: num(importSource.preview.requests + importSource.preview.aggregates),
+                      })}
+                    </Button>
+                    <Button
+                      kind="ghost"
+                      onClick={() => void cancelImport()}
+                      disabled={importBusy}
+                    >
+                      {t("common.cancel")}
+                    </Button>
+                  </div>
+                </>
+              ) : (
+                importReport && (
+                  <p className="field-hint">
+                    {importReport.cancelled ? t("activity.import_cancelled") : t("activity.import_report", {
+                      inserted: num(importReport.inserted),
+                      updated: num(importReport.updated),
+                      unchanged: num(importReport.unchanged),
+                    })}
+                  </p>
+                )
+              )}
+              {!importSource && !importBusy && pendingImports.length > 0 && (
+                <section className="import-section">
+                  <h3>{t("activity.import_resume")}</h3>
+                  <div className="import-source-list">
+                    {pendingImports.map((preview) => (
+                      <button type="button" className="import-source-option" key={preview.run_id} onClick={() => {
+                        setImportReport(null);
+                        setImportSource({ path: "", preview });
+                      }}>
+                        <strong>{preview.instance}</strong>
+                        <span>{num(preview.requests + preview.aggregates)} · {preview.source}</span>
+                      </button>
+                    ))}
+                  </div>
+                </section>
+              )}
+              {!importSource && !importBusy && (
+                <div className="import-range">
+                  <label className="field"><span>{t("activity.import_instance")}</span>
+                    <input className="text-input" aria-label={t("activity.import_instance")} value={importInstance} onChange={(event) => setImportInstance(event.target.value)} placeholder={t("activity.import_instance_default")} />
+                  </label>
+                  <label className="field"><span>{t("activity.import_from")}</span>
+                    <input className="text-input" aria-label={t("activity.import_from")} type="date" value={importFrom} onChange={(event) => setImportFrom(event.target.value)} />
+                  </label>
+                  <label className="field"><span>{t("activity.import_until")}</span>
+                    <input className="text-input" aria-label={t("activity.import_until")} type="date" value={importUntil} onChange={(event) => setImportUntil(event.target.value)} />
+                  </label>
+                </div>
+              )}
+              {!importSource && !importBusy && importOffers.length > 0 && (
+                <>
+                  <p className="field-hint">{t("activity.import_found")}</p>
+                  <ul className="import-source-list">
+                    {importOffers.map((offer) => (
+                      <li key={offer.path}>
+                        <button
+                          type="button"
+                           className="import-source-option"
+                          onClick={() => void previewImport(offer.path)}
+                        >
+                          <strong>{offer.label}</strong>
+                          <span>{offer.recent ? `${t("activity.import_recent")} · ` : ""}{offer.path}</span>
+                        </button>
+                      </li>
+                    ))}
+                  </ul>
+                </>
+              )}
+              <div className="controls" style={{ marginTop: 12 }}>
+                {!importSource && !importBusy && (
+                  <>
+                    <Button onClick={() => void pickImportSource("file")}>
+                      {t("activity.import_pick_file")}
+                    </Button>
+                    <Button kind="ghost" onClick={() => void pickImportSource("folder")}>
+                      {t("activity.import_pick_folder")}
+                    </Button>
+                  </>
+                )}
+                {importedRows > 0 && !importBusy && (
+                  <Button kind="ghost" onClick={() => void clearImported()}>
+                    {t("activity.import_clear")}
+                  </Button>
+                )}
+                <Button kind="ghost" onClick={closeHistory}>
+                  {t("common.close")}
+                </Button>
+              </div>
+            </>
+          ) : (
+            <>
+              <p className="field-hint">
+                {history === "export" ? t("activity.export_hint") : t("activity.import_hint")}
+              </p>
+              <textarea
+                className="text-input"
+                style={{ width: "100%", minHeight: 280, fontFamily: "var(--font-mono)" }}
+                value={archive}
+                readOnly={history === "export"}
+                placeholder={history === "import" ? t("activity.import_placeholder") : undefined}
+                onChange={(event) => setArchive(event.target.value)}
+              />
+              <div className="controls" style={{ marginTop: 12 }}>
+                {history === "export" ? (
+                  <Button onClick={() => void api.copy(archive)}>{t("common.copy")}</Button>
+                ) : (
+                  <Button onClick={() => void importArchive()} disabled={!archive.trim()}>
+                    {t("activity.import_history")}
+                  </Button>
+                )}
+              </div>
+            </>
+          )}
         </Drawer>
       )}
 
@@ -1349,6 +1938,13 @@ function TimelineRow({
         />
         <span className="timeline-model">{record.model_name ?? record.resolved_model ?? record.requested_model}</span>
         {record.provider_name && <span className="timeline-provider">{record.provider_name}</span>}
+        {record.usage_source && (
+          <span className="timeline-provider">
+            {t("activity.source_tag", {
+              source: t(record.usage_source === "8788" ? "activity.source_standby" : "activity.source_local"),
+            })}
+          </span>
+        )}
         {record.attempts > 1 && (
           <span className="timeline-provider">{t("activity.tries", { n: record.attempts })}</span>
         )}
@@ -1378,6 +1974,28 @@ function TimelineRow({
   );
 }
 
+function selectSourceSummary(sources: UsageSourcesView, source: "local" | "standby") {
+  if (source === "standby" && sources.standby) return sources.standby.summary;
+  return sources.local.summary;
+}
+
+function taggedRecords(source: UsageSourceView, label: string) {
+  return source.recent.map((record) => ({ ...record, usage_source: label }));
+}
+
+function selectSourceRecords(
+  sources: UsageSourcesView,
+  source: "local" | "standby",
+): RequestRecord[] {
+  if (source === "standby" && sources.standby) return taggedRecords(sources.standby, "8788");
+  return taggedRecords(sources.local, "local");
+}
+
+function selectSourceDays(sources: UsageSourcesView, source: "local" | "standby"): UsageDay[] {
+  if (source === "standby" && sources.standby) return sources.standby.days;
+  return sources.local.days;
+}
+
 /**
  * Cache hit rate as a percent of the cache-inclusive input total: stats.rs
  * documents `cache_read_tokens` as a subset of `input_tokens`, never an
@@ -1393,8 +2011,34 @@ function cacheHitRate(read: number, input: number): string {
 /** One request's whole story: the three model names, the outcome, the usage. */
 function RequestDrawer({ record, onClose }: { record: RequestRecord; onClose: () => void }) {
   const { t } = useI18n();
+  const [attempts, setAttempts] = useState<UsageAttempt[] | null>(null);
+  const [attemptError, setAttemptError] = useState<string | null>(null);
+  useEffect(() => {
+    let active = true;
+    setAttempts(null);
+    setAttemptError(null);
+    if (record.usage_source && record.usage_source !== "local") {
+      setAttempts([]);
+      return;
+    }
+    api.usageAttempts(record.id).then((rows) => {
+      if (active) setAttempts(rows);
+    }).catch((error) => {
+      if (active) setAttemptError(String(error));
+    });
+    return () => { active = false; };
+  }, [record.id, record.usage_source]);
+  const declaration = (value: DeclaredIdentity | undefined) => {
+    switch (value?.state) {
+      case "declared": return value.value;
+      case "auto_only": return t("activity.model_auto_only", { value: value.value });
+      case "conflicting": return t("activity.model_conflict", { value: value.value.join(" / ") });
+      default: return t("activity.model_missing");
+    }
+  };
   return (
     <Drawer
+      showSaveStatus={false}
       title={
         <>
           <StatusDot
@@ -1418,11 +2062,14 @@ function RequestDrawer({ record, onClose }: { record: RequestRecord; onClose: ()
             ),
           ],
           [t("models.provider"), record.provider_name ?? t("common.dash")],
+          ...(record.usage_source
+            ? [[t("activity.usage_source"), record.usage_source] as [string, ReactNode]]
+            : []),
           [
             t("activity.kind"),
             isSideKind(record.kind) ? t("kind.check_kv") : t("kind.main_kv"),
           ],
-          ["API", record.ingress],
+          [t("activity.inbound_api"), record.ingress],
           [
             t("activity.result"),
             record.ok ? (
@@ -1436,6 +2083,28 @@ function RequestDrawer({ record, onClose }: { record: RequestRecord; onClose: ()
       />
 
       {record.error && <p className="field-hint">{record.error}</p>}
+
+      <Section title={t("activity.attempt_route")}>
+        {attemptError ? <p className="field-error" role="status">{attemptError}</p> :
+          attempts === null ? <p className="field-hint">{t("common.working")}</p> :
+          attempts.length === 0 ? <p className="field-hint">{t("activity.attempt_unavailable")}</p> :
+          attempts.map((attempt, index) => (
+            <div className="import-section" key={attempt.id}>
+              <h3>{index + 1}. {attempt.execution.provider_name} · {attempt.state}</h3>
+              <KeyValue rows={[
+                [t("activity.outbound_api"), attempt.execution.upstream_protocol ?? t("activity.model_missing")],
+                [t("activity.planned_model"), attempt.execution.upstream_model],
+                [t("activity.declared_model"), declaration(attempt.declared?.model)],
+                [t("activity.declared_version"), declaration(attempt.declared?.model_version)],
+                [t("accounting.usage_evidence"), attempt.usage_evidence
+                  ? t(`accounting.usage_${attempt.usage_evidence}`)
+                  : t("activity.model_missing")],
+                [t("activity.cost"), attempt.cost ? costText(attempt.cost) : t("activity.unpriced")],
+              ]} />
+            </div>
+          ))}
+        {attempts && attempts.length > 0 && <p className="field-hint">{t("activity.declaration_hint")}</p>}
+      </Section>
 
       <Section title={t("activity.timing")}>
         <KeyValue

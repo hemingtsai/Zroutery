@@ -3,7 +3,12 @@ import { createRoot } from "react-dom/client";
 import App from "./App";
 import ErrorBoundary from "./ErrorBoundary";
 import { detectLang, prepareLang } from "./i18n";
-import "@fontsource-variable/noto-serif-sc";
+import { applySkin, loadSkin } from "./skin";
+import { applyTheme, loadThemePref } from "./theme";
+
+const initialSkin = loadSkin();
+applySkin(initialSkin);
+applyTheme(loadThemePref());
 import "@fontsource/ibm-plex-mono/400.css";
 import "./styles.css";
 

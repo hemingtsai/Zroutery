@@ -2,6 +2,7 @@ import { useState } from "react";
 import type { BindingPreview } from "./api";
 import { Badge, Button, Drawer, KeyValue, Toggle } from "./components";
 import { useI18n } from "./i18n";
+import { SaveFeedbackReset } from "./saveQueue";
 
 /** Review references/verified identity only, never token bytes. */
 export function AccountBindingReview({ preview, busy, publish, discard }: {
@@ -13,6 +14,9 @@ export function AccountBindingReview({ preview, busy, publish, discard }: {
   const { t } = useI18n();
   const [confirmed, setConfirmed] = useState(false);
   return <Drawer title={t("binding.review")} onClose={discard}>
+    {/* The review is its own surface over the drawer that staged the key: it
+        opens with no verdict inherited from it. */}
+    <SaveFeedbackReset />
     <Badge tone={preview.verification === "verified" ? "ok" : "warn"}>
       {t(preview.verification === "verified" ? "binding.verified" : "binding.pending")}
     </Badge>

@@ -148,7 +148,9 @@ export function useToast() {
  */
 export type ConfirmRequest = {
   title: string;
-  body?: string;
+  /** A string reads as one paragraph; a node (the release dialog's strategy
+   * segment) renders inside the same body block. */
+  body?: ReactNode;
   confirmLabel?: string;
   danger?: boolean;
   onConfirm: () => void;
@@ -350,7 +352,7 @@ export function ConfirmDialog({
         tabIndex={-1}
       >
         <h2 className="confirm-title">{request.title}</h2>
-        {request.body && <p className="confirm-body">{request.body}</p>}
+        {request.body && <div className="confirm-body">{request.body}</div>}
         <div className="confirm-actions">
           <Button kind="ghost" onClick={onClose}>
             {t("common.cancel")}
@@ -931,14 +933,39 @@ export function Section({
  * by mouse. The focus guard below gives the same keyboard guarantee without
  * that side effect.
  */
+/**
+ * Whether this drawer answers an Escape itself, or yields.
+ *
+ * Only the top overlay closes: a confirmation raised from inside the drawer
+ * is a separate overlay, and Escape there belongs to the confirmation.
+ * An IME composition owns its keys too — the Escape that cancels a candidate
+ * must not close the layer the composer is typing into.
+ *
+ * And a dirty commit input inside the drawer consumes the Escape first: it
+ * restores its own draft and marks the event with `preventDefault`, and the
+ * close yields to that mark. The next Escape finds the draft clean and
+ * closes from here. Exported because the contract is worth asserting
+ * directly; the drawer's keydown listener is a thin wrapper over it.
+ */
+export function drawerEscapeCloses(
+  e: { key: string; defaultPrevented: boolean; isComposing?: boolean; keyCode?: number | undefined },
+  isTop: boolean,
+): boolean {
+  if (e.key !== "Escape") return false;
+  if (!isTop || e.isComposing || e.keyCode === 229) return false;
+  return !e.defaultPrevented;
+}
+
 export function Drawer({
   title,
   onClose,
   children,
+  showSaveStatus = true,
 }: {
   title: ReactNode;
   onClose: () => void;
   children: ReactNode;
+  showSaveStatus?: boolean;
 }) {
   const panel = useRef<HTMLElement>(null);
   const restoreTo = useRef<Element | null>(null);
@@ -980,16 +1007,24 @@ export function Drawer({
   }, []);
 
   useEffect(() => {
+    /*
+     * Escape closes in the bubble phase, on purpose. A commit input inside
+     * the drawer answers Escape first, at the React root: a dirty draft
+     * restores itself and marks the event with `preventDefault`, and this
+     * close yields to the mark — the first Escape restores the field, the
+     * next one, finding the draft clean, closes the drawer. Handled in the
+     * capture phase, the drawer would close first and the restore would
+     * never run.
+     */
+    const onEscape = (e: KeyboardEvent) => {
+      if (!drawerEscapeCloses(e, topOverlay() === overlayId.current)) return;
+      onClose();
+    };
+    // Bubble, not capture: the close must come after the fields inside have
+    // had their say (see above).
+    window.addEventListener("keydown", onEscape);
     const onKey = (e: KeyboardEvent) => {
-      // Only the top overlay answers Escape, and only the top overlay traps
-      // the keyboard. A confirmation raised from inside this drawer is a
-      // separate overlay: Escape there closes the confirmation and leaves the
-      // drawer open, which is what one keypress should do.
-      if (topOverlay() !== overlayId.current) return;
-      if (e.key === "Escape") {
-        onClose();
-        return;
-      }
+      // Only the top overlay traps the keyboard.
       if (e.key !== "Tab") return;
       const root = panel.current;
       if (!root) return;
@@ -1015,8 +1050,13 @@ export function Drawer({
         first.focus();
       }
     };
+    // The Tab trap stays in the capture phase: it has to win against whatever
+    // would move the focus out of a modal surface.
     window.addEventListener("keydown", onKey, true);
-    return () => window.removeEventListener("keydown", onKey, true);
+    return () => {
+      window.removeEventListener("keydown", onEscape);
+      window.removeEventListener("keydown", onKey, true);
+    };
   }, [onClose]);
 
   return (
@@ -1039,7 +1079,7 @@ export function Drawer({
           </button>
         </header>
         <div className="drawer-body">{children}</div>
-        {saveStatus.phase !== "idle" && (
+        {showSaveStatus && saveStatus.phase !== "idle" && (
           <footer
             className={`drawer-foot${
               saveStatus.phase === "error" ? " drawer-foot-error" : ""
@@ -1127,6 +1167,7 @@ export function Button({
   type = "button",
   ariaLabel,
   buttonRef,
+  "aria-pressed": ariaPressed,
 }: {
   children: ReactNode;
   onClick?: () => void;
@@ -1136,6 +1177,7 @@ export function Button({
   type?: "button" | "submit";
   ariaLabel?: string;
   buttonRef?: React.Ref<HTMLButtonElement>;
+  "aria-pressed"?: boolean;
 }) {
   return (
     <button
@@ -1146,6 +1188,7 @@ export function Button({
       disabled={disabled}
       title={title}
       aria-label={ariaLabel}
+      aria-pressed={ariaPressed}
     >
       {children}
     </button>
@@ -1281,11 +1324,117 @@ export function Toggle({
 }
 
 /**
+ * The key contract the four commit inputs share — TextField, CompactNumber,
+ * CommitInput, CommitNumber — in one place so the four cannot drift:
+ *
+ * Enter is one commit intent. It commits and takes the focus out, and the
+ * blur that the field's own Enter causes must not commit the same draft a
+ * second time before the parent has written the value back — that echo used
+ * to fire two saves per keypress. The echo is skipped by a mark, not by
+ * pretending the baseline moved: a commit whose save fails never becomes the
+ * value, so a draft judged against a moved baseline would look clean and
+ * could never be retried. With the mark, a refused draft is still dirty and
+ * the next Enter commits it again.
+ *
+ * An IME composition owns its keys: the Enter that confirms a candidate —
+ * `isComposing`, or Safari's keyCode 229 — neither commits nor blurs, and
+ * neither does the Escape that cancels one.
+ *
+ * Escape on a dirty draft restores the committed value and is consumed here
+ * (`preventDefault`): the drawer around the field hears a marked event and
+ * stays open, so the first Escape restores and the next one closes the
+ * layer. A clean draft leaves the event alone, and it bubbles to the drawer.
+ *
+ * Exported because the contract is subtle enough to be worth unit-testing
+ * directly. The components rebuild this per render with their own draft
+ * state and commit rules; the tests drive the same wiring.
+ */
+export type CommitKeysEvent = {
+  key: string;
+  isComposing?: boolean;
+  keyCode?: number | undefined;
+  preventDefault(): void;
+};
+
+export function commitInputKeys(state: {
+  /** Whether committing the draft now would change the value. */
+  dirty: boolean;
+  /** Hand the draft to the caller's onCommit, which still dedupes equal values. */
+  commit: () => void;
+  /** Put the committed value back into the draft. */
+  restore: () => void;
+  /** Take the focus out of the field (Enter hands the intent over). */
+  blur: () => void;
+  /**
+   * Enter's mark on its own blur. A ref the component owns, so the flag
+   * survives the re-render a commit causes and a refocus always starts a
+   * fresh intent.
+   */
+  skipNextBlur: { current: boolean };
+}) {
+  return {
+    onFocus: () => {
+      // A fresh focus is a fresh intent; a stale mark must never eat a real
+      // blur commit.
+      state.skipNextBlur.current = false;
+    },
+    onBlur: () => {
+      const skip = state.skipNextBlur.current;
+      state.skipNextBlur.current = false;
+      if (!skip) state.commit();
+    },
+    onKeyDown: (e: CommitKeysEvent) => {
+      if (e.isComposing || e.keyCode === 229) return;
+      if (e.key === "Enter") {
+        state.skipNextBlur.current = true;
+        state.commit();
+        state.blur();
+      } else if (e.key === "Escape" && state.dirty) {
+        state.restore();
+        e.preventDefault();
+      }
+    },
+  };
+}
+
+/**
+ * The commit decision both number inputs share: an empty draft clears,
+ * junk restores, and a number clamps to the declared range — rounding first
+ * when whole numbers were asked for — committing only when it differs from
+ * the current value. `canonical` is the draft the field shows afterwards.
+ */
+export function numberDraftCommit(
+  draft: string,
+  value: number | null,
+  limits: { min?: number; max?: number; integer?: boolean },
+): { kind: "commit"; value: number | null; canonical: string } | { kind: "same"; canonical: string } | { kind: "invalid"; canonical: string } {
+  if (draft.trim() === "") {
+    return value !== null
+      ? { kind: "commit", value: null, canonical: "" }
+      : { kind: "same", canonical: "" };
+  }
+  const parsed = Number(draft);
+  if (!Number.isFinite(parsed)) {
+    return { kind: "invalid", canonical: String(value ?? "") };
+  }
+  let next = limits.integer ? Math.round(parsed) : parsed;
+  if (limits.min !== undefined) next = Math.max(limits.min, next);
+  if (limits.max !== undefined) next = Math.min(limits.max, next);
+  return next !== value
+    ? { kind: "commit", value: next, canonical: String(next) }
+    : { kind: "same", canonical: String(next) };
+}
+
+/**
  * Text input that reports its value when the user is done with it.
  *
  * Every commit round trips through Rust and rewrites the configuration file, so
  * doing that per keystroke is both wasteful and a good way to save half-typed
- * URLs. Enter commits, Escape reverts, blur commits.
+ * URLs. Enter commits once and blurs — the blur its own Enter causes does not
+ * repeat the commit, and a refused save leaves the draft dirty enough to
+ * retry ([`commitInputKeys`] holds the contract, shared with the other three
+ * commit inputs). Blur on its own commits. Escape restores the draft and is
+ * consumed before it can close a drawer around the field.
  */
 export function TextField({
   label,
@@ -1315,14 +1464,22 @@ export function TextField({
   const [draft, setDraft] = useState(value);
   // Adopt values that changed underneath us, e.g. after a save elsewhere.
   useEffect(() => setDraft(value), [value]);
-
-  const commit = () => {
-    if (draft !== value) onCommit(draft);
-  };
+  const inputRef = useRef<HTMLInputElement>(null);
+  const skipNextBlur = useRef(false);
+  const keys = commitInputKeys({
+    dirty: draft !== value,
+    commit: () => {
+      if (draft !== value) onCommit(draft);
+    },
+    restore: () => setDraft(value),
+    blur: () => inputRef.current?.blur(),
+    skipNextBlur,
+  });
 
   return (
     <Field label={label} hint={error ?? hint} wide={wide} danger={Boolean(error)}>
       <input
+        ref={inputRef}
         className={error ? "input-error" : undefined}
         type={password ? "password" : "text"}
         autoComplete={password ? "off" : undefined}
@@ -1331,15 +1488,9 @@ export function TextField({
         readOnly={readOnly}
         aria-label={ariaLabel}
         onChange={(e) => setDraft(e.currentTarget.value)}
-        onBlur={commit}
-        onKeyDown={(e) => {
-          if (e.key === "Enter") {
-            commit();
-            e.currentTarget.blur();
-          } else if (e.key === "Escape") {
-            setDraft(value);
-          }
-        }}
+        onFocus={keys.onFocus}
+        onBlur={keys.onBlur}
+        onKeyDown={keys.onKeyDown}
       />
     </Field>
   );
@@ -1388,6 +1539,8 @@ export function NumberField({
  * A bare [`NumberField`]-style input for tight spots like table cells, where a
  * labelled field will not fit. Commits on blur or Enter, reverts on Escape;
  * saving half-typed numbers per keystroke would persist "1" on the way to "10".
+ * Enter commits once — its own blur does not repeat it — and Escape on a dirty
+ * draft restores and is consumed; [`commitInputKeys`] holds the contract.
  */
 export function CompactNumber({
   value,
@@ -1410,26 +1563,26 @@ export function CompactNumber({
   const text = value === null ? "" : String(value);
   const [draft, setDraft] = useState(text);
   useEffect(() => setDraft(text), [text]);
+  const inputRef = useRef<HTMLInputElement>(null);
+  const skipNextBlur = useRef(false);
 
   const commit = () => {
-    if (draft.trim() === "") {
-      if (value !== null) onCommit(null);
-      return;
-    }
-    const parsed = Number(draft);
-    if (!Number.isFinite(parsed)) {
-      setDraft(text);
-      return;
-    }
-    let next = integer ? Math.round(parsed) : parsed;
-    if (min !== undefined) next = Math.max(min, next);
-    if (max !== undefined) next = Math.min(max, next);
-    if (next !== value) onCommit(next);
-    setDraft(String(next));
+    const result = numberDraftCommit(draft, value, { min, max, integer });
+    if (result.kind === "commit") onCommit(result.value);
+    setDraft(result.canonical);
   };
+
+  const keys = commitInputKeys({
+    dirty: draft !== text,
+    commit,
+    restore: () => setDraft(text),
+    blur: () => inputRef.current?.blur(),
+    skipNextBlur,
+  });
 
   return (
     <input
+      ref={inputRef}
       type="number"
       className="tiny"
       min={min}
@@ -1439,20 +1592,15 @@ export function CompactNumber({
       aria-label={ariaLabel}
       value={draft}
       onChange={(e) => setDraft(e.currentTarget.value)}
-      onBlur={commit}
-      onKeyDown={(e) => {
-        if (e.key === "Enter") {
-          commit();
-          e.currentTarget.blur();
-        } else if (e.key === "Escape") {
-          setDraft(text);
-        }
-      }}
+      onFocus={keys.onFocus}
+      onBlur={keys.onBlur}
+      onKeyDown={keys.onKeyDown}
     />
   );
 }
 
-/** Bare input that commits on blur or Enter, reverts on Escape. No label — use with setting-row. */
+/** Bare input that commits on blur or Enter, reverts on Escape. No label — use with setting-row.
+ * Enter commits once and Escape on a dirty draft is consumed ([`commitInputKeys`] holds the contract). */
 export function CommitInput({
   value,
   onCommit,
@@ -1477,27 +1625,29 @@ export function CommitInput({
 }) {
   const [draft, setDraft] = useState(value);
   useEffect(() => setDraft(value), [value]);
-
-  const commit = () => {
-    if (draft !== value) onCommit(draft);
-  };
+  const inputRef = useRef<HTMLInputElement>(null);
+  const skipNextBlur = useRef(false);
+  const keys = commitInputKeys({
+    dirty: draft !== value,
+    commit: () => {
+      if (draft !== value) onCommit(draft);
+    },
+    restore: () => setDraft(value),
+    blur: () => inputRef.current?.blur(),
+    skipNextBlur,
+  });
 
   return (
     <input
+      ref={inputRef}
       type={type}
       value={draft}
       aria-label={ariaLabel}
       placeholder={placeholder}
       onChange={(e) => setDraft(e.currentTarget.value)}
-      onBlur={commit}
-      onKeyDown={(e) => {
-        if (e.key === "Enter") {
-          commit();
-          e.currentTarget.blur();
-        } else if (e.key === "Escape") {
-          setDraft(value);
-        }
-      }}
+      onFocus={keys.onFocus}
+      onBlur={keys.onBlur}
+      onKeyDown={keys.onKeyDown}
     />
   );
 }
@@ -1522,26 +1672,26 @@ export function CommitNumber({
   const text = value === null ? "" : String(value);
   const [draft, setDraft] = useState(text);
   useEffect(() => setDraft(text), [text]);
+  const inputRef = useRef<HTMLInputElement>(null);
+  const skipNextBlur = useRef(false);
 
   const commit = () => {
-    if (draft.trim() === "") {
-      if (value !== null) onCommit(null);
-      return;
-    }
-    const parsed = Number(draft);
-    if (!Number.isFinite(parsed)) {
-      setDraft(text);
-      return;
-    }
-    let next = integer ? Math.round(parsed) : parsed;
-    if (min !== undefined) next = Math.max(min, next);
-    if (max !== undefined) next = Math.min(max, next);
-    if (next !== value) onCommit(next);
-    setDraft(String(next));
+    const result = numberDraftCommit(draft, value, { min, max, integer });
+    if (result.kind === "commit") onCommit(result.value);
+    setDraft(result.canonical);
   };
+
+  const keys = commitInputKeys({
+    dirty: draft !== text,
+    commit,
+    restore: () => setDraft(text),
+    blur: () => inputRef.current?.blur(),
+    skipNextBlur,
+  });
 
   return (
     <input
+      ref={inputRef}
       type="number"
       className="tiny"
       aria-label={ariaLabel}
@@ -1550,15 +1700,9 @@ export function CommitNumber({
       step={integer ? 1 : "any"}
       value={draft}
       onChange={(e) => setDraft(e.currentTarget.value)}
-      onBlur={commit}
-      onKeyDown={(e) => {
-        if (e.key === "Enter") {
-          commit();
-          e.currentTarget.blur();
-        } else if (e.key === "Escape") {
-          setDraft(text);
-        }
-      }}
+      onFocus={keys.onFocus}
+      onBlur={keys.onBlur}
+      onKeyDown={keys.onKeyDown}
     />
   );
 }

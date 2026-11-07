@@ -13,15 +13,19 @@
  * # Why every backend state gets its own rendering
  *
  * The nine states are nine different truths, and four of them need a decision
- * from this page: `ready` asks for confirmation with the field-level diff,
- * `conflict` asks which side of each divergent field wins, `degraded` explains
- * what is not yet proven, and `released` offers the way back in. Collapsing
- * them into held/not-held would hide exactly the moments a user must decide
- * something, which is the failure mode this subsystem exists to prevent.
+ * from this page: `ready` shows the field-level diff and adopts in one click
+ * (the diff on the row *is* the preview — confirming the same two fields a
+ * second time taught the reader to click through), `conflict` offers the way
+ * back to managed values and — on release — asks which side of each
+ * divergent field wins, `degraded` explains what is not yet proven, and
+ * `released` offers the way back in. Only release, the destructive act,
+ * confirms. Collapsing the states into held/not-held would hide exactly the
+ * moments a user must decide something, which is the failure mode this
+ * subsystem exists to prevent.
  */
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useI18n, describeBackendError, type TKey } from "../i18n";
-import { Badge, Button, ConfirmDialog, Disclosure, Drawer, Empty, Field, Section, Select, Toggle, useToast } from "../components";
+import { Badge, Button, ConfirmDialog, Disclosure, Drawer, Empty, Field, Section, Segment, Select, Toggle, useToast } from "../components";
 import type { ConfirmRequest } from "../components";
 import {
   api,
@@ -30,15 +34,32 @@ import {
   type ProposedChange,
   type ResolutionReport,
   type TakeoverAgent,
-  type TakeoverProposal,
   type TakeoverStatus,
   type TakeoverView,
   type ClientSetupOptions,
   type ClientSetupPreview,
 } from "../api";
+import { SaveFeedbackReset } from "../saveQueue";
 
 const AGENTS: TakeoverAgent[] = ["claude", "codex", "opencode", "gemini"];
 const MENU_AGENTS: TakeoverAgent[] = ["claude", "codex", "opencode"];
+
+/** The four usage tiers, with their i18n keys spelled out.
+ *
+ * A template literal — `tier.${tier}` — once compiled to a key that does not
+ * exist in any dictionary, and the `as TKey` cast swallowed the one proof tsc
+ * could have given; `t()` returned undefined and the Radix select portalled
+ * that undefined into its trigger, so the "默认用途档位" control went visually
+ * dead the moment a tier was chosen. An explicit record lets the compiler
+ * check every key, and there is no cast to silently widen.
+ */
+const TIERS = ["fast", "standard", "reasoning", "frontier"] as const;
+const TIER_LABEL: Record<(typeof TIERS)[number], TKey> = {
+  fast: "tier.name.fast",
+  standard: "tier.name.standard",
+  reasoning: "tier.name.reasoning",
+  frontier: "tier.name.frontier",
+};
 
 /** A config value as a reviewable fragment: JSON for anything but a string. */
 function valueText(value: unknown): string {
@@ -71,10 +92,15 @@ export default function Takeover() {
 
   const [views, setViews] = useState<TakeoverView[] | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
+  // A per-row in-flight marker, not a page-wide lock: one client's adopt must
+  // not freeze the other three rows. Each button answers only for its own
+  // agent; the 3s poll still pauses while anything is in flight, which keeps
+  // a landing response from being overwritten mid-action by a stale poll.
   const [acting, setActing] = useState<TakeoverAgent | null>(null);
   const [confirm, setConfirm] = useState<ConfirmRequest | null>(null);
   const [setup, setSetup] = useState<ClientSetupOptions>({ default_class: null, standby: false });
   const [preview, setPreview] = useState<ClientSetupPreview | null>(null);
+  const [previewing, setPreviewing] = useState(false);
   const [setupError, setSetupError] = useState<string | null>(null);
   const setupVersion = useRef(0);
   // The native-menu sync lives in a per-client drawer now: the row is the one
@@ -92,30 +118,48 @@ export default function Takeover() {
     setupVersion.current += 1;
     setSetupAgent(null);
     setPreview(null);
+    setPreviewing(false);
     setSetupError(null);
   };
-  const previewSetup = async () => {
-    if (!setupAgent || acting) return;
+  // The drawer previews itself. The preview call is read-only and cheap, and
+  // the reference grammar (cc-switch, magpie) is one decision, not
+  // preview-then-decide: the diff re-derives the moment the drawer opens and
+  // whenever an option changes, instead of a mandatory "preview" button whose
+  // result every option tweak silently invalidated. Each preview is
+  // versioned; only the newest option set may land.
+  useEffect(() => {
+    if (!setupAgent) return;
     const version = ++setupVersion.current;
-    setPreview(null);
-    setSetupError(null);
-    setActing(setupAgent);
-    try {
-      const next = await api.clientSetupPreview(setupAgent, setup);
-      if (version === setupVersion.current) setPreview(next);
-    } catch (error) {
-      if (version === setupVersion.current) setSetupError(describeBackendError(t, errorText(error)));
-    }
-    finally { setActing(null); }
-  };
+    setPreviewing(true);
+    const timer = setTimeout(() => {
+      api.clientSetupPreview(setupAgent, setup)
+        .then((next) => {
+          if (version !== setupVersion.current) return;
+          setPreview(next);
+          setSetupError(null);
+        })
+        .catch((error) => {
+          if (version !== setupVersion.current) return;
+          setPreview(null);
+          setSetupError(describeBackendError(t, errorText(error)));
+        })
+        .finally(() => {
+          if (version === setupVersion.current) setPreviewing(false);
+        });
+    }, 200);
+    return () => clearTimeout(timer);
+  }, [setupAgent, setup, t]);
   const applySetup = async () => {
-    if (!preview || !setupAgent || acting) return;
+    if (!setupAgent || !preview || acting === setupAgent) return;
+    const agent = setupAgent;
+    const fingerprint = preview.proposal.fingerprint;
     const version = setupVersion.current;
-    setActing(setupAgent);
+    setActing(agent);
     setSetupError(null);
     try {
-      await api.clientSetupApply(setupAgent, setup, preview.proposal.fingerprint);
+      await api.clientSetupApply(agent, setup, fingerprint);
       if (version === setupVersion.current) closeSetup();
+      notify("ok", `${t("client_setup.toast_applied", { agent: t(`takeover.agent.${agent}`) })} ${t(`takeover.restart.${agent}`)}`);
       await load();
     } catch (error) {
       if (version === setupVersion.current) setSetupError(describeBackendError(t, errorText(error)));
@@ -167,12 +211,16 @@ export default function Takeover() {
     };
   }, [load, acting]);
 
-  /** Adopt after confirmation. `fingerprint` guards the preview→click gap. */
+  /** Adopt in one step. The row's inline diff is the preview, and the
+   * fingerprint guards the read→click gap; the reference projects confirm
+   * only the destructive act (release), so adoption does not ask twice about
+   * the same two fields. The toast carries the restart verb this client
+   * needs — a written config is not yet an effect. */
   const adopt = async (agent: TakeoverAgent, fingerprint: string | null) => {
     setActing(agent);
     try {
       await api.takeoverAdopt(agent, fingerprint);
-      notify("ok", t("takeover.toast_adopted", { agent: t(`takeover.agent.${agent}`) }));
+      notify("ok", `${t("takeover.toast_adopted", { agent: t(`takeover.agent.${agent}`) })} ${t(`takeover.restart.${agent}`)}`);
       await load();
     } catch (e) {
       notify("error", describeBackendError(t, errorText(e)));
@@ -206,6 +254,37 @@ export default function Takeover() {
     }
   };
 
+  /** Release is the one destructive act, so it is the one that confirms — and
+   * the confirm carries the choice that used to be a bare unlabelled dropdown
+   * on the row: what each field the client changed since should become. */
+  const releaseRequest = (view: TakeoverView): ConfirmRequest => {
+    const agentName = t(`takeover.agent.${view.agent}` as TKey);
+    return {
+      title: t("takeover.confirm_release_title", { agent: agentName }),
+      body: (
+        <>
+          {view.status.state !== "error" && "config_path" in view.status && (
+            <p className="confirm-path mono">{view.status.config_path}</p>
+          )}
+          <p className="confirm-note">{t("takeover.confirm_release_body", { agent: agentName })}</p>
+          <Segment<ResolutionReport["strategy"]>
+            ariaLabel={t("takeover.strategy.label")}
+            value={strategies[view.agent] ?? "keep_external"}
+            onChange={(next) => setStrategies((current) => ({ ...current, [view.agent]: next }))}
+            options={[
+              { value: "keep_external", label: t("takeover.strategy.keep_external") },
+              { value: "overwrite_with_managed", label: t("takeover.strategy.overwrite") },
+              { value: "skip", label: t("takeover.strategy.skip") },
+            ]}
+          />
+        </>
+      ),
+      confirmLabel: t("takeover.release"),
+      danger: true,
+      onConfirm: () => void release(view.agent),
+    };
+  };
+
   return (
     <>
       <Section title={t("takeover.section")} hint={t("takeover.section_hint")}>
@@ -221,50 +300,11 @@ export default function Takeover() {
               <AgentRow
                 key={view.agent}
                 view={view}
-                acting={acting !== null}
-                strategy={strategies[view.agent] ?? "keep_external"}
-                onStrategy={(next) =>
-                  setStrategies((current) => ({ ...current, [view.agent]: next }))
-                }
+                actingAgent={acting}
                 onSetupMenu={MENU_AGENTS.includes(view.agent) ? () => openSetup(view.agent) : undefined}
-                onAdopt={(proposal) =>
-                  setConfirm({
-                    title: t("takeover.confirm_adopt_title", {
-                      agent: t(`takeover.agent.${view.agent}`),
-                    }),
-                    body: t("takeover.confirm_adopt_body", {
-                      agent: t(`takeover.agent.${view.agent}`),
-                      n: proposal.changes.length,
-                    }),
-                    confirmLabel: t("takeover.adopt"),
-                    onConfirm: () => void adopt(view.agent, proposal.fingerprint),
-                  })
-                }
-                onAdoptAgain={() =>
-                  setConfirm({
-                    title: t("takeover.confirm_adopt_title", {
-                      agent: t(`takeover.agent.${view.agent}`),
-                    }),
-                    body: t("takeover.confirm_adopt_again_body", {
-                      agent: t(`takeover.agent.${view.agent}`),
-                    }),
-                    confirmLabel: t("takeover.adopt_again"),
-                    onConfirm: () => void adopt(view.agent, null),
-                  })
-                }
-                onRelease={() =>
-                  setConfirm({
-                    title: t("takeover.confirm_release_title", {
-                      agent: t(`takeover.agent.${view.agent}`),
-                    }),
-                    body: t("takeover.confirm_release_body", {
-                      agent: t(`takeover.agent.${view.agent}`),
-                    }),
-                    confirmLabel: t("takeover.release"),
-                    danger: true,
-                    onConfirm: () => void release(view.agent),
-                  })
-                }
+                onAdopt={(fingerprint) => void adopt(view.agent, fingerprint)}
+                onRelease={() => setConfirm(releaseRequest(view))}
+                onRefresh={() => void load()}
               />
             ))}
           </div>
@@ -272,41 +312,39 @@ export default function Takeover() {
       </Section>
       {setupAgent && (
         <Drawer
-          title={`${t("takeover.sync_menu")} · ${t(`takeover.agent.${setupAgent}`)}`}
+          title={`${t("takeover.setup_drawer")} · ${t(`takeover.agent.${setupAgent}`)}`}
           onClose={closeSetup}
         >
+          {/* The sync menu is a client task, not a configuration edit: it
+              opens with no verdict inherited from any earlier surface. */}
+          <SaveFeedbackReset />
           <p className="section-hint">{t("client_setup.hint")}</p>
           <div className="controls">
             <Field label={t("client_setup.default")}>
               <Select
                 value={setup.default_class ?? "keep"}
                 ariaLabel={t("client_setup.default")}
-                disabled={acting !== null}
+                disabled={acting === setupAgent}
                 options={[
                   { value: "keep", label: t("client_setup.keep") },
-                  ...["fast", "standard", "reasoning", "frontier"].map((tier) => ({
-                    value: `${tier}-class`, label: t(`tier.${tier}` as TKey),
+                  ...TIERS.map((tier) => ({
+                    value: `${tier}-class`, label: t(TIER_LABEL[tier]),
                   })),
                 ]}
-                onChange={(value) => {
-                  setSetup({ ...setup, default_class: value === "keep" ? null : value });
-                  setPreview(null);
-                }}
+                onChange={(value) =>
+                  setSetup({ ...setup, default_class: value === "keep" ? null : value })
+                }
               />
             </Field>
-            <div className="field-actions">
-              <Button disabled={acting !== null} onClick={() => void previewSetup()}>
-                {t("client_setup.preview")}
-              </Button>
-            </div>
           </div>
           <Toggle
             label={t("client_setup.standby")}
             checked={setup.standby}
-            disabled={acting !== null}
-            onChange={(standby) => { setSetup({ ...setup, standby }); setPreview(null); }}
+            disabled={acting === setupAgent}
+            onChange={(standby) => setSetup({ ...setup, standby })}
           />
           {setupError && <p className="field-error" role="alert">{setupError}</p>}
+          {previewing && <p className="field-hint" role="status">{t("client_setup.previewing")}</p>}
           {preview && <>
             <p className="field-hint">{preview.gateway_url} · {preview.config_path}</p>
             <div className="table-scroll">
@@ -330,17 +368,20 @@ export default function Takeover() {
             <Disclosure title={t("takeover.hint.ready", { n: preview.proposal.changes.length })} defaultOpen>
               <div className="table-scroll"><ChangesTable rows={preview.proposal.changes} kind="proposal" /></div>
             </Disclosure>
-            <div className="controls">
-              <Button disabled={acting !== null} kind="primary" onClick={() => setConfirm({
-                title: t("client_setup.apply"),
-                body: t("client_setup.confirm"),
-                confirmLabel: t("client_setup.apply"),
-                onConfirm: () => void applySetup(),
-              })}>
-                {t("client_setup.apply")}
-              </Button>
-            </div>
           </>}
+          {/* The sync's one press lives outside the preview block and simply
+              waits, disabled, for the auto-preview to land — a control that
+              appears only after a fetch would let the drawer's geometry
+              depend on a request's latency, and read as nothing to press. */}
+          <div className="controls">
+            <Button
+              disabled={!preview || previewing || acting === setupAgent}
+              kind="primary"
+              onClick={() => void applySetup()}
+            >
+              {acting === setupAgent ? t("takeover.working") : t("client_setup.apply")}
+            </Button>
+          </div>
         </Drawer>
       )}
       <ConfirmDialog request={confirm} onClose={() => setConfirm(null)} />
@@ -348,24 +389,28 @@ export default function Takeover() {
   );
 }
 
-/** One agent's whole reading, with the action its state allows. */
+/** One agent's whole reading, with the action its state allows.
+ *
+ * One action strip for every state — the sync button used to be spelled out
+ * in three separate state branches and drifted copy-paste-wise. The button
+ * set is derived from the state; `actingAgent` locks only this row, so a
+ * slow adopt on Codex does not freeze the other three clients.
+ */
 function AgentRow({
   view,
-  acting,
-  strategy,
-  onStrategy,
+  actingAgent,
   onAdopt,
-  onAdoptAgain,
   onRelease,
+  onRefresh,
   onSetupMenu,
 }: {
   view: TakeoverView;
-  acting: boolean;
-  strategy: ResolutionReport["strategy"];
-  onStrategy: (next: ResolutionReport["strategy"]) => void;
-  onAdopt: (proposal: TakeoverProposal) => void;
-  onAdoptAgain: () => void;
+  actingAgent: TakeoverAgent | null;
+  onAdopt: (fingerprint: string | null) => void;
   onRelease: () => void;
+  /** The way out of the dead ends: not_detected, error and available rows
+   * had no action at all, and the only refresh was a hidden 3-second poll. */
+  onRefresh: () => void;
   /** Present only for agents the native menu can be written to; the row is
    * the one place that client's actions live, takeover and menu alike. */
   onSetupMenu?: () => void;
@@ -374,6 +419,7 @@ function AgentRow({
   const status = view.status;
   const agentName = t(`takeover.agent.${view.agent}` as TKey);
   const stateLabel = t(`takeover.state.${status.state}` as TKey);
+  const acting = actingAgent === view.agent;
   // Every state with a path to show: where the managed config lives. For
   // not_detected the searched list replaces it — that list is the only thing
   // that lets the user fix the detection themselves.
@@ -384,6 +430,26 @@ function AgentRow({
         ? status.searched.join(" · ")
         : null;
 
+  const menuReachable =
+    status.state !== "not_detected" &&
+    status.state !== "error" &&
+    status.state !== "available" &&
+    status.state !== "unsupported";
+  // Ready adopts with the previewed fingerprint; released and conflict
+  // re-adopt without one (the backend recomputes). On conflict this is the
+  // "apply again" pill the reference projects put on drifted state — the
+  // way back to managed values that the row previously did not offer at all.
+  const canAdopt =
+    status.state === "ready" ||
+    status.state === "released" ||
+    status.state === "conflict";
+  const canRelease = holdsOwnership(status);
+  const canRefresh =
+    status.state === "not_detected" ||
+    status.state === "error" ||
+    status.state === "available";
+  const anyAction = Boolean(onSetupMenu && menuReachable) || canAdopt || canRelease || canRefresh;
+
   return (
     <div className="list-row" data-agent={view.agent}>
       <div className="row-main">
@@ -392,56 +458,32 @@ function AgentRow({
         {path && <span className="row-sub mono muted">{path}</span>}
         <StatusDetail status={status} agentName={agentName} />
       </div>
-      {(holdsOwnership(status)) && (
+      {anyAction && (
         <div className="controls">
-          {onSetupMenu && (
+          {onSetupMenu && menuReachable && (
             <Button kind="ghost" disabled={acting} onClick={onSetupMenu}>
               {t("takeover.sync_menu")}
             </Button>
           )}
-          {status.state === "conflict" && (
-            <Select
-              ariaLabel={t("takeover.strategy.label")}
-              value={strategy}
+          {canRefresh && (
+            <Button kind="ghost" disabled={acting} onClick={onRefresh}>
+              {t("takeover.refresh")}
+            </Button>
+          )}
+          {canAdopt && (
+            <Button
+              kind="primary"
               disabled={acting}
-              onChange={onStrategy}
-              options={[
-                { value: "keep_external", label: t("takeover.strategy.keep_external") },
-                {
-                  value: "overwrite_with_managed",
-                  label: t("takeover.strategy.overwrite"),
-                },
-                { value: "skip", label: t("takeover.strategy.skip") },
-              ]}
-            />
-          )}
-          <Button kind="danger" disabled={acting} onClick={onRelease}>
-            {acting ? t("takeover.working") : t("takeover.release")}
-          </Button>
-        </div>
-      )}
-      {status.state === "ready" && (
-        <div className="controls">
-          {onSetupMenu && (
-            <Button kind="ghost" disabled={acting} onClick={onSetupMenu}>
-              {t("takeover.sync_menu")}
+              onClick={() => onAdopt(status.state === "ready" ? status.proposal.fingerprint : null)}
+            >
+              {acting ? t("takeover.working") : status.state === "ready" ? t("takeover.adopt") : t("takeover.adopt_again")}
             </Button>
           )}
-          <Button kind="primary" disabled={acting} onClick={() => onAdopt(status.proposal)}>
-            {acting ? t("takeover.working") : t("takeover.adopt")}
-          </Button>
-        </div>
-      )}
-      {status.state === "released" && (
-        <div className="controls">
-          {onSetupMenu && (
-            <Button kind="ghost" disabled={acting} onClick={onSetupMenu}>
-              {t("takeover.sync_menu")}
+          {canRelease && (
+            <Button kind="danger" disabled={acting} onClick={onRelease}>
+              {acting ? t("takeover.working") : t("takeover.release")}
             </Button>
           )}
-          <Button kind="primary" disabled={acting} onClick={onAdoptAgain}>
-            {acting ? t("takeover.working") : t("takeover.adopt_again")}
-          </Button>
         </div>
       )}
     </div>
@@ -496,7 +538,9 @@ function StatusDetail({
       return (
         <>
           <p className="row-sub">{t("takeover.hint.ready", { n: status.proposal.changes.length })}</p>
-          <ChangesTable rows={status.proposal.changes} kind="proposal" />
+          <div className="table-scroll">
+            <ChangesTable rows={status.proposal.changes} kind="proposal" />
+          </div>
           <p className="row-sub muted">{t("takeover.confirm_inline", { agent: agentName })}</p>
         </>
       );
@@ -528,7 +572,9 @@ function StatusDetail({
       return (
         <>
           <p className="row-sub warn-text">{t("takeover.hint.conflict", { n: status.conflicts.length })}</p>
-          <ConflictTable conflicts={status.conflicts} />
+          <div className="table-scroll">
+            <ConflictTable conflicts={status.conflicts} />
+          </div>
         </>
       );
 
@@ -541,7 +587,9 @@ function StatusDetail({
       );
 
     case "error":
-      return <p className="row-sub warn-text">{status.reason}</p>;
+      // Through the same translation pass the degraded reasons take; only a
+      // reason no rule knows falls back to the backend's own English.
+      return <p className="row-sub warn-text"><KnownReason reason={status.reason} /></p>;
 
     default:
       return null;

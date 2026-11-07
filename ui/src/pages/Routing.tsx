@@ -47,6 +47,7 @@ import {
   useToast,
 } from "../components";
 import { useI18n, type TKey } from "../i18n";
+import { SaveFeedbackReset, type TaskKind } from "../saveQueue";
 
 /**
  * Route rows shown before the pool's long tail folds away.
@@ -77,7 +78,7 @@ export default function Routing({
 }: {
   snapshot: Snapshot;
   save: (mutate: (config: AppConfig) => AppConfig | null) => Promise<boolean>;
-  run: (task: () => Promise<Snapshot>) => Promise<boolean>;
+  run: (task: () => Promise<Snapshot>, kind?: TaskKind) => Promise<boolean>;
   busy: boolean;
 }) {
   const { config, health } = snapshot;
@@ -487,7 +488,9 @@ return (
               return next;
             })
           }
-          onElection={() => run(api.runElection)}
+          // Probing the tier members is a runtime reading, not a
+          // configuration write.
+          onElection={() => run(api.runElection, "observe")}
         />
       )}
       {edit === "auto" && (
@@ -842,6 +845,7 @@ function DefaultDrawer({
 
   return (
     <Drawer title={t("routing.default_drawer")} onClose={onClose}>
+      <SaveFeedbackReset />
       <div className="controls">
         <Field label={t("field.strategy")}>
           <Select<RoutingStrategy>
@@ -1283,6 +1287,7 @@ function AutoModeDrawer({
 
   return (
     <Drawer title={t("route.auto_review")} onClose={onClose}>
+      <SaveFeedbackReset />
       <Toggle
         label={t("routing.route_review")}
         hint={t("routing.route_review_hint")}

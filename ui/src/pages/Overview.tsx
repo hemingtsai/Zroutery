@@ -8,6 +8,7 @@ import {
   money,
   ms,
   tierMembers,
+  tierName,
   TIERS,
   virtualId,
   type AppConfig,
@@ -18,7 +19,7 @@ import {
 } from "../api";
 import { StatusDot, useToast } from "../components";
 import { useI18n, type TKey } from "../i18n";
-import { useMode, type UiMode } from "../mode";
+import { useMode } from "../mode";
 import { RoutePool } from "./Routing";
 
 /**
@@ -60,16 +61,13 @@ export default function Overview({
   onNavigate,
   save,
   busy,
-  onModeChange,
 }: {
   snapshot: Snapshot;
-  onNavigate: (page: "models" | "providers" | "routing" | "activity" | "settings") => void;
+  onNavigate: (page: "models" | "providers" | "routing" | "takeover" | "activity" | "settings") => void;
   save: (mutate: (config: AppConfig) => AppConfig | null) => Promise<boolean>;
   /** The queue's read half, part of the page contract like every content page; the overview's writes are saves. */
   run: (task: () => Promise<Snapshot>) => Promise<boolean>;
   busy: boolean;
-  /** The shell's mode switch, for the add-models hand-off (simple has no models page). */
-  onModeChange: (mode: UiMode) => void;
 }) {
   const { config, server, recent } = snapshot;
   const { t } = useI18n();
@@ -159,6 +157,24 @@ export default function Overview({
         </div>
       </div>
 
+      <section className="setup-path" aria-label={t("overview.setup_path")}>
+        <div>
+          <strong>{t("overview.setup_path")}</strong>
+          <span className="field-hint">{t("overview.setup_hint")}</span>
+        </div>
+        <div className="setup-path-actions">
+          {([
+            ["providers", "task.providers"],
+            ["models", "task.models"],
+            ["takeover", "task.clients"],
+          ] as const).map(([page, label], index) => (
+            <button type="button" className="btn btn-default" key={page} onClick={() => onNavigate(page)}>
+              <span className="muted">{index + 1}</span> {t(label)}
+            </button>
+          ))}
+        </div>
+      </section>
+
       <section className="section">
         <div className="section-head">
           <span className="section-title">{t("nav.routing")}</span>
@@ -184,7 +200,7 @@ export default function Overview({
                 tierRoutes.map(({ tier, members }) => (
                   <div className="flow-row" key={tier}>
                     <div className="flow-kind">
-                      <span className="flow-kind-name mono">{virtualId(tier, config.routing.naming_style)}</span>
+                      <span className="flow-kind-name" title={virtualId(tier, config.routing.naming_style)}>{tierName(tier, t)}</span>
                       <span className="flow-kind-hint">{t(TIER_HINT[tier])}</span>
                     </div>
                     <div className="flow-routes">
@@ -223,7 +239,7 @@ export default function Overview({
                 ) : (
                   tierRoutes.map(({ tier, members }) => (
                     <span className="flow-route" key={tier}>
-                      <span className="flow-src mono">{virtualId(tier, config.routing.naming_style)}</span>
+                      <span className="flow-src" title={virtualId(tier, config.routing.naming_style)}>{tierName(tier, t)}</span>
                       <span className="flow-arrow" aria-hidden>{"→"}</span>
                       <span className="flow-target">
                         {modelName(members[0].model)}
@@ -329,7 +345,6 @@ export default function Overview({
                       type="button"
                       className="linky"
                       onClick={() => {
-                        onModeChange("geek");
                         onNavigate("models");
                       }}
                     >

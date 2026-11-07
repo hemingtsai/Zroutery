@@ -11,6 +11,44 @@
    only makes the interface look designed, it goes.
    ============================================================================ */
 
+/* The import flow keeps the active step and its next action visible. */
+.import-steps {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px 24px;
+  padding: 12px 0;
+  margin: 12px 0 20px;
+  list-style: none;
+  border-bottom: 1px solid var(--line-muted);
+  color: var(--muted);
+  font-size: 12px;
+}
+.import-steps li { display: flex; align-items: center; gap: 8px; }
+.import-steps li[aria-current] { color: var(--text); font-weight: 600; }
+.import-steps li > span { font-variant-numeric: tabular-nums; }
+.import-source-list { list-style: none; padding: 0; margin: 8px 0 16px; display: grid; gap: 6px; }
+.import-source-option {
+  width: 100%; min-width: 0; display: grid; gap: 5px; padding: 12px;
+  text-align: start; color: var(--text); background: var(--surface-muted);
+  border: 1px solid transparent; border-radius: var(--radius); cursor: pointer;
+  font: inherit;
+}
+.import-source-option:hover { background: var(--hover); border-color: var(--line-muted); }
+.import-source-option:focus-visible { outline: 2px solid var(--primary); outline-offset: 2px; }
+.import-source-option span { color: var(--text-2); font-size: 12px; overflow-wrap: anywhere; }
+.import-metrics { display: grid; grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); gap: 12px; margin: 20px 0; }
+.import-range { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; margin-bottom: 20px; }
+.import-range > :first-child { grid-column: 1 / -1; }
+.import-range .field { min-width: 0; display: grid; gap: 6px; font-size: 12px; color: var(--text-2); }
+.import-range input { width: 100%; min-width: 0; }
+.import-progress { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 12px; background: var(--surface-muted); }
+.import-section h3 { font-size: 14px; font-weight: 600; }
+.setup-path { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 14px; padding: 16px 0 20px; border-bottom: 1px solid var(--line-muted); margin-bottom: 20px; }
+.setup-path > div:first-child { display: grid; gap: 6px; }
+.setup-path .field-hint { margin: 0; }
+.setup-path-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+@media (max-width: 440px) { .import-range { grid-template-columns: 1fr; } }
+
 :root {
   color-scheme: light;
 
@@ -32,6 +70,7 @@
    */
   --line-muted: #d4d4d4;
   --line-strong: var(--line-muted);
+  --control-line: var(--line);
   /*
    * The two structural line roles, declared instead of left to a
    * `var(--border-primary, var(--line))` fallback that could never fire.
@@ -41,7 +80,7 @@
    * without editing the frame's ink as well. These resolve to the same ink
    * today, which is the point: this is a rename with no pixel of change.
    */
-  --border-primary: var(--line);
+  --border-primary: var(--control-line);
   --border-secondary: var(--line);
 
   /* Type */
@@ -178,40 +217,45 @@
    colorNeutralStroke1 and stroke2); --text/--text-2/--muted are the
    on-surface family (MD3 on-surface, then on-surface-variant twice — the
    baseline really has only two body inks; Fluent Foreground1/2/3); the
-   --primary trio is the brand. Hover and selection are no longer pre-mixed
-   greys anywhere: they are the official on-colour state layers — hover 8%,
-   selection 12% — declared once here as tokens and reused by every shared
-   rule, with filled controls layering their own on-colour instead.
+   --primary trio is the brand. Hover and selection in the MD3 sheet are the
+   official on-colour state layers — hover 8%, selection 12% — declared once
+   as tokens and reused by every shared rule, with filled controls layering
+   their own on-colour instead; Fluent speaks its own official grammar of
+   opaque fill swaps (Background1Hover/1Selected) and white-alpha layers in
+   dark, per the WinUI compositing model.
 
    What a skin deliberately does NOT touch: layout tokens (`--control-h` stays
    30px and `.segment-item` stays 36px, which is what makes the layout stubs
-   meaningful across skins), timing, the type stack, and the ok/warn status
-   colours (neither spec defines them; they stay the theme's own inks — only
-   the error pair, which both specs do define, is re-inked). Fonts per skin
-   are deferred to the P2 font-loading work. Elevation: both skins re-declare
-   `--shadow-layer` with their official formula — MD3 elevation level 2,
-   Fluent shadow16.
+   meaningful across skins), timing, and the type stack beyond the per-skin
+   family (Roboto for MD3, Segoe UI Variable for Fluent — loaded by
+   `applySkin()`). Status colours ARE re-inked: Fluent takes its official
+   success/warning tokens; MD3's baseline defines no success role, so its
+   ok/warn are a custom pair built on the official container pattern (tone
+   levels matched to the baseline error pair), each recorded below. Elevation:
+   MD3 declares the official level 1/2/3 shadow formulas — level 2 on the
+   shared `--shadow-layer` — and, in dark, replaces all of them with the
+   official surface-tint rule (tint, no shadow); Fluent declares the v9
+   shadow4/8/16/64 family, shadow16 on the shared token.
 
    The primary action is the one place a skin follows the user rather than the
-   designer: MD3 and Fluent take the Windows system accent (the DWM
-   personalised colour that Chromium/WebView2 exposes as the `AccentColor`
-   CSS system colour) over the official fallback via the cascade — an engine
-   that knows the keyword takes it, an older one drops the declaration and
-   lands on the official values above it. Light themes take the accent raw
+   designer: MD3 and Fluent take the native accent returned by the desktop
+   bridge, with the official theme fallback retained when no accent is
+   available. Light themes take the accent raw
    (on white it reads as its native self, the same guarantee a WinUI button
    carries). Dark themes invert its tone before use — 45% accent over white,
    dark ink under it — because a saturated accent on the near-black surface
    glows; the inversion is MD3's own baseline rule (#6750a4 → #d0bcff)
    applied to the system colour, and Fluent follows the same formula (E-195).
-   Status colours stay theme-controlled: a danger that follows the accent
+   Status colours stay accent-free: a danger that follows the accent
    colour stops meaning danger.
 
    Contrast, checked pair by pair, is recorded in the skin blocks below and
    holds for the hardcoded fallbacks. For the system accent itself no ratio is
    promised: the user can pick an accent as pale as they like, and the pairing
-   then matches whatever the OS's own buttons do — the E-195 sweep across six
-   system accents (blue/red/green/black/white/purple) found every pair
-   >= 4.5:1.
+   then matches whatever the OS's own buttons do — with v3's state-layer hover
+   the fallback pairs all clear 4.5:1, while a raw OS accent pairs as the OS
+   itself pairs it (white on #0075ff is 4.21:1, on #8e5edf 4.36:1 — Windows's
+   own numbers, both under the 4.5 a web page would need).
    ============================================================================ */
 
 /*
@@ -224,17 +268,25 @@
  * a panel both wash with exactly the ink M3 specifies. Text pairs:
  * --text 16.23:1 and --text-2/--muted 8.89:1 on --bg; --text-2 8.47:1 on
  * --surface (8.89:1 on --surface-muted's tone); --on-primary 6.44:1 on the
- * fallback primary; on-primary-container 13.3:1 on primary-container;
+ * fallback primary; on-secondary-container 13.2:1 on the tonal container;
  * on-error-container 12.8:1 on error-container; the warn banner's status ink
- * 4.57:1 on its 12% tint (the one pair the baseline defines no container
+ * 5.33:1 on its 12% tint (the one pair the baseline defines no container
  * for).
  */
 [data-skin="md3"] {
+  --font-sans: "Roboto", "Microsoft YaHei", sans-serif;
   --radius: 12px;
 
   --bg: #fef7ff;
   --surface: #f7f2fa;
   --surface-muted: #f3edf7;
+  /* The two container steps the component matrix needs beyond the ladder
+     above: the dialog's surface-container-high and the switch's unselected
+     track (surface-container-highest) — the official component token values.
+     The dialog's fill reads 8.9:1 under --text and the track is the darkest
+     step of the tonal ladder the M3 switch spec fills at rest. */
+  --surface-high: #ece6f0;
+  --container-highest: #e6e0e9;
   --hover: color-mix(in srgb, var(--text) 8%, transparent);
   --selected: color-mix(in srgb, var(--text) 12%, transparent);
 
@@ -254,14 +306,16 @@
   --muted: #49454f;
 
   --primary: #6750a4;
-  --primary: AccentColor;
-  /* Fallback hover: the official filled-button state layer (on-primary 8%
-     over the container). The accent line below overrides it when the system
-     colour is known, as in v1. */
+  --primary: var(--system-accent, #6750a4);
+  /* The official filled-button hover — one formula for fallback and accent
+     alike, because both speak the same grammar: the state layer is the *on*
+     colour at 8% over the container, so a light-theme button gets lighter
+     under the pointer (v3; v1/v2 darkened with an 85% accent mix, which is
+     the direction Fluent's brand ramp takes, not M3's state layers). CSS
+     custom properties resolve lazily, so --on-primary below is in scope. */
   --primary-hover: color-mix(in srgb, var(--on-primary) 8%, var(--primary));
-  --primary-hover: color-mix(in srgb, AccentColor 85%, var(--text));
   --on-primary: #ffffff;
-  --on-primary: AccentColorText;
+  --on-primary: var(--system-accent-fg, #ffffff);
 
   --primary-container: #eaddff;
   --on-primary-container: #21005d;
@@ -270,12 +324,38 @@
   --error-container: #f9dedc;
   --on-error-container: #410e0b;
 
+  /* The inverse trio, for the toast: M3's toast is a snackbar, which floats
+     the inverted sheet — inverse-surface behind inverse-on-surface text.
+     --inverse-primary is the snackbar's action ink; this app's toast carries
+     no action yet, so only the first two are consumed. Official component
+     token values. */
+  --inverse-surface: #322f35;
+  --inverse-on-surface: #f5eff7;
+  --inverse-primary: #d0bcff;
+
+  /* The baseline defines no success role (m3.material.io/styles/color/roles
+     has primary/secondary/tertiary/error + neutrals only), so ok/warn are a
+     custom pair built the way the baseline builds its own containers: tones
+     40/90 in light at the error pair's tone levels, matched chroma register,
+     hue anchored at green 148 / amber 72 (OKLCh). --ok 4.94:1 on --ok-bg and
+     5.80:1 on the surface; --warn 5.33:1 on --warn-bg and 6.35:1 on the
+     surface; on-container inks 13.07:1 / 13.16:1. Dark values in the dark
+     sheet. Danger stays the official error pair. */
+  --ok: #00722a;
+  --ok-bg: #daecdb;
+  --warn: #835100;
+  --warn-bg: #f5e3cd;
+
   --danger: #b3261e;
   --danger-bg: #f9dedc;
 
-  /* MD3 elevation level 2 (m3.material.io/elevation): the drawer and every
-     floating layer speak the official two-shadow formula. */
+  /* MD3 elevation (m3.material.io/elevation, material-web _elevation.scss):
+     the two-shadow formula per level — key at 30%, ambient at 15%. The
+     floating layers split by level: drawer/modal-sheet level 1, menus and
+     popovers level 2, dialogs and the snackbar level 3. */
+  --shadow-1: 0 1px 2px rgba(0, 0, 0, 0.3), 0 1px 3px 1px rgba(0, 0, 0, 0.15);
   --shadow-layer: 0 1px 2px rgba(0, 0, 0, 0.3), 0 2px 6px 2px rgba(0, 0, 0, 0.15);
+  --shadow-3: 0 1px 3px rgba(0, 0, 0, 0.3), 0 4px 8px 3px rgba(0, 0, 0, 0.15);
 
   /* Thumbs from the line pair: outline-variant at rest, outline grabbed. */
   --scrollbar-thumb: #cac4d0;
@@ -316,20 +396,21 @@
      #d0bcff, its tone-80 lift — applied to the system colour instead of the
      palette: 45% accent over white lands #0075ff at #8cc1ff, the same pastel
      register as the fallback. The ink under it darkens in step (15% accent
-     into the theme's text ink), and hover is one white state-layer step
-     lighter (40% accent ≈ +8% white over the container). The brief's literal
-     60%-accent hover lands DARKER than primary — color-mix shares attach to
-     the accent — contradicting its own "更亮一档"; implemented per intent.
-     With the live system accent: ink #192941 on #8cc1ff is 7.80:1, on the
-     hover #66..-step 6.2:1+, the tonal button 7.95:1, ghost 8.6:1. */
-  --primary: color-mix(in srgb, AccentColor 45%, #ffffff);
-  /* Fallback hover: the official filled-button state layer — in dark, the
-     dark on-primary ink at 8% over the light container, the direction the
-     M3 dark state layer takes. */
+     into the theme's text ink). With the live system accent: ink #192941 on
+     #8cc1ff is 7.80:1; the 8% on-primary hover state layer below only
+     darkens the fill, so the pair can only widen; the tonal button 7.95:1,
+     ghost 8.6:1. */
+  --primary: color-mix(in srgb, var(--system-accent, #6750a4) 45%, #ffffff);
+  /* The official filled-button hover — the same on-colour state layer as
+     light: 8% of the dark ink over the tone-80 container, the direction the
+     M3 dark state layer takes (darker under the pointer, where light theme
+     gets lighter). One formula covers fallback and accent. */
   --primary-hover: color-mix(in srgb, var(--on-primary) 8%, var(--primary));
-  --primary-hover: color-mix(in srgb, AccentColor 40%, #ffffff);
   --on-primary: #381e72;
-  --on-primary: color-mix(in srgb, AccentColor 15%, #1d1b20);
+  --on-primary: color-mix(in srgb, var(--system-accent, #6750a4) 15%, #1d1b20);
+
+  --surface-high: #2b2930;
+  --container-highest: #36343b;
 
   --primary-container: #4f378b;
   --on-primary-container: #eaddff;
@@ -338,42 +419,78 @@
   --error-container: #8c1d18;
   --on-error-container: #f2b8b5;
 
+  /* The inverse trio, dark sheet: the snackbar's inverted sheet runs light on
+     dark. Official component token values. */
+  --inverse-surface: #e6e0e9;
+  --inverse-on-surface: #322f35;
+  --inverse-primary: #6750a4;
+
+  /* ok/warn, dark: the same custom pair as the light sheet, stepped to
+     tones 80/30 the way the baseline steps its own containers (the dark
+     container sits darker than the purple container-30 because green is a
+     lighter-luminous hue and the on-container pair needs its 4.5:1).
+     --ok 7.56:1 on --ok-bg and 10.92:1 on the surface; --warn 6.98:1 on
+     --warn-bg and 9.81:1 on the surface. */
+  --ok: #93d69c;
+  --ok-bg: #1b3820;
+  --warn: #eab26b;
+  --warn-bg: #432b07;
+
   --danger: #f2b8b5;
   --danger-bg: #8c1d18;
 
   --scrollbar-thumb: #49454f;
   --scrollbar-thumb-hover: #938f99;
 
-  /* The official level-2 formula holds in dark; the shadows are quieter on
-     the near-black surface, which is what the baseline itself does. */
-  --shadow-layer: 0 1px 2px rgba(0, 0, 0, 0.3), 0 2px 6px 2px rgba(0, 0, 0, 0.15);
+  /* Dark elevation is surface tint, not shadow (m3.material.io/elevation):
+     "surfaces use a surface tint color overlaid at a set opacity". The
+     tint is primary over each layer's own container — level 1 = 5%, level 2
+     = 8%, level 3 = 11% — and the layer-3 drawer/popover/dialog rules
+     composite it; the shadows all go to none. The drawer veil does the
+     separation the shadow used to. */
+  --shadow-1: none;
+  --shadow-layer: none;
+  --shadow-3: none;
 }
 
 /*
  * Fluent, light. The @fluentui v9 web light theme's neutral ramp with the
  * Fluent 2 brand: #f5f5f5 canvas (Background3), white surface (Background1),
- * Background2 and the Background4 / Background1Selected pair for hover and
- * selection, Foreground1/2/3 for the text family, Stroke1/2 as the strong and
- * weak lines — v1 had that pair swapped; the role table puts stroke1 on
- * control frames and stroke2 on separators, so --border-secondary is
- * re-pointed exactly as the MD3 sheet does. Text pairs: --text 14.23:1,
+ * Background2 as the quiet secondary sheet, Background1Hover/1Selected for
+ * hover and selection, Foreground1/2/3 for the text family, Stroke1/2 as the
+ * strong and weak lines — v1 had that pair swapped; the role table puts
+ * stroke1 on control frames and stroke2 on separators, so --border-secondary
+ * is re-pointed exactly as the MD3 sheet does. Text pairs: --text 14.23:1,
  * --text-2 9.22:1 and --muted 5.68:1 on --bg (15.51 / 10.05 / 6.19:1 on the
- * white surface); --on-primary 5.38:1 on the fallback brand; the brand's
- * reading ink 6.11:1 on --bg; --danger 6.0:1 on its container. The scrollbar
- * inherits :root's neutral greys — this skin is neutral, so nothing to
- * re-ink.
+ * white surface); --on-primary 5.38:1 on the fallback brand; --danger 7.12:1
+ * on white, 6.55:1 on its container tint. The scrollbar inherits :root's
+ * neutral greys — this skin is neutral, so nothing to re-ink.
  */
 [data-skin="fluent"] {
+  --font-sans: "Segoe UI Variable", "Segoe UI", "Microsoft YaHei", sans-serif;
   --radius: 4px;
 
   --bg: #f5f5f5;
   --surface: #ffffff;
   --surface-muted: #fafafa;
-  --hover: #f0f0f0;
+  /* Hover is Background1Hover (v9 colorNeutralBackground1Hover): the default
+     button's fill under the pointer, one grey-96 step down from the white
+     control. Pressed lands on grey-88 (#e0e0e0) through --selected's family;
+     rows on the canvas hover to the same tone the WinUI subtle fill takes. */
+  --hover: #f5f5f5;
   --selected: #e8e8e8;
 
-  --line: #d1d1d1;
+  --line: #e0e0e0;
   --line-muted: #e0e0e0;
+  --control-line: #8a8a8a;
+  /* The hover/pressed control strokes: v9 steps stroke1's ink *darker* along
+     its state ramp (light: #d1d1d1 → #c7c7c7 → #b3b3b3), and this skin's
+     control line is the same ramp anchored at the WCAG-legible #8a8a8a —
+     hover darkens to the WinUI secondary register (black 57%), pressed one
+     step further. Consumed by the input/button hover rules in layer 3. */
+  --stroke-hover: #6e6e6e;
+  --stroke-pressed: #565656;
+  --border-primary: var(--control-line);
   /* The separator re-point: cells, kv rows and section rules take the weak
      stroke; control frames keep the strong one. A var reference, so the
      dark sheet needs no copy. */
@@ -384,49 +501,81 @@
   --muted: #616161;
 
   --primary: #0f6cbd;
-  --primary: AccentColor;
+  --primary: var(--system-accent, #0f6cbd);
   --primary-hover: #115ea3;
-  --primary-hover: color-mix(in srgb, AccentColor 85%, var(--text));
+  --primary-hover: color-mix(in srgb, var(--system-accent, #0f6cbd) 85%, var(--text));
   --on-primary: #ffffff;
-  --on-primary: AccentColorText;
+  --on-primary: var(--system-accent-fg, #ffffff);
 
-  /* The brand's reading ink — links and selected-tab text (v9
-     colorBrandForeground1). */
-  --brand-foreground: #115ea3;
+  /* v3 dropped v2's --brand-foreground: its one consumer (the selected tab)
+     reads Foreground1 in v9's own Tab, with the brand in the indicator. */
+
+  /* Status inks: the official v9 tokens (success/warning/danger
+     Foreground1 + Background1 tints). Ink on its own tint: ok 5.89:1, warn
+     4.85:1, danger 6.55:1; on the white surface: 6.28 / 5.06 / 7.12:1.
+     Danger's dark values are in the dark sheet. */
+  --ok: #0e700e;
+  --ok-bg: #f1faf1;
+  --warn: #bc4b09;
+  --warn-bg: #fff9f5;
 
   --danger: #b10e1c;
+  --danger-bg: #fdf3f4;
 
-  /* Fluent shadow16 (v9): the flyout depth the drawer, toast and dialog
-     overrides below consume. */
-  --shadow-layer: 0 8px 16px rgba(0, 0, 0, 0.14);
+  /* Fluent shadows (v9 createShadowTokens): ambient `rgba(0,0,0,.12)` under
+     key `rgba(0,0,0,.14)`. v2 kept only the key layer of shadow16; v3 states
+     the official formulas and splits the family the way the components do —
+     card shadow4 (KPI tiles), toast/tooltip shadow8, flyouts shadow16, the
+     dialog shadow64. */
+  --shadow-card: 0 0 2px rgba(0, 0, 0, 0.12), 0 2px 4px rgba(0, 0, 0, 0.14);
+  --shadow-toast: 0 0 2px rgba(0, 0, 0, 0.12), 0 4px 8px rgba(0, 0, 0, 0.14);
+  --shadow-layer: 0 0 2px rgba(0, 0, 0, 0.12), 0 8px 16px rgba(0, 0, 0, 0.14);
+  --shadow-dialog: 0 0 8px rgba(0, 0, 0, 0.12), 0 32px 64px rgba(0, 0, 0, 0.14);
 }
 
 /*
- * Fluent, dark. The v9 web dark neutrals: Background3 canvas (#141414),
- * Background1 cards (#292929), Background2 (#1f1f1f), Background4 for hover
- * (#191919 — a step *down* from the card, which is the direction WinUI's own
- * dark control fill takes) and Background1Selected (#383838). Stroke1/2 and
- * Foreground2/3 are restated because this block and the light sheet above are
- * both (0,1,0) on the document element and the light sheet is later in the
- * file: anything the light sheet declares and this one does not would win
- * with its light value. Text pairs: --text 18.42:1, --text-2 12.06:1 and
- * --muted 7.05:1 on --bg (9.52:1 and 5.56:1 on the card); --on-primary
- * 6.66:1 on the fallback brand; --brand-foreground 6.56:1. Danger takes the
- * token the brief names — v9 dark colorStatusDangerForeground1 #dc626d (the
- * #f1707b guess corrected): 5.27:1 on the canvas, 4.63:1 on its container,
- * 4.16:1 on the card — Microsoft's own pairing; it clears 4.5:1 for every
- * text use on the canvas and its container and stays above 3:1 for the
- * non-text ones on the card.
+ * Fluent, dark. The v9 web dark neutrals, mapped the way WinUI's own dark
+ * surfaces layer: Background2 canvas (#1f1f1f — the tone mica sits at),
+ * Background1 cards (#292929) above it, Background3 (#141414) as the inset
+ * fill, the white-alpha hover layer (WinUI ControlFillColorSecondary) that
+ * composites one step lighter on every surface, and Background1Selected
+ * (#383838). Stroke1/2 and Foreground2/3 are restated because this block and
+ * the light sheet above are both (0,1,0) on the document element and the
+ * light sheet is later in the file: anything the light sheet declares and
+ * this one does not would win with its light value. Text pairs: --text
+ * 16.48:1, --text-2 10.79:1 and --muted 6.30:1 on --bg (9.53:1 and 5.56:1 on
+ * the card); --on-primary 6.66:1 on the fallback brand. Danger takes the
+ * v9 dark token — colorStatusDangerForeground1 #dc626d: 4.72:1 on the
+ * canvas, 4.96:1 on its container, 4.16:1 on the card — Microsoft's own
+ * pairing; it clears 4.5:1 for text on the canvas and its container and
+ * stays above 3:1 for the non-text uses on the card.
  */
 [data-skin="fluent"][data-theme="dark"] {
-  --bg: #141414;
+  /* Canvas = Background2 (#1f1f1f), the tone WinUI's dark mica sits at; the
+     card stays Background1 (#292929) above it, and the inset fill drops to
+     Background3 (#141414) — v9's filled-darker direction. */
+  --bg: #1f1f1f;
   --surface: #292929;
-  --surface-muted: #1f1f1f;
-  --hover: #191919;
+  --surface-muted: #141414;
+  /* Hover *lightens* in dark — WinUI layers white over the surface
+     (ControlFillColorSecondary, rgba(255,255,255,.0605)), and v9's dark
+     Background1Hover (#3d3d3d) is the same step up from #292929. v2 filled
+     #191919, a step *down*, which read as the control sinking away from the
+     pointer. The alpha composites the official step on every surface: #3d3d3d
+     over a card, #2d2d2d over the canvas. Selection keeps Background1Selected
+     (#383838). */
+  --hover: rgba(255, 255, 255, 0.0605);
   --selected: #383838;
 
-  --line: #5c5c5c;
+  --line: #525252;
   --line-muted: #3d3d3d;
+  --control-line: #808080;
+  /* The control stroke ramp, dark: the stroke *lightens* under the pointer,
+     mirroring the light theme's darken (white 50% → 60% → 68%, the same
+     registers v9's dark Stroke1 spans). */
+  --stroke-hover: #999999;
+  --stroke-pressed: #adadad;
+  --border-primary: var(--control-line);
 
   --text: #ffffff;
   --text-2: #d1d1d1;
@@ -435,73 +584,89 @@
   --primary: #115ea3;
   /* Same dark inversion as the MD3 sheet above — raw accent glows on
      near-black: 45% accent over white, ink 15% accent into #202020, hover
-     40% (one white state-layer step lighter; the brief's literal 60% lands
-     darker than primary, so the direction follows its stated intent). With
-     the live system accent: ink #1b2d41 on #8cc1ff is 7.47:1. */
-  --primary: color-mix(in srgb, AccentColor 45%, #ffffff);
+     40% (one white state-layer step lighter). With the live system accent:
+     ink #1b2d41 on #8cc1ff is 7.47:1. */
+  --primary: color-mix(in srgb, var(--system-accent, #0f6cbd) 45%, #ffffff);
   --primary-hover: #2899f5;
-  --primary-hover: color-mix(in srgb, AccentColor 40%, #ffffff);
+  --primary-hover: color-mix(in srgb, var(--system-accent, #0f6cbd) 40%, #ffffff);
   --on-primary: #ffffff;
-  --on-primary: color-mix(in srgb, AccentColor 15%, #202020);
+  --on-primary: color-mix(in srgb, var(--system-accent, #0f6cbd) 15%, #202020);
 
-  --brand-foreground: #479ef5;
+  /* Status inks, dark: the official v9 dark tokens. Ink on its own tint:
+     ok 6.06:1, warn 6.97:1, danger 4.96:1; on the card: 5.34 / 7.14 / 4.16:1
+     (danger's card pair is the non-text 3:1 register, as in v9 itself). */
+  --ok: #54b054;
+  --ok-bg: #052505;
+  --warn: #faa06b;
+  --warn-bg: #4a1e04;
 
   --danger: #dc626d;
+  --danger-bg: #3b0509;
 
-  --shadow-layer: 0 8px 16px rgba(0, 0, 0, 0.14);
+  /* Dark shadows: v9's dark ambient rgba(0,0,0,.24) under key
+     rgba(0,0,0,.28) — deeper than light for the same levels. */
+  --shadow-card: 0 0 2px rgba(0, 0, 0, 0.24), 0 2px 4px rgba(0, 0, 0, 0.28);
+  --shadow-toast: 0 0 2px rgba(0, 0, 0, 0.24), 0 4px 8px rgba(0, 0, 0, 0.28);
+  --shadow-layer: 0 0 2px rgba(0, 0, 0, 0.24), 0 8px 16px rgba(0, 0, 0, 0.28);
+  --shadow-dialog: 0 0 8px rgba(0, 0, 0, 0.24), 0 32px 64px rgba(0, 0, 0, 0.28);
 }
 
 /* ============================================================================
-   Skin layer 3 — the shape matrices (v2, per the spec's component mapping)
+   Skin layer 3 — the shape matrices (v3, per the official component specs)
 
    Everything above is values; this is where a skin becomes a recognisable
    object language, because the shapes are hardcoded in the shared component
    layer (the `border-radius: 0` on controls is industrial's voice, not a
    variable). Every rule below is scoped to a skin, so industrial — no
-   attribute — matches none of them. Three invariants hold throughout: no
-   control changes height (`--control-h` stays 30px, `.segment-item` stays
-   36px), nothing here re-inks what a layer-2 token already says, and every
-   hover is the official state layer — 8% of the ink that sits on the
-   container (on-surface for page surfaces, the container's own on-colour for
-   filled controls), never a pre-mixed grey. The switch is deliberately not
-   reshaped and the charts get no rules (their ink is color-mix(--text) and
-   picks the skin up from layer 2 without a single extra rule). The pager's
-   nav arrows are .linky text actions, not buttons, so no matrix entry.
+   attribute — matches none of them. Invariants hold throughout: no control
+   changes height (`--control-h` stays 30px, `.segment-item` stays 36px, and
+   the switch keeps its 36x20 box while the skin reshapes the track and the
+   thumb inside it), nothing here re-inks what a layer-2 token already says,
+   and hovers are official — MD3 the on-colour state layer, Fluent the
+   Background fill swap. The charts get no rules (their ink is
+   color-mix(--text) and picks the skin up from layer 2 without a single
+   extra rule). The pager's nav arrows are .linky text actions, not buttons,
+   so no matrix entry.
 
-   MD3 speaks the shape scale: full-pill buttons with the tonal container as
-   the default voice, 4px fields on the outline, 8px segments filled with the
-   secondary container, pill nav, 12px KPI tiles on container-low, a 16px
-   drawer on elevation level 2, 28px dialogs and banners, 8px badges and
-   chips. Fluent speaks in light and depth: the acrylic sidebar, 4px controls
-   whose default hover is Background4, the double focus ring, the pivot stub
-   on tabs, the bottom-accent field focus, shadow16 flyouts, an overlay
-   scrollbar.
+   MD3 speaks the shape scale: full-pill buttons with the tonal
+   (secondary-container) voice, 4px fields on the outline, pill-ended
+   segments on the official 1px outline, pill nav, 12px KPI tiles on
+   container-low, a 16px drawer on elevation level 1, 28px dialogs on
+   container-high, the snackbar's inverse sheet, 8px badges and chips, and
+   the switch as M3 shapes it. Fluent speaks in light and depth: the acrylic
+   sidebar, 4px controls whose default hover is Background1Hover, the double
+   focus ring, the pivot's 12px-inset indicator on tabs, the bottom-accent
+   field focus, the shadow4/8/16/64 family on their official components, an
+   overlay scrollbar, and the switch as v9 shapes it.
    ============================================================================ */
 
 /*
- * MD3 — Material 3 baseline (m3.material.io component specs).
+ * MD3 — Material 3 baseline (m3.material.io component specs, material-web
+ * component tokens).
  *
  * Every filled surface pairs a container with its official on-colour and
  * hovers by layering the on-colour itself at 8%, so the tonal button, the
  * danger button and the banner read as M3's own components rather than as
  * tinted industrial ones. With the fallback palette every ink-on-container
- * pair here clears 4.5:1 (tonal 13.3, its hover a state layer on that pair,
- * danger 12.8, banner-warn 4.57); with the system accent the same caveat as
+ * pair here clears 4.5:1 (tonal 13.2, its hover a state layer on that pair,
+ * danger 12.8, banner-warn 5.33); with the system accent the same caveat as
  * `--on-primary` applies — the user controls the accent, and a pale one
  * reads exactly as pale as it does on the OS's own buttons.
  */
 
-/* Buttons: pill. The default button is tonal — primary-container with its
-   official ink, no stroke — which is what makes the primary read as *the*
-   solid one. */
+/* Buttons: pill. The default button is tonal — the official tonal button is
+   the *secondary* container with its own ink (material-web
+   filled-tonal-button: bg secondary-container, label on-secondary-container,
+   state layer of that ink at 8%), no stroke — which is what makes the
+   primary read as *the* solid one. */
 [data-skin="md3"] .btn {
   border-radius: 999px;
-  background: var(--primary-container);
+  background: var(--secondary-container);
   border-color: transparent;
-  color: var(--on-primary-container);
+  color: var(--on-secondary-container);
 }
 [data-skin="md3"] .btn:hover:not(:disabled):not(.btn-primary):not(.btn-ghost):not(.btn-danger) {
-  background: color-mix(in srgb, var(--on-primary-container) 8%, var(--primary-container));
+  background: color-mix(in srgb, var(--on-secondary-container) 8%, var(--secondary-container));
   border-color: transparent;
 }
 [data-skin="md3"] .btn-primary {
@@ -537,17 +702,36 @@
 /* Text fields, the select and its menu: the extra-small 4px field corner on
    the outline (the border itself comes from --border-primary = --line), and
    focus as the 2px primary edge drawn inside the frame so no height or width
-   moves. The checkbox takes the 2px corner too. */
+   moves. The checkbox takes the 2px corner too. The menu's *items* stay
+   square — the official menu/list item highlight is a rectangle inside the
+   8px vertical padding the container owns. */
 [data-skin="md3"] input:not([type="checkbox"]),
 [data-skin="md3"] .select-trigger,
-[data-skin="md3"] .select-menu,
-[data-skin="md3"] .select-item {
+[data-skin="md3"] .select-menu {
   border-radius: 4px;
 }
 [data-skin="md3"] input:focus-visible,
 [data-skin="md3"] .select-trigger:focus-visible {
   outline: 2px solid var(--primary);
   outline-offset: -2px;
+}
+/* The outlined text field's hover: the frame's ink steps up from outline to
+   on-surface for the pointer, the official resting/hover pair (1px either
+   way — the width never moves). */
+[data-skin="md3"] input:not([type="checkbox"]):hover:not(:focus-visible),
+[data-skin="md3"] .select-trigger:hover:not(:focus-visible) {
+  border-color: var(--text);
+}
+/* The dropdown speaks the menu grammar: surface-container behind 8px of
+   vertical padding, and the checked option in the official selected-item
+   pair (secondary-container) instead of the industrial 12% wash. */
+[data-skin="md3"] .select-menu {
+  background: var(--surface-muted);
+  padding: 8px 0;
+}
+[data-skin="md3"] .select-item[data-state="checked"] {
+  background: var(--secondary-container);
+  color: var(--on-secondary-container);
 }
 /* The html prefix is load-bearing: the shared `input[type="checkbox"]` rule
    comes later in the file at the same weight, and without the prefix it
@@ -556,14 +740,16 @@ html[data-skin="md3"] input[type="checkbox"] {
   border-radius: 2px;
 }
 
-/* Segments: the small 8px shape, the industrial underline rail removed, and
-   the selected item filled with the secondary container in its own ink —
-   the fill is `background`, so the 36px row never moves. Hover is the
-   on-surface 8% state layer; the selected item outranks it, so a hovered
-   selection keeps its container. */
+/* Segments: the official segmented button — full-pill ends and the group's
+   1px outline, the selected item filled with the secondary container in its
+   own ink. The outline is an inset ring rather than a border so the strip's
+   box (and the 36px rows inside it) never moves; overflow hidden clips the
+   item fills to the pill. Hover is the on-surface 8% state layer; the
+   selected item outranks it, so a hovered selection keeps its container. */
 [data-skin="md3"] .segment {
   border: none;
-  border-radius: 8px;
+  border-radius: 999px;
+  box-shadow: inset 0 0 0 1px var(--line);
   overflow: hidden;
 }
 [data-skin="md3"] .segment-item:hover {
@@ -588,12 +774,13 @@ html[data-skin="md3"] input[type="checkbox"] {
 }
 
 /* The drawer: the large 16px corner on the edge that faces the page,
-   elevated on the level-2 shadow instead of framed — the hairline
-   border-left is the industrial voice. */
+   elevated on the level-1 shadow — the official modal-drawer grammar
+   (surface-container-low fill it already inherits from --surface, level 1) —
+   instead of framed; the hairline border-left is the industrial voice. */
 [data-skin="md3"] .drawer {
   border-radius: 16px 0 0 16px;
   border-left: none;
-  box-shadow: var(--shadow-layer);
+  box-shadow: var(--shadow-1);
 }
 
 /* Dialogs and banners: the extra-large 28px corner. The danger banner takes
@@ -612,8 +799,31 @@ html[data-skin="md3"] input[type="checkbox"] {
   border-color: transparent;
   color: var(--on-error-container);
 }
+/* Dialog: the extra-large 28px corner on the official surface-container-high
+   fill at elevation level 3, frameless — the shadow and the 32% scrim carry
+   the separation the hairline border used to. */
 [data-skin="md3"] .confirm {
   border-radius: 28px;
+  background: var(--surface-high);
+  border-color: transparent;
+  box-shadow: var(--shadow-3);
+}
+/* Menus and popovers: the official menu — the extra-small 4px container on
+   surface-container, frameless, level 2, with 8px of its own vertical
+   padding, and the item highlight a square rectangle inside it. */
+[data-skin="md3"] .popover {
+  border-radius: 4px;
+  background: var(--surface-muted);
+  border-color: transparent;
+  padding: 8px;
+  box-shadow: var(--shadow-layer);
+}
+[data-skin="md3"] .menu-item {
+  border-radius: 0;
+}
+[data-skin="md3"] .menu-item:focus-visible {
+  outline: 2px solid var(--primary);
+  outline-offset: -2px;
 }
 
 /* Tags and chips: the small 8px shape. */
@@ -656,14 +866,99 @@ html[data-skin="md3"] input[type="checkbox"] {
   border-bottom-color: var(--line-muted);
 }
 
+/* The toast is a snackbar: M3 floats it on the *inverted* sheet — inverse-
+   surface behind inverse-on-surface text at the extra-small 4px corner,
+   elevation level 3 — and the action ink is inverse-primary. The status dot
+   keeps its semantic ok/danger ink, which reads on the inverted ground the
+   way M3's own snackbar icons do. A snackbar states no hover fill, so the
+   shared wash is cancelled with the same fill. */
+[data-skin="md3"] .toast {
+  border-radius: 4px;
+  background: var(--inverse-surface);
+  border-color: transparent;
+  color: var(--inverse-on-surface);
+  box-shadow: var(--shadow-3);
+}
+[data-skin="md3"] .toast:hover {
+  background: var(--inverse-surface);
+}
+
+/* The chart hover card is M3's tooltip register: the extra-small 4px corner
+   on the inverse sheet would break the multi-ink content, so only the shape
+   moves. */
+[data-skin="md3"] .chart-card {
+  border-radius: 4px;
+}
+
+/* The hand-drawn menu radio goes round: a radio is shape-neutral (the status
+   dot is a circle in every skin), and a square one inside a 4px menu is the
+   one place the industrial corner visibly argues with its container. */
+[data-skin="md3"] .menu-radio {
+  border-radius: 50%;
+}
+
+/* The switch, reshaped to the official M3 form inside its own 36x20
+   footprint (no layout token moves): the full-pill track fills with
+   surface-container-highest behind the 2px outline it already carries, the
+   thumb goes round in the outline ink, and the selected track takes primary
+   with the on-primary thumb. 12 -> 14px on check is the official 16 -> 24
+   growth scaled to the 20px track; the hover thumbs take the official state
+   colours (unselected on-surface-variant, selected primary-container). */
+[data-skin="md3"] .toggle input[type="checkbox"] {
+  border-radius: 999px;
+  background: var(--container-highest);
+  border-color: var(--line);
+  transition: background-color var(--t-fast) var(--ease);
+}
+[data-skin="md3"] .toggle input[type="checkbox"]::after {
+  border-radius: 999px;
+  background: var(--line);
+  transition:
+    left var(--t-fast) var(--ease),
+    top var(--t-fast) var(--ease),
+    width var(--t-fast) var(--ease),
+    height var(--t-fast) var(--ease);
+}
+[data-skin="md3"] .toggle input[type="checkbox"]:hover:not(:checked)::after {
+  background: var(--text-2);
+}
+[data-skin="md3"] .toggle input[type="checkbox"]:checked::after {
+  left: 16px;
+  top: 1px;
+  width: 14px;
+  height: 14px;
+}
+[data-skin="md3"] .toggle input[type="checkbox"]:checked:hover::after {
+  background: var(--primary-container);
+}
+
+/* Dark elevation is surface tint, not shadow (the dark sheet above zeroes
+   every shadow token): each floating layer composites its own level's tint
+   of the primary over its container — 5% for the level-1 drawer, 8% for the
+   level-2 menu pair, 11% for the level-3 dialog. The drawer veil does the
+   separating the shadow used to. The snackbar keeps its inverse sheet, which
+   is M3's own dark-snackbar answer and needs no tint. */
+[data-skin="md3"][data-theme="dark"] .drawer {
+  background: color-mix(in srgb, var(--primary) 5%, var(--surface));
+}
+[data-skin="md3"][data-theme="dark"] .popover,
+[data-skin="md3"][data-theme="dark"] .select-menu {
+  background: color-mix(in srgb, var(--primary) 8%, var(--surface-muted));
+}
+[data-skin="md3"][data-theme="dark"] .confirm {
+  background: color-mix(in srgb, var(--primary) 11%, var(--surface-high));
+}
+
 /*
  * Fluent — Windows 11 (fluent2.microsoft.design shapes, v9 web states).
  *
  * Depth and the double ring do the identity work. Hover is an opaque fill
- * swap — Background4 on the default control, Background1Selected on the
+ * swap — Background1Hover on the default control, Background1Selected on the
  * selected nav item — which is how WinUI itself states it; in dark theme that
- * fill steps *down*, matching WinUI's own dark control-fill direction. The
- * double ring and the field signature below are the two focus voices.
+ * fill steps *up* (the white-alpha layer in --hover composites lighter on
+ * every surface, the direction WinUI's own dark control fill takes — v2 had
+ * it stepping down, which read as the control sinking away). The double ring
+ * and the field signature below are the two focus voices.
  */
 
 /* Acrylic sidebar: a translucent panel of the background over whatever passes
@@ -678,9 +973,9 @@ html[data-skin="md3"] input[type="checkbox"] {
 }
 
 /* Controls at the 4px corner, nav items sharing it. The default button's
-   hover is Background4 with the stroke held at stroke1 — WinUI does not
-   blacken the frame; ghost and danger keep the shared behaviour, which
-   already lands on the same fills. */
+   hover is Background1Hover with the frame stepped to stroke1's hover ramp —
+   WinUI does not blacken the frame; ghost and danger keep the shared
+   behaviour, which already lands on the same fills. */
 [data-skin="fluent"] .btn,
 [data-skin="fluent"] input:not([type="checkbox"]),
 [data-skin="fluent"] .select-trigger,
@@ -691,10 +986,16 @@ html[data-skin="md3"] input[type="checkbox"] {
 }
 [data-skin="fluent"] .btn:hover:not(:disabled):not(.btn-primary):not(.btn-ghost):not(.btn-danger) {
   background: var(--hover);
-  border-color: var(--line);
+  border-color: var(--stroke-hover);
 }
 [data-skin="fluent"] .nav-item:hover {
   background: var(--hover);
+}
+/* The field's hover: v9 Input steps the frame's ink along stroke1's ramp
+   while the pointer is over it, before focus ever lands. */
+[data-skin="fluent"] input:not([type="checkbox"]):hover:not(:focus-visible),
+[data-skin="fluent"] .select-trigger:hover:not(:focus-visible) {
+  border-color: var(--stroke-hover);
 }
 
 /* Focus, the Fluent double ring: a 1px inner line in the text colour and a
@@ -719,29 +1020,46 @@ html[data-skin="fluent"] :focus-visible {
   border-color: var(--primary);
   box-shadow: inset 0 -2px 0 0 var(--primary);
 }
-/* Same html-prefix reason as the MD3 checkbox: the shared square corner is
-   declared later in the file at equal weight. */
-html[data-skin="fluent"] input[type="checkbox"] {
+[data-skin="fluent"] .popover {
+  border-radius: var(--radius);
+  border-color: transparent;
+  padding: 4px;
+  box-shadow: var(--shadow-layer);
+}
+[data-skin="fluent"] .menu-item {
   border-radius: 4px;
 }
+[data-skin="fluent"] .menu-item:focus-visible {
+  outline: 2px solid var(--primary);
+  outline-offset: -2px;
+}
+/* Same html-prefix reason as the MD3 checkbox: the shared square corner is
+   declared later in the file at equal weight. 2px is v9's borderRadiusSmall,
+   the checkbox indicator's official corner. */
+html[data-skin="fluent"] input[type="checkbox"] {
+  border-radius: 2px;
+}
 
-/* Tabs as a pivot: the selection is a short round-capped brand stub on the
-   bottom edge and the label takes the brand's reading ink — not a full-width
-   rule. Absolutely positioned, so the 36px row still never moves. */
+/* Tabs as a pivot: the selection is the round-capped 3px brand bar inset 12px
+   from each end (v9 Tab: strokeWidthThicker at medium, spacingHorizontalM
+   insets, colorCompoundBrandStroke — read here as the accent), and the
+   selected label stays in Foreground1 — the indicator carries the brand, the
+   text does not (v3; v2 put the brand in the text and stubbed the bar to
+   16px). Absolutely positioned, so the 36px row still never moves. */
 [data-skin="fluent"] .segment-item {
   position: relative;
 }
 [data-skin="fluent"] .segment-item[data-active="true"] {
   box-shadow: none;
-  color: var(--brand-foreground);
+  color: var(--text);
 }
 [data-skin="fluent"] .segment-item[data-active="true"]::after {
   content: "";
   position: absolute;
-  left: 50%;
+  left: 12px;
+  right: 12px;
   bottom: 0;
-  transform: translateX(-50%);
-  width: 16px;
+  width: auto;
   height: 3px;
   border-radius: 999px;
   background: var(--primary);
@@ -756,7 +1074,11 @@ html[data-skin="fluent"] input[type="checkbox"] {
   box-shadow: var(--shadow-layer);
 }
 [data-skin="fluent"] .toast {
-  border-radius: 8px;
+  border-radius: var(--radius);
+  /* The official toast frame is colorTransparentStroke — the shadow8 does
+     the separating, not a hairline. */
+  border-color: transparent;
+  box-shadow: var(--shadow-toast);
 }
 /* The toast's status dot becomes the infobar's left semantic bar. */
 [data-skin="fluent"] .toast::before {
@@ -766,7 +1088,11 @@ html[data-skin="fluent"] input[type="checkbox"] {
   border-radius: 2px;
 }
 [data-skin="fluent"] .confirm {
-  border-radius: 12px;
+  /* DialogSurface: the xLarge 8px corner on shadow64 (v3; v2 guessed 12px
+     and kept the flyout shadow). */
+  border-radius: 8px;
+  border-color: transparent;
+  box-shadow: var(--shadow-dialog);
 }
 /* The banner reads as an infobar: the 4px control corner on the shared
    frame. */
@@ -800,6 +1126,73 @@ html[data-skin="fluent"] input[type="checkbox"] {
 [data-skin="fluent"] ::-webkit-scrollbar-thumb:active {
   background: color-mix(in srgb, var(--text) 55%, transparent);
   background-clip: content-box;
+}
+
+/* KPI figures as Fluent cards — the official Card.filled recipe (v9
+   useCardStyles): Background1 fill, the 4px corner, shadow4 at rest, the
+   interactive card's shadow8 on hover. The hairline separators go the way
+   of the card, and the first cell's zero padding is returned so no figure
+   sits inside its own rounded corner. */
+[data-skin="fluent"] .kpi-row {
+  column-gap: 12px;
+}
+[data-skin="fluent"] .kpi-cell {
+  border-left: none;
+  border-radius: var(--radius);
+  background: var(--surface);
+  box-shadow: var(--shadow-card);
+}
+[data-skin="fluent"] .kpi-cell:first-child {
+  padding-left: 24px;
+}
+[data-skin="fluent"] .kpi-cell.kpi-trigger:hover {
+  box-shadow: var(--shadow-toast);
+}
+
+/* The chart hover card is a tooltip register: the 4px corner on shadow8
+   (v9 Tooltip's own depth). */
+[data-skin="fluent"] .chart-card {
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-toast);
+}
+
+/* The hand-drawn menu radio goes round: a radio is shape-neutral (the status
+   dot is a circle in every skin), and a square one inside a 4px flyout is
+   the one place the industrial corner visibly argues with its container. */
+[data-skin="fluent"] .menu-radio {
+  border-radius: 50%;
+}
+
+/* The switch, reshaped to the official Fluent form inside its own 36x20
+   footprint (no layout token moves): the pill track, unchecked as v9 states
+   it — transparent fill, the 1px accessible stroke, thumb in the same grey —
+   checked as the brand fill with the inverted thumb. The thumb grows 12 ->
+   16px on check, the official 12 -> 20 scaled to the 20px track, and glides
+   on the house fast transition. */
+[data-skin="fluent"] .toggle input[type="checkbox"] {
+  border-radius: 999px;
+  border-color: var(--control-line);
+  border-width: 1px;
+  transition: background-color var(--t-fast) var(--ease),
+    border-color var(--t-fast) var(--ease);
+}
+[data-skin="fluent"] .toggle input[type="checkbox"]::after {
+  border-radius: 999px;
+  top: 3px;
+  background: var(--muted);
+  transition: left var(--t-fast) var(--ease), width var(--t-fast) var(--ease),
+    height var(--t-fast) var(--ease), top var(--t-fast) var(--ease);
+}
+[data-skin="fluent"] .toggle input[type="checkbox"]:checked {
+  background: var(--primary);
+  border-color: transparent;
+}
+[data-skin="fluent"] .toggle input[type="checkbox"]:checked::after {
+  left: 16px;
+  top: 1px;
+  width: 16px;
+  height: 16px;
+  background: var(--on-primary);
 }
 
 * {
@@ -1008,21 +1401,6 @@ code,
 }
 
 /*
- * The mode switch, at the foot of the nav: the mode decides how long the list
- * above it is, so it belongs to the nav rather than to any page. The segment
- * control carries a 220px min-width for its day job as a tab strip; the
- * sidebar is narrower, so the switch drops that floor and fills the column.
- */
-.sidebar-mode {
-  padding: 8px 10px 2px;
-  border-top: 1px solid var(--border-primary, var(--line));
-}
-
-.sidebar-mode .segment {
-  width: 100%;
-  min-width: 0;
-}
-
 .sidebar-foot {
   padding: 8px 10px 0;
   font-size: 12px;
@@ -1901,6 +2279,11 @@ code,
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
   gap: 6px 24px;
+}
+
+/* A row whose explanation needs the whole line rather than half of it. */
+.grid-span {
+  grid-column: 1 / -1;
 }
 
 .field {
@@ -3169,6 +3552,22 @@ input::placeholder {
 /* ------------------------------------------------------------- usage KPI row */
 
 /*
+ * A source strip: the local/standby choice, the import entry, and the readings
+ * that belong to them.
+ *
+ * The row used to be a bare block, so a link and the hint that explained it
+ * ran together as one unbroken sentence ("选择备用端数据库未找到…"). Flex with a
+ * real gap keeps each part a part, and wraps under a narrow window instead of
+ * letting the sentence collide.
+ */
+.usage-source-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 16px;
+}
+
+/*
  * The Activity page's headline figures, cc-switch's UsageHero reduced to this
  * design system: display-size values over small muted labels, cells separated
  * by a hairline instead of boxed into cards. Two cells are buttons that drive
@@ -3280,6 +3679,26 @@ input::placeholder {
   flex-wrap: wrap;
   align-items: flex-end;
   gap: 8px 20px;
+}
+
+/* The key sits at the far end of the control line, where it labels the
+   drawing without competing with it. */
+.chart-legend-inline {
+  margin-left: auto;
+}
+
+/*
+ * The chart's reading: which measure, over what span, and how much of it.
+ *
+ * Three heatmaps are shaded from their own quartiles, so the selected measure
+ * changed the picture only in ways a glance could miss. This line is the
+ * number the selector promises, and it is the same figure the hover card sums.
+ */
+.chart-reading {
+  margin: 0;
+  font-size: 12px;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
 }
 
 .chart-figure {
@@ -3674,6 +4093,39 @@ input::placeholder {
   padding: 10px 0;
 }
 
+.key-row-dragging {
+  opacity: 0.45;
+}
+
+.key-row-drop-before {
+  box-shadow: inset 0 2px 0 var(--primary);
+}
+
+.key-row-drop-after {
+  box-shadow: inset 0 -2px 0 var(--primary);
+}
+
+.inference-drag-handle {
+  flex: 0 0 24px;
+  width: 24px;
+  height: 28px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+  cursor: grab;
+  touch-action: none;
+}
+
+.inference-drag-handle:active {
+  cursor: grabbing;
+}
+
+.inference-drag-handle:disabled {
+  cursor: default;
+  opacity: 0.45;
+}
+
 .key-row + .key-row {
   border-top: 1px solid var(--line);
 }
@@ -3857,6 +4309,40 @@ input::placeholder {
   line-height: 1.6;
 }
 
+/* The release dialog's body carries the managed file's path and the strategy
+   choice. The path is an identifier, so it speaks in the mono voice and wraps
+   instead of widening the dialog; the strategy is a radiogroup, and the
+   segment drops its tab-strip behaviour — rows, no underline, own width —
+   because three long strategy names do not fit one line at 400px. */
+.confirm-path {
+  margin: 0 0 8px;
+  font-size: 12px;
+  color: var(--muted);
+  overflow-wrap: anywhere;
+}
+
+.confirm-note {
+  margin: 0 0 10px;
+}
+
+.confirm .segment {
+  grid-auto-flow: row;
+  grid-template-columns: none;
+  grid-auto-columns: auto;
+  width: 100%;
+  min-width: 0;
+  border-bottom: none;
+  justify-items: start;
+  gap: 2px;
+}
+
+.confirm .segment-item {
+  height: auto;
+  min-height: 32px;
+  padding: 4px 0;
+  text-align: start;
+}
+
 .confirm-actions {
   display: flex;
   justify-content: flex-end;
@@ -3934,10 +4420,13 @@ input::placeholder {
   }
 
   /*
-   * The numeric column pair in the models list is the first thing to give: an
-   * id is the row's subject and the two counters are its annotation. Both
-   * counters are `flex: none` with a min width, so the width is what is
-   * overridden, not a `width` the rule never had.
+   * The numeric column in a list row is the first thing to give: the row's
+   * name is its subject and the counters are its annotation. The models
+   * list's price moved under the name as a sub-line (A5), leaving the
+   * latency counter on this rule here, with the overview rows' numeric
+   * columns riding the same one. The counter is `flex: none` with a min
+   * width, so the width is what is overridden, not a `width` the rule
+   * never had.
    */
   .list-row .col-num {
     min-width: 60px;

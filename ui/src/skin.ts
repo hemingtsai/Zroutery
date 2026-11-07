@@ -48,8 +48,10 @@ export function storeSkin(skin: Skin): void {
 export function applySkin(skin: Skin): void {
   if (skin === "industrial") {
     delete document.documentElement.dataset.skin;
+    void import("@fontsource-variable/noto-serif-sc");
   } else {
     document.documentElement.dataset.skin = skin;
+    if (skin === "md3") void import("@fontsource-variable/roboto");
   }
 }
 

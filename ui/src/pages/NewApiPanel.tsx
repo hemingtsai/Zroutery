@@ -23,7 +23,8 @@ export default function NewApiPanel({ provider, models, busy, run }: {
   const [announcementError, setAnnouncementError] = useState<string | null>(null);
   const [pricingError, setPricingError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
-  const [group, setGroup] = useState("default");
+  const [group, setGroup] = useState(() => selectedAccount?.binding?.identity?.group ?? "default");
+  const [keyId, setKeyId] = useState("all");
   const generation = useRef(0);
 
   useEffect(() => {
@@ -33,6 +34,8 @@ export default function NewApiPanel({ provider, models, busy, run }: {
     setAnnouncementError(null);
     setPricingError(null);
     setLoading(false);
+    setKeyId("all");
+    setGroup(selectedAccount?.binding?.identity?.group ?? "default");
     return () => { generation.current += 1; };
   }, [provider.id, provider.base_url, accountId, panelUrl]);
 
@@ -67,7 +70,7 @@ export default function NewApiPanel({ provider, models, busy, run }: {
     const names = new Set(models.map((model) => model.upstream_model));
     return groupPrices.filter((price) => names.has(price.model));
   }, [models, groupPrices]);
-  const applicable = matched.filter((price) => price.input_per_mtok != null && price.output_per_mtok != null);
+  const applicable = matched.filter((price) => price.per_request != null || (price.input_per_mtok != null && price.output_per_mtok != null));
 
   return (
     <Section title={t("providers.panel_info")} hint={t("providers.panel_info_hint")}
@@ -106,6 +109,12 @@ export default function NewApiPanel({ provider, models, busy, run }: {
             <Select ariaLabel={t("providers.panel_group")} value={group} disabled={loading || busy}
               options={groups.map((value) => ({ value, label: value }))} onChange={setGroup} />
           </Field>}
+          {selectedAccount && <Field label={t("accounting.identity")}>
+            <Select ariaLabel={t("accounting.identity")} value={keyId} onChange={setKeyId}
+              options={[{ value: "all", label: t("providers.price_account_scope") },
+                ...selectedAccount.inference_keys.map((key) => ({ value: key.id, label: key.note || key.id }))]} />
+          </Field>}
+          <p className="field-hint">{t("providers.price_fallback_hint")}</p>
           <p className="field-hint">{t("providers.panel_prices", { matched: matched.length, total: groupPrices.length, group })}</p>
           {matched.length > 0 && <div className="table-scroll panel-price-table">
             <table className="table">
@@ -127,9 +136,9 @@ export default function NewApiPanel({ provider, models, busy, run }: {
             </table>
           </div>}
           <div className="controls">
-            <Button kind="primary" disabled={busy || loading || pricingError !== null || applicable.length === 0}
+            <Button kind="primary" disabled={busy || loading || !selectedAccount?.binding || pricingError !== null || applicable.length === 0}
               onClick={async () => {
-                const ok = await run(() => api.importNewapiPricing(provider.id, accountId || null, group));
+                const ok = await run(() => api.importNewapiPricing(provider.id, accountId, group, keyId === "all" ? null : keyId));
                 if (ok) notify("ok", t("providers.panel_prices_imported"));
               }}>{t("providers.panel_apply_prices")}</Button>
           </div>

@@ -13,6 +13,7 @@ import { api, errorText, type Snapshot, type TokenCaptureView } from "./api";
 import { Badge, Button, useToast } from "./components";
 import { describeBackendError, useI18n } from "./i18n";
 import { AccountBindingReview } from "./AccountBindingReview";
+import type { TaskKind } from "./saveQueue";
 
 /** Phases that are still waiting on the browser. */
 const LIVE = new Set(["opening", "waiting", "needs_verification", "stored"]);
@@ -27,7 +28,7 @@ export function BrowserTokenButton({
 }: {
   providerId: string;
   accountId: string;
-  run: (task: () => Promise<Snapshot>) => Promise<boolean>;
+  run: (task: () => Promise<Snapshot>, kind?: TaskKind) => Promise<boolean>;
   busy: boolean;
 }) {
   const { t } = useI18n();
@@ -53,7 +54,10 @@ export function BrowserTokenButton({
       }
       setView(next);
       if (next.phase === "captured") {
-        await run(api.snapshot);
+        // The capture moved the secret into the credential store; the re-read
+        // is an observation that claims no save. The identity review below is
+        // where the publication itself is decided.
+        await run(api.snapshot, "observe");
       } else if (next.phase === "failed" || next.phase === "unsupported") {
         notify("error", next.message ?? t("token_capture.failed"));
       } else if (next.phase === "cancelled") {
@@ -145,7 +149,9 @@ export function BrowserTokenButton({
       {phase === "stored" && view?.binding_preview && <AccountBindingReview preview={view.binding_preview} busy={busy}
         publish={(confirmed) => void api.completeTokenCapture(providerId, accountId, confirmed).then(async (done) => {
           setView(done);
-          await run(api.snapshot);
+          // The publication went through its own call; this re-read only
+          // refreshes what the pages show, so it is an observation.
+          await run(api.snapshot, "observe");
         }).catch((error) => notify("error", describeBackendError(t, errorText(error))))}
         discard={() => void api.discardAccountKey(view.binding_preview!.publication_id).then(() => cancel()).catch((error) => notify("error", errorText(error)))} />}
       {phase === "captured" && <Badge tone="ok">{t("token_capture.captured")}</Badge>}
