@@ -296,6 +296,18 @@
 
   --line: #79747e;
   --line-muted: #cac4d0;
+  /*
+   * The neutral-variant roles follow the accent too — a blue seed tints the
+   * outline blue-grey, the same way Material You recolours outline/outline-
+   * variant with the seed. Without an accent the fallback is `transparent`,
+   * which leaves the line as 55%-alpha text over its surface ≈ the official
+   * #79747e on white; with one, every hairline, table rule and the segment
+   * ring shifts hue with the fill it frames (the purple-grey ring on a blue
+   * pill was the "边框的线爆炸了"). Boundary contrast stays ≥3:1 against the
+   * container fills for every accent (verified worst 3.68:1).
+   */
+  --line: color-mix(in srgb, var(--system-accent, transparent) 45%, var(--text));
+  --line-muted: color-mix(in srgb, var(--system-accent, transparent) 14%, var(--bg));
   /* --border-primary is deliberately NOT re-declared: it is var(--line) on
      the document element, so it picks the outline up on its own — and a
      literal here would stick as a computed colour into the dark sheet below,
@@ -401,6 +413,11 @@
 
   --line: #938f99;
   --line-muted: #49454f;
+  /* The same neutral-variant derivation as the light sheet: pale
+     accent-grey lines over the dark surface, official #938f99 without an
+     accent (55%-alpha pale text ≈ #8a868e over #141218). */
+  --line: color-mix(in srgb, var(--system-accent, transparent) 45%, var(--text));
+  --line-muted: color-mix(in srgb, var(--system-accent, transparent) 14%, var(--surface));
 
   --text: #e6e0e9;
   --text-2: #cac4d0;
