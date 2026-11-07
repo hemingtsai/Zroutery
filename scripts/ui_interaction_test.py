@@ -173,6 +173,15 @@ HARNESS = """
     takeover: query("takeover") || [],
     commandLog: [],
     delays: {},
+    // Imported history starts empty; the import flow's fixture fills it when a
+    // commit succeeds, because the panel's "nothing imported" and "imported"
+    // states are different claims a test has to be able to reach.
+    importedRequests: 0,
+    importedSuspected: 0,
+    pendingImports: {},
+    cancelledImports: {},
+    inferenceWriteActive: false,
+    inferenceWriteOverlap: false,
   };
 
   const USAGE_DAYS = [
@@ -282,6 +291,224 @@ HARNESS = """
       }
       case "get_usage_days":
         return clone(USAGE_DAYS);
+      case "get_system_accent":
+        return {
+          accent: "#0078d4",
+          accent_soft: "rgba(0, 120, 212, 0.16)",
+          accent_fg: "#ffffff",
+        };
+      case "get_usage_sources": {
+        const local = snapshot();
+        const localSummary = {
+          ...local.summary,
+          requests: 1,
+          input_tokens: 4,
+          output_tokens: 2,
+          per_model: [{
+            model_id: "local-fixture",
+            requests: 1,
+            failures: 0,
+            input_tokens: 4,
+            output_tokens: 2,
+            reasoning_tokens: 0,
+            cached_tokens: 0,
+            cost: {},
+            avg_latency_ms: 30,
+          }],
+          per_kind: [],
+          per_client: [{
+            client_id: "desktop-client",
+            client_name: "Desktop fixture",
+            requests: 1,
+            failures: 0,
+            input_tokens: 4,
+            output_tokens: 2,
+            cost: {},
+          }],
+        };
+        const standbySummary = {
+          ...localSummary,
+          requests: 2,
+          input_tokens: 9,
+          output_tokens: 5,
+          per_model: [{
+            model_id: "standby-fixture",
+            requests: 2,
+            failures: 0,
+            input_tokens: 9,
+            output_tokens: 5,
+            reasoning_tokens: 0,
+            cached_tokens: 0,
+            cost: {},
+            avg_latency_ms: 42,
+          }],
+          per_client: [{
+            client_id: "standby-client",
+            client_name: "Standby fixture",
+            requests: 2,
+            failures: 0,
+            input_tokens: 9,
+            output_tokens: 5,
+            cost: {},
+          }],
+        };
+        return {
+          local: {
+            source_name: "This device",
+            revision: 1,
+            summary: localSummary,
+            recent: local.recent,
+            days: clone(USAGE_DAYS),
+          },
+          standby: {
+            source_name: "runtime.sqlite3",
+            revision: 7,
+            summary: standbySummary,
+            recent: [{
+              id: "standby-request",
+              at: "2026-01-01T00:01:00Z",
+              ingress: "openai",
+              kind: "main",
+              requested_model: "standby-class",
+              resolved_model: "standby-model",
+              provider_name: "Standby fixture",
+              stream: false,
+              status: 200,
+              ok: true,
+              error: null,
+              latency_ms: 42,
+              ttft_ms: null,
+              usage: {
+                input_tokens: 9,
+                output_tokens: 5,
+                cache_read_tokens: 0,
+                cache_write_tokens: 0,
+                reasoning_tokens: 0,
+              },
+              cost: null,
+              attempts: 1,
+            }],
+            days: clone(USAGE_DAYS),
+          },
+        };
+      }
+      case "choose_standby_usage_database":
+        state.commandLog.push({ cmd, args: clone(args) });
+        return "C:/fixture/standby/runtime.sqlite3";
+      /*
+       * Imported history. The four commands form one sequence, so the fixture
+       * keeps the committed state instead of answering each call from a
+       * constant: the panel's "nothing imported" and "imported" states have to
+       * be reachable, and a commit that quietly wrote nothing would still pass
+       * a test that only looked at the report.
+       */
+      case "get_imported_usage":
+        return state.importedRequests === 0
+          ? {
+              totals: {
+                requests: 0,
+                failures: 0,
+                input_tokens: 0,
+                output_tokens: 0,
+                cache_read_tokens: 0,
+                cache_write_tokens: 0,
+                unpriced_requests: 0,
+                suspected_requests: 0,
+                aggregate_requests: 0,
+                cost: {},
+              },
+              first_day: null,
+              days: [],
+            }
+          : {
+              totals: {
+                requests: state.importedRequests,
+                failures: 2,
+                input_tokens: 900,
+                output_tokens: 40,
+                cache_read_tokens: 300,
+                cache_write_tokens: 0,
+                unpriced_requests: 5,
+                suspected_requests: state.importedSuspected,
+                aggregate_requests: 7,
+                cost: { USD: 1.5 },
+              },
+              // `first_day` is older than the only day in the window, to prove
+              // the lede reads the store's start rather than `days[0]`.
+              first_day: "2025-10-31",
+              days: [
+                {
+                  day: "2025-11-01",
+                  requests: state.importedRequests,
+                  failures: 2,
+                  cache_read_tokens: 300,
+                  cache_write_tokens: 0,
+                  input_tokens: 900,
+                  output_tokens: 40,
+                  unpriced_requests: 5,
+                  cost: { USD: 1.5 },
+                },
+              ],
+            };
+      case "discover_usage_history_sources":
+        return [
+          { source: "ccswitch", label: "CC Switch", path: "C:/fixture/cc-switch.db", recent: true },
+          { source: "claudecode", label: "Claude Code", path: "C:/fixture/.claude/projects", recent: false },
+        ];
+      case "pick_usage_history_source":
+        state.commandLog.push({ cmd, args: clone(args) });
+        return args.kind === "folder"
+          ? "C:/fixture/.claude/projects"
+          : "C:/fixture/cc-switch.db";
+      case "preview_usage_history_import": {
+        state.commandLog.push({ cmd, args: clone(args) });
+        const folder = String(args.path || "").endsWith("projects");
+        const preview = {
+          source: folder ? "claudecode" : "ccswitch",
+          instance: folder ? "projects" : "cc-switch",
+          source_version: folder ? 0 : 21,
+          requests: folder ? 86 : 412,
+          aggregates: folder ? 0 : 7,
+          suspected: folder ? 0 : 3,
+          covered_totals: folder ? 0 : 12,
+          priced: folder ? 0 : 398,
+          unpriced: folder ? 86 : 14,
+          failures: folder ? 0 : 6,
+          days: [],
+          warnings: [],
+          run_id: args.runId,
+          fingerprint: "fixture-" + args.runId,
+          range: args.range || {},
+          cancelled: Boolean(state.cancelledImports[args.runId]),
+        };
+        if (!preview.cancelled) state.pendingImports[args.runId] = preview;
+        return preview;
+      }
+      case "pending_usage_history_imports":
+        return Object.values(state.pendingImports);
+      case "get_usage_attempts":
+        return [];
+      case "cancel_usage_history_import":
+        state.commandLog.push({ cmd, args: clone(args) });
+        state.cancelledImports[args.runId] = true;
+        delete state.pendingImports[args.runId];
+        return true;
+      case "commit_usage_history_import": {
+        state.commandLog.push({ cmd, args: clone(args) });
+        if (state.cancelledImports[args.runId]) return { inserted: 0, updated: 0, unchanged: 0, revision: 0, cancelled: true };
+        const preview = state.pendingImports[args.runId];
+        if (!preview || preview.fingerprint !== args.fingerprint) throw new Error("stale import preview");
+        state.importedRequests = 416;
+        state.importedSuspected = 3;
+        delete state.pendingImports[args.runId];
+        return { inserted: 419, updated: 0, unchanged: 0, revision: 419, cancelled: false };
+      }
+      case "clear_imported_usage":
+        state.commandLog.push({ cmd, args: clone(args) });
+        state.importedRequests = 0;
+        state.importedSuspected = 0;
+        state.pendingImports = {};
+        return 419;
       case "takeover_status":
         return clone(state.takeover);
       case "client_setup_preview":
@@ -327,6 +554,28 @@ HARNESS = """
         state.keys = { ...state.keys, [args.providerId]: false };
         state.commandLog.push({ cmd, args: clone(args) });
         return snapshot();
+      case "set_account_inference_key": {
+        const account = state.account?.providerAccounts?.providerId === args.providerId
+          ? state.account.providerAccounts.accounts.find((item) => item.account_id === args.accountId)
+          : null;
+        if (!account) return snapshot();
+        let key = account.inference_keys.find((item) => item.id === args.keyId);
+        if (!key) {
+          key = {
+            id: args.keyId,
+            key_ref: `fixture:${args.providerId}:${args.accountId}:${args.keyId}`,
+            enabled: true,
+            priority: account.inference_keys.length * 10,
+            note: "",
+          };
+          account.inference_keys.push(key);
+        }
+        if (args.priority !== null) key.priority = args.priority;
+        if (args.enabled !== null) key.enabled = args.enabled;
+        if (args.note !== null) key.note = args.note;
+        state.commandLog.push({ cmd, args: clone(args) });
+        return snapshot();
+      }
       case "fetch_provider_models":
         state.commandLog.push({ cmd, args: clone(args) });
         return clone(state.catalogues[args.provider.id] || []);
@@ -489,8 +738,17 @@ HARNESS = """
     unregisterCallback: (id) => callbacks.delete(id),
     invoke: async (cmd, args = {}) => {
       const delay = state.delays[cmd] || (cmd === "save_config" ? SAVE_DELAY : 0);
-      if (delay) await new Promise((resolve) => setTimeout(resolve, delay));
-      return handle(cmd, args);
+      const inferenceWrite = cmd === "set_account_inference_key";
+      if (inferenceWrite) {
+        if (state.inferenceWriteActive) state.inferenceWriteOverlap = true;
+        state.inferenceWriteActive = true;
+      }
+      try {
+        if (delay) await new Promise((resolve) => setTimeout(resolve, delay));
+        return await handle(cmd, args);
+      } finally {
+        if (inferenceWrite) state.inferenceWriteActive = false;
+      }
     },
   };
 
@@ -532,6 +790,10 @@ HARNESS = """
     }
     if (seed && seed.delays) state.delays = { ...seed.delays };
     state.commandLog.length = 0;
+    state.importedRequests = 0;
+    state.importedSuspected = 0;
+    state.pendingImports = {};
+    state.cancelledImports = {};
     document.documentElement.dataset.zrRefreshes = String(
       Number(document.documentElement.dataset.zrRefreshes || 0) + 1
     );
@@ -559,6 +821,9 @@ HARNESS = """
     setDelay(cmd, ms) {
       state.delays[cmd] = ms;
     },
+    get inferenceWriteOverlap() {
+      return state.inferenceWriteOverlap;
+    },
     setCatalogues(catalogues) {
       state.catalogues = catalogues;
     },
@@ -572,6 +837,7 @@ HARNESS = """
     reset() {
       state.commandLog.length = 0;
       state.delays = {};
+      state.inferenceWriteOverlap = false;
     },
     /**
      * Hand one key to the focused element.
@@ -1162,6 +1428,42 @@ class DevTools:
                 },
             )
 
+    def drag(self, start: dict, end: dict) -> None:
+        """Move the pointer between two points using real DevTools input."""
+        self.call(
+            "Input.dispatchMouseEvent",
+            {
+                "type": "mousePressed",
+                "x": start["x"],
+                "y": start["y"],
+                "button": "left",
+                "clickCount": 1,
+            },
+        )
+        steps = 8
+        for step in range(1, steps + 1):
+            fraction = step / steps
+            self.call(
+                "Input.dispatchMouseEvent",
+                {
+                    "type": "mouseMoved",
+                    "x": start["x"] + (end["x"] - start["x"]) * fraction,
+                    "y": start["y"] + (end["y"] - start["y"]) * fraction,
+                    "button": "left",
+                    "buttons": 1,
+                },
+            )
+        self.call(
+            "Input.dispatchMouseEvent",
+            {
+                "type": "mouseReleased",
+                "x": end["x"],
+                "y": end["y"],
+                "button": "left",
+                "clickCount": 1,
+            },
+        )
+
     def click_selector(self, selector: str, index: int = 0) -> None:
         self.click(self.element(selector, index))
 
@@ -1222,6 +1524,15 @@ class DevTools:
         order with `inert` subtrees skipped.
         """
         self.evaluate("window.__zrTab(%s)" % ("true" if shift else "false"))
+
+    def tab_to_label(self, label: str, limit: int = 1000) -> None:
+        """Navigate to a named control with the harness's native-order Tab path."""
+        for _ in range(limit):
+            active = self.evaluate("window.__zrActive()")
+            if active and active["ariaLabel"] == label:
+                return
+            self.press_tab()
+        raise ProtocolError("could not tab to control %r" % label)
 
     def press_key(self, key: str, shift: bool = False) -> None:
         self.evaluate(
@@ -2028,6 +2339,27 @@ ACCOUNT_QUERY = {
         ],
         "events": [],
     }
+}
+
+INFERENCE_ORDER_QUERY = {
+    "account": {
+        "api": True,
+        "token": True,
+        "providerAccounts": {
+            "providerId": "deepseek",
+            "accounts": [
+                {
+                    **ACCOUNT_QUERY["account"]["providerAccounts"]["accounts"][0],
+                    "inference_keys": [
+                        {"id": "alpha", "key_ref": "fixture:alpha", "enabled": True, "priority": 0, "note": "first"},
+                        {"id": "bravo", "key_ref": "fixture:bravo", "enabled": True, "priority": 10, "note": "second"},
+                        {"id": "charlie", "key_ref": "fixture:charlie", "enabled": True, "priority": 20, "note": "third"},
+                    ],
+                },
+            ],
+        },
+    },
+    "keys": {"fixture:alpha": True, "fixture:bravo": True, "fixture:charlie": True},
 }
 
 
@@ -3844,7 +4176,13 @@ def case_ui25_the_browser_token_capture_runs_and_cancels(devtools) -> list[str]:
 
 
 def case_ui26_client_menu_preview_and_apply(devtools: DevTools) -> list[str]:
-    """The row owns setup; preview and confirmation preserve its exact intent."""
+    """The row owns setup; the drawer previews itself and one press applies.
+
+    v3 of the takeover flow: the drawer re-derives its own preview on open and
+    on every option change (the mandatory preview button is gone), and the
+    synchronization is one press — the fingerprint guard still ties the write
+    to the preview the drawer proved.
+    """
     seed(devtools, takeover=[
         {"agent": agent, "status": {"state": "active", "config_path": f"C:/fixture/{agent}", "generation": 1}}
         for agent in ("claude", "codex")
@@ -3855,47 +4193,497 @@ def case_ui26_client_menu_preview_and_apply(devtools: DevTools) -> list[str]:
     devtools.click_selector(action)
     devtools.wait_for("document.querySelector('.drawer-title')?.textContent.includes('Codex')", "Codex setup drawer")
     failures = []
-    devtools.click_selector(".drawer .field-actions .btn")
+    if devtools.evaluate("[...document.querySelectorAll('.drawer button')].some((b) => b.textContent.trim() === 'Preview synchronization')"):
+        failures.append("the manual preview button is still on the drawer")
     devtools.wait_for("document.querySelector('.drawer')?.textContent.includes('configured fixture')", "menu preview evidence")
     first = devtools.evaluate("window.__zrStub.last('client_setup_preview')")
     if first["args"]["agent"] != "codex":
         failures.append("the row opened another client's preview")
 
+    # Changing an option re-derives the preview instead of invalidating it
+    # silently: the drawer answers with the standby proposal on its own.
     devtools.click_selector('.drawer input[type="checkbox"]')
-    if devtools.evaluate("[...document.querySelectorAll('.drawer button')].some(b => b.textContent.trim() === 'Synchronize native menu')"):
-        failures.append("changing the standby option retained an applicable stale preview")
-    devtools.click_selector(".drawer .field-actions .btn")
-    devtools.wait_for("document.querySelector('.drawer')?.textContent.includes('8788')", "standby preview")
+    devtools.wait_for("document.querySelector('.drawer')?.textContent.includes('127.0.0.1:8788')", "standby preview")
+    devtools.wait_for("!document.querySelector('.drawer .btn-primary')?.disabled", "re-previewed apply to enable")
+
     devtools.click_selector(".drawer .btn-primary")
-    devtools.wait_for("document.querySelector('.confirm') !== null", "menu synchronization confirmation")
-    devtools.press_key("Escape")
-    devtools.wait_for("document.querySelector('.confirm') === null", "only the confirmation to close")
-    if not devtools.evaluate("document.querySelector('.drawer') !== null"):
-        failures.append("Escape dismissed the setup drawer together with its confirmation")
-        return failures
-    if devtools.evaluate("window.__zrStub.log('client_setup_apply').length"):
-        failures.append("cancelled confirmation still published client setup")
-    devtools.click_selector(".drawer .btn-primary")
-    devtools.wait_for("document.querySelector('.confirm') !== null", "second confirmation")
-    devtools.click_selector(".confirm .btn-primary")
-    devtools.wait_for("window.__zrStub.log('client_setup_apply').length === 1", "one confirmed setup write")
+    devtools.wait_for("window.__zrStub.log('client_setup_apply').length === 1", "one setup write")
     devtools.wait_for("document.querySelector('.drawer') === null", "completed setup to close")
     sent = devtools.evaluate("window.__zrStub.last('client_setup_apply').args")
     if sent != {"agent": "codex", "options": {"default_class": None, "standby": True}, "expectedFingerprint": "preview-codex-standby"}:
         failures.append("setup publication lost its client, options or preview fingerprint: %r" % sent)
 
+    # A reply in flight when the drawer closes must not land in a drawer that
+    # has moved on: with the reply delayed, Escape inside the reply window and
+    # open another client's — the fresh drawer proves its own client's path,
+    # never the dismissed one's.
     devtools.evaluate("window.__zrStub.setDelay('client_setup_preview', 300)")
     devtools.click_selector(action)
-    devtools.click_selector(".drawer .field-actions .btn")
+    devtools.wait_for("document.querySelector('.drawer-title')?.textContent.includes('Codex')", "DEBUG drawer reopened")
+    devtools.wait_for("window.__zrStub.log('client_setup_preview').length === 3", "in-flight preview request")
     devtools.press_key("Escape")
     devtools.wait_for("document.querySelector('.drawer') === null", "dismissed pending setup")
-    devtools.wait_for("window.__zrStub.log('client_setup_preview').length === 3", "late preview reply")
-    devtools.wait_for("!document.querySelector(%s)?.disabled" % json.dumps(action), "pending setup action to settle")
     devtools.click_selector('[data-agent="claude"] .btn-ghost')
     devtools.wait_for("document.querySelector('.drawer-title')?.textContent.includes('Claude')", "fresh Claude setup")
-    if devtools.evaluate("document.querySelector('.drawer')?.textContent.includes('configured fixture')"):
-        failures.append("a dismissed late preview leaked into another client's drawer")
+    devtools.wait_for("window.__zrStub.log('client_setup_preview').length === 4", "fresh client preview reply")
+    devtools.wait_for(
+        "document.querySelector('.drawer')?.textContent.includes('C:/fixture/claude')",
+        "the fresh client's own preview",
+    )
+    if devtools.evaluate("document.querySelector('.drawer')?.textContent.includes('C:/fixture/codex')"):
+        failures.append("a dismissed client's late preview leaked into another client's drawer")
+    devtools.wait_for("!document.querySelector(%s)?.disabled" % json.dumps(action), "pending setup action to settle")
     devtools.press_key("Escape")
+    return failures
+
+
+def case_ui27_inference_keys_reorder(devtools: DevTools) -> list[str]:
+    """Inference-key drag and keyboard moves persist in sequence without losing refs."""
+    failures: list[str] = []
+    seed(devtools, **INFERENCE_ORDER_QUERY)
+    open_page(devtools, "providers")
+    provider_row = '[aria-label^="Open DeepSeek"]'
+    devtools.wait_for("document.querySelector(%s) !== null" % json.dumps(provider_row), "DeepSeek provider row")
+    devtools.click_selector(provider_row)
+    devtools.wait_for(
+        "document.querySelector(%s) !== null" % json.dumps('.key-row[data-inference-key-id="alpha"]'),
+        "inference key rows",
+    )
+
+    def wait_for_order(expected: list[str]) -> None:
+        devtools.wait_for(
+            "JSON.stringify([...document.querySelectorAll('.key-row')].map((row) => row.dataset.inferenceKeyId)) === %s"
+            % json.dumps(json.dumps(expected, separators=(",", ":"))),
+            "inference key order %s" % expected,
+        )
+
+    # Drag alpha past both following rows. Every key changes its spaced priority,
+    # so the fake delays each command to catch overlapping IPC.
+    seed(devtools, delays={"set_account_inference_key": 80}, **INFERENCE_ORDER_QUERY)
+    devtools.element('.key-row[data-inference-key-id="alpha"] .inference-drag-handle')
+    devtools.element('.key-row[data-inference-key-id="charlie"]')
+    first, last = devtools.evaluate(
+        "(() => { const a=document.querySelector('.key-row[data-inference-key-id=alpha] .inference-drag-handle').getBoundingClientRect(); const c=document.querySelector('.key-row[data-inference-key-id=charlie]').getBoundingClientRect(); return [{x:a.x+a.width/2,y:a.y+a.height/2},{x:c.x+c.width/2,y:c.y+c.height/2}]; })()"
+    )
+    devtools.drag(first, {"x": first["x"], "y": last["y"] + 30})
+    wait_for_order(["bravo", "charlie", "alpha"])
+    devtools.wait_for(
+        "window.__zrStub.log('set_account_inference_key').length === 3",
+        "three sequential priority updates for a drag",
+    )
+    writes = devtools.evaluate(
+        "window.__zrStub.log('set_account_inference_key').map((entry) => ({id: entry.args.keyId, priority: entry.args.priority, apiKey: entry.args.apiKey}))"
+    )
+    keys = devtools.evaluate(
+        "window.__zrStub.state.account.providerAccounts.accounts[0].inference_keys.map((key) => ({id: key.id, key_ref: key.key_ref, priority: key.priority}))"
+    )
+    if [(entry["id"], entry["priority"]) for entry in writes] != [("bravo", 0), ("charlie", 10), ("alpha", 20)]:
+        failures.append("drag reorder did not issue ordered priority updates: %r" % writes)
+    if any(entry["apiKey"] is not None for entry in writes):
+        failures.append("drag reorder included an inference secret")
+    if [entry["id"] for entry in sorted(keys, key=lambda key: key["priority"])] != ["bravo", "charlie", "alpha"]:
+        failures.append("drag reorder did not persist the expected key order: %r" % keys)
+    if {entry["id"]: entry["key_ref"] for entry in keys} != {
+        "alpha": "fixture:alpha",
+        "bravo": "fixture:bravo",
+        "charlie": "fixture:charlie",
+    }:
+        failures.append("drag reorder changed an inference key reference")
+    if devtools.evaluate("window.__zrStub.inferenceWriteOverlap"):
+        failures.append("drag reorder overlapped inference key configuration writes")
+
+    # Exercise the keyboard path from a fresh order. Tab follows the browser's
+    # native order; Enter activates the labelled move-up button.
+    seed(devtools, delays={"set_account_inference_key": 80}, **INFERENCE_ORDER_QUERY)
+    devtools.click_selector('.key-row[data-inference-key-id="alpha"] .inference-drag-handle')
+    devtools.tab_to_label("Move bravo up")
+    devtools.enter()
+    wait_for_order(["bravo", "alpha", "charlie"])
+    devtools.wait_for(
+        "window.__zrStub.log('set_account_inference_key').length === 3",
+        "keyboard-equivalent move's serialized priority updates",
+    )
+    keyboard_writes = devtools.evaluate(
+        "window.__zrStub.log('set_account_inference_key').map((entry) => ({id: entry.args.keyId, priority: entry.args.priority, apiKey: entry.args.apiKey}))"
+    )
+    keyboard_keys = devtools.evaluate(
+        "window.__zrStub.state.account.providerAccounts.accounts[0].inference_keys.map((key) => ({id: key.id, key_ref: key.key_ref, priority: key.priority}))"
+    )
+    if [(entry["id"], entry["priority"]) for entry in keyboard_writes] != [("bravo", 0), ("alpha", 10), ("charlie", 20)]:
+        failures.append("keyboard reorder did not issue ordered priority updates: %r" % keyboard_writes)
+    if any(entry["apiKey"] is not None for entry in keyboard_writes):
+        failures.append("keyboard reorder included an inference secret")
+    if [entry["id"] for entry in sorted(keyboard_keys, key=lambda key: key["priority"])] != ["bravo", "alpha", "charlie"]:
+        failures.append("keyboard reorder did not persist priority order: %r" % keyboard_keys)
+    if {entry["id"]: entry["key_ref"] for entry in keyboard_keys} != {
+        "alpha": "fixture:alpha",
+        "bravo": "fixture:bravo",
+        "charlie": "fixture:charlie",
+    }:
+        failures.append("keyboard reorder changed an inference key reference")
+    if devtools.evaluate("window.__zrStub.inferenceWriteOverlap"):
+        failures.append("keyboard reorder overlapped inference key writes")
+    devtools.evaluate("window.__zrStub.reset()")
+    return failures
+
+
+def case_ui28_standby_usage_is_read_only(devtools: DevTools) -> list[str]:
+    """The standby usage source is separate, labelled and has no local actions."""
+    failures: list[str] = []
+    seed(devtools)
+    open_page(devtools, "activity")
+    devtools.wait_for(
+        "document.querySelectorAll('.usage-source-row [role=radio]').length === 2",
+        "local and standby usage sources",
+    )
+    local_actions = devtools.evaluate(
+        "document.querySelectorAll('#panel-usage .section-head .linky').length"
+    )
+    if local_actions != 2:
+        failures.append("local usage did not offer both export and import actions: %d" % local_actions)
+    local_clear = devtools.evaluate(
+        "document.querySelectorAll('#panel-usage .section table button[aria-label^=\"Clear usage history for\"]').length"
+    )
+    if local_clear < 1:
+        failures.append("local usage did not offer its per-client clear action")
+    if devtools.evaluate("document.querySelector('.kpi-row .kpi-value')?.textContent") != "1":
+        failures.append("the local view did not show the local request count")
+
+    devtools.click_selector(".usage-source-row [role=radio]", 1)
+    devtools.wait_for(
+        "document.querySelectorAll('.usage-source-row [role=radio]')[1]?.getAttribute('aria-checked') === 'true'",
+        "the standby source to be selected",
+    )
+    devtools.wait_for(
+        "document.querySelector('.timeline-item .timeline-provider')?.textContent?.includes('Standby fixture') === true",
+        "the standby request row",
+    )
+    labels = devtools.evaluate(
+        "document.querySelectorAll('.timeline-item .timeline-provider').length"
+    )
+    if labels < 2:
+        failures.append("standby row did not carry an upstream and source label")
+    standby_actions = devtools.evaluate(
+        "document.querySelectorAll('#panel-usage .section-head .linky').length"
+    )
+    if standby_actions != 0:
+        failures.append("standby usage still offered local export/import actions: %d" % standby_actions)
+    standby_clear = devtools.evaluate(
+        "document.querySelectorAll('#panel-usage .section table button[aria-label^=\"Clear usage history for\"]').length"
+    )
+    if standby_clear != 0:
+        failures.append("standby usage still offered a local clear action: %d" % standby_clear)
+    if devtools.evaluate("document.querySelector('.kpi-row .kpi-value')?.textContent") != "2":
+        failures.append("the standby view did not show the standby request count")
+
+    devtools.click_selector(".usage-source-row .linky")
+    devtools.wait_for(
+        "window.__zrStub.log('choose_standby_usage_database').length === 1",
+        "the standby database picker to be invoked",
+    )
+    # The device switch is page-level, above the pane: it chooses whose history
+    # every figure below it belongs to. Its record of the chosen file is the
+    # line that follows it, not a hint inside the tab panel.
+    devtools.wait_for(
+        "(document.querySelector('.usage-source-row').nextElementSibling?.textContent || '').includes('C:/fixture/standby/runtime.sqlite3')",
+        "the selected standby database path",
+    )
+    devtools.click_selector(".usage-source-row [role=radio]", 0)
+    devtools.wait_for(
+        "document.querySelectorAll('.usage-source-row [role=radio]')[0]?.getAttribute('aria-checked') === 'true'",
+        "the local source to return",
+    )
+    local_again = devtools.evaluate(
+        "document.querySelectorAll('#panel-usage .section-head .linky').length"
+    )
+    if local_again != 2:
+        failures.append("returning to local usage did not restore export/import: %d" % local_again)
+    devtools.evaluate("window.__zrStub.reset()")
+    return failures
+
+
+def case_ui29_appearance_persists_through_reload(devtools: DevTools) -> list[str]:
+    """Theme, skin and native accent survive a real document reload."""
+    failures: list[str] = []
+    seed(devtools)
+    open_page(devtools, "settings")
+    devtools.wait_for(
+        "document.querySelectorAll('.setting-row button[role=combobox]').length >= 2",
+        "appearance selects",
+    )
+
+    devtools.click_selector(".setting-row button[role=combobox]", 0)
+    devtools.wait_for("document.querySelectorAll('.select-item').length === 3", "theme options")
+    devtools.click_selector(".select-item", 2)
+    devtools.wait_for(
+        "document.documentElement.dataset.theme === 'dark'",
+        "the dark theme to apply",
+    )
+
+    devtools.click_selector(".setting-row button[role=combobox]", 1)
+    devtools.wait_for("document.querySelectorAll('.select-item').length === 3", "skin options")
+    devtools.click_selector(".select-item", 1)
+    devtools.wait_for(
+        "document.documentElement.dataset.skin === 'md3'",
+        "the MD3 skin to apply",
+    )
+    devtools.wait_for(
+        "getComputedStyle(document.documentElement).getPropertyValue('--system-accent').trim() === '#0078d4'",
+        "the native accent CSS variable",
+    )
+    stored = devtools.evaluate(
+        "JSON.stringify({theme: localStorage.getItem('zroutery-theme'), skin: localStorage.getItem('zroutery-skin')})"
+    )
+    if json.loads(stored) != {"theme": "dark", "skin": "md3"}:
+        failures.append("appearance choices were not stored synchronously: %s" % stored)
+
+    devtools.call("Page.reload", {"ignoreCache": True})
+    devtools.wait_for(
+        "document.readyState === 'complete' && Boolean(window.__zrHarnessReady)",
+        "the reloaded application",
+        timeout=25.0,
+    )
+    restored = devtools.evaluate(
+        "JSON.stringify({theme: document.documentElement.dataset.theme, skin: document.documentElement.dataset.skin, "
+        "accent: getComputedStyle(document.documentElement).getPropertyValue('--system-accent').trim()})"
+    )
+    if json.loads(restored) != {"theme": "dark", "skin": "md3", "accent": "#0078d4"}:
+        failures.append("appearance did not survive reload: %s" % restored)
+    devtools.evaluate(
+        "localStorage.removeItem('zroutery-theme'); localStorage.removeItem('zroutery-skin')"
+    )
+    return failures
+
+
+def case_ui30_imported_history_is_previewed_before_it_is_written(devtools: DevTools) -> list[str]:
+    """Another tool's history is previewed, confirmed, reported, then clearable.
+
+    The order matters more than the numbers: a preview that wrote, a commit
+    that ran before the confirmation, or a clear that skipped its dialog would
+    each be a way for a person's history to change without them agreeing to it.
+    """
+    failures: list[str] = []
+    seed(devtools)
+    open_page(devtools, "activity")
+    row = '.usage-source-row[aria-label="Imported history"]'
+    devtools.wait_for(
+        "Boolean(document.querySelector('%s .linky'))" % row,
+        "the import entry point",
+    )
+
+    devtools.click_selector("%s .linky" % row)
+    devtools.wait_for(
+        "Array.from(document.querySelectorAll('.drawer .controls button')).some((b) => b.textContent === 'Choose database file…')",
+        "the database file picker",
+    )
+    offered = devtools.evaluate(
+        "Array.from(document.querySelectorAll('.drawer .controls button')).map((b) => b.textContent)"
+    )
+    if offered[:2] != ["Choose database file…", "Choose transcripts folder…"]:
+        failures.append("the drawer did not offer both history sources: %r" % (offered,))
+    if devtools.evaluate("window.__zrStub.log('pick_usage_history_source').length") != 0:
+        failures.append("opening the drawer opened a file dialog before anyone asked")
+
+    devtools.wait_for(
+        "document.querySelectorAll('.drawer .import-source-list li').length === 2",
+        "the discovered history sources",
+    )
+    listed = devtools.evaluate(
+        "Array.from(document.querySelectorAll('.drawer .import-source-list li')).map((li) => li.textContent)"
+    )
+    if "CC Switch" not in listed[0] or "used before" not in listed[0]:
+        failures.append("the recently used source was not listed first: %r" % (listed,))
+    if "Claude Code" not in listed[1]:
+        failures.append("the transcripts folder was not offered: %r" % (listed,))
+
+    devtools.click_selector(".drawer .import-source-option", 0)
+    devtools.wait_for(
+        "window.__zrStub.log('preview_usage_history_import').length === 1",
+        "the import preview",
+    )
+    if devtools.evaluate("window.__zrStub.log('pick_usage_history_source').length") != 0:
+        failures.append("a source found on this machine still opened a file dialog")
+    chosen = devtools.evaluate(
+        "(window.__zrStub.last('preview_usage_history_import')||{args:{}}).args.path"
+    )
+    if chosen != "C:/fixture/cc-switch.db":
+        failures.append("the preview did not read the database that was listed: %r" % (chosen,))
+    if "(CC Switch)" not in " ".join(
+        devtools.evaluate(
+            "Array.from(document.querySelectorAll('.drawer .field-hint')).map((p) => p.textContent)"
+        )
+    ):
+        failures.append("the preview did not say which adapter read the source")
+    counts = devtools.evaluate(
+        "Array.from(document.querySelectorAll('.drawer .import-metrics .kpi-value')).map((node) => node.textContent)"
+    )
+    if counts != ["412", "7", "3", "14", "0"]:
+        failures.append("the preview did not report the source's own counts: %r" % (counts,))
+    if devtools.evaluate("window.__zrStub.log('commit_usage_history_import').length") != 0:
+        failures.append("showing a preview stored the history before anyone confirmed it")
+
+    devtools.click_selector(".drawer .controls button", 0)
+    devtools.wait_for(
+        "window.__zrStub.log('commit_usage_history_import').length === 1",
+        "the confirmed import",
+    )
+    devtools.wait_for(
+        "(document.querySelector('.drawer')?.textContent || '').includes('Stored 419 new rows')",
+        "the import report",
+    )
+    binding = devtools.evaluate("window.__zrStub.last('commit_usage_history_import').args")
+    preview_args = devtools.evaluate("window.__zrStub.last('preview_usage_history_import').args")
+    if binding.get("runId") != preview_args.get("runId") or binding.get("fingerprint") != "fixture-" + preview_args.get("runId", ""):
+        failures.append("confirmation did not bind to the exact saved preview: %r" % binding)
+    if "path" in binding:
+        failures.append("confirmation reopens a path instead of the saved preview")
+    devtools.wait_for(
+        "(document.querySelector('%s')?.textContent || '').includes('416 of these imported')" % row,
+        "the standing imported total",
+    )
+    # The page's period is a claim about what its totals cover. After an import
+    # that is no longer only this device's ledger, so the lede names the older
+    # start; the imported figures themselves stay in their own row. The fixture
+    # keeps that start outside the loaded window, so reading `days[0]` would
+    # name the wrong day and fail here.
+    lede = devtools.evaluate("document.querySelector('.page-head .lede')?.textContent || ''")
+    start = devtools.evaluate(
+        "new Date(2025, 9, 31).toLocaleDateString([], {dateStyle: 'medium'})"
+    )
+    if "imported history starts" not in lede or start not in lede:
+        failures.append(
+            "the lede did not name where the imported history begins (%r): %r"
+            % (start, lede)
+        )
+    page_text = devtools.evaluate("document.body.textContent || ''")
+    if "plus imported history" not in page_text:
+        failures.append("the traffic hint did not say the curve includes imported history")
+    if "This split counts this device's live ledger" not in page_text:
+        failures.append("the ledger did not say which cut the imported rows are missing from")
+
+    after_commit = devtools.evaluate(
+        "Array.from(document.querySelectorAll('.drawer .controls button')).map((b) => b.textContent)"
+    )
+    if after_commit[:1] != ["Choose database file…"] or "Clear imported history" not in after_commit:
+        failures.append("the drawer did not offer another source and a clear: %r" % (after_commit,))
+    devtools.click_selector(".drawer .controls button", after_commit.index("Clear imported history"))
+    devtools.wait_for("Boolean(document.querySelector('.confirm'))", "the clear confirmation")
+    if devtools.evaluate("window.__zrStub.log('clear_imported_usage').length") != 0:
+        failures.append("the imported history was cleared before the confirmation")
+    devtools.click_selector(".confirm-actions button", 1)
+    devtools.wait_for(
+        "window.__zrStub.log('clear_imported_usage').length === 1",
+        "the confirmed clear",
+    )
+    devtools.wait_for(
+        "!(document.querySelector('%s')?.textContent || '').includes('416 of these imported')" % row,
+        "the imported total to disappear",
+    )
+    lede = devtools.evaluate("document.querySelector('.page-head .lede')?.textContent || ''")
+    if "imported history starts" in lede:
+        failures.append("the lede kept claiming imported coverage after the clear: %r" % (lede,))
+
+    # The folder button asks the backend for a directory, and the transcripts
+    # adapter is the one that answers: the counts and the label both change, so
+    # a wiring mistake between the two entry points would show here.
+    devtools.click_selector(".drawer .controls button", 1)
+    devtools.wait_for(
+        "window.__zrStub.log('preview_usage_history_import').length === 2",
+        "the transcripts preview",
+    )
+    folder_kind = devtools.evaluate(
+        "(window.__zrStub.last('pick_usage_history_source')||{args:{}}).args.kind"
+    )
+    if folder_kind != "folder":
+        failures.append("the folder button did not ask for a directory: %r" % (folder_kind,))
+    folder_path = devtools.evaluate(
+        "(window.__zrStub.last('preview_usage_history_import')||{args:{}}).args.path"
+    )
+    if folder_path != "C:/fixture/.claude/projects":
+        failures.append("the preview did not read the folder that was chosen: %r" % (folder_path,))
+    folder_counts = devtools.evaluate(
+        "Array.from(document.querySelectorAll('.drawer .import-metrics .kpi-value')).map((node) => node.textContent)"
+    )
+    if folder_counts != ["86", "0", "0", "86", "0"]:
+        failures.append("the transcripts preview reported the wrong counts: %r" % (folder_counts,))
+    if "(Claude Code)" not in " ".join(
+        devtools.evaluate(
+            "Array.from(document.querySelectorAll('.drawer .field-hint')).map((p) => p.textContent)"
+        )
+    ):
+        failures.append("the transcripts preview did not say which adapter read the source")
+    if devtools.evaluate("window.__zrStub.log('commit_usage_history_import').length") != 1:
+        failures.append("the second preview stored history before anyone confirmed it")
+
+    devtools.click_selector(".drawer .controls button", 1)
+    devtools.wait_for(
+        "Array.from(document.querySelectorAll('.drawer .controls button')).some((b) => b.textContent === 'Choose database file…')",
+        "the drawer to return to its picker",
+    )
+    if devtools.evaluate("window.__zrStub.log('cancel_usage_history_import').length") != 1:
+        failures.append("cancel dismissed the preview without discarding its stage")
+    devtools.evaluate("window.__zrStub.reset()")
+    return failures
+
+
+def case_ui31_the_add_form_lands_in_view_and_takes_focus(devtools: DevTools) -> list[str]:
+    """The header add action lands its form in view, focused, above the list.
+
+    The add form used to mount below the whole list and its pager, so on a
+    full catalogue the header click looked like a no-op: the form sat
+    thousands of pixels down and the focus stayed on the trigger. The harness
+    scrolls nothing after the click — the app itself must put the first field
+    where the reader is, give it focus, and mount the form ahead of the list
+    it edits.
+    """
+    failures: list[str] = []
+    seed(devtools)
+    open_page(devtools, "models")
+    devtools.wait_for("document.querySelector('.list-row') !== null", "the models list")
+    form = "#panel-models input[placeholder='deepseek-chat']"
+    unfold_page_form(devtools, form)
+    devtools.wait_for(
+        "document.activeElement === document.querySelector(%s)" % json.dumps(form),
+        "the add form's first field to take focus",
+    )
+    seen = devtools.evaluate(
+        """
+        (() => {
+          const input = document.activeElement;
+          if (!input || input.tagName !== 'INPUT') return null;
+          const rect = input.getBoundingClientRect();
+          const row = document.querySelector('.list-row');
+          return {
+            top: rect.top,
+            bottom: rect.bottom,
+            innerWidth: window.innerWidth,
+            innerHeight: window.innerHeight,
+            beforeList: row
+              ? Boolean(input.compareDocumentPosition(row) & Node.DOCUMENT_POSITION_FOLLOWING)
+              : null,
+          };
+        })()
+        """
+    )
+    if seen is None:
+        return ["the focused element is not the add form's first input"]
+    if not (0 <= seen["top"] < seen["innerHeight"] and 0 < seen["bottom"] <= seen["innerHeight"]):
+        failures.append("the add form's first input is outside the viewport: %r" % seen)
+    if seen["beforeList"] is not True:
+        failures.append("the add form does not mount ahead of the list it edits: %r" % seen)
+
+    # Folding again returns the reader to the trigger, and reopening lands on
+    # the form once more: the action stays repeatable from where it left them.
+    devtools.click_selector(".tab-panel .page-head-actions button.linky")
+    devtools.wait_for(
+        "document.querySelector(%s) === null" % json.dumps(form),
+        "the folded add form",
+    )
+    devtools.click_selector(".tab-panel .page-head-actions button.linky")
+    devtools.wait_for(
+        "document.activeElement === document.querySelector(%s)" % json.dumps(form),
+        "the reopened add form to take focus again",
+    )
     return failures
 
 
@@ -3917,6 +4705,17 @@ CASES = (
         "label": "UI-6 accounts page shows readings and direct check-in acts",
         "run": case_ui6_accounts_direct_checkin,
         "query": ACCOUNT_QUERY,
+    },
+    {
+        "label": "UI-27 inference keys reorder by drag and keyboard with serial writes",
+        "run": case_ui27_inference_keys_reorder,
+        "query": INFERENCE_ORDER_QUERY,
+    },
+    {"label": "UI-28 standby usage is separate and read-only", "run": case_ui28_standby_usage_is_read_only},
+    {"label": "UI-29 theme, skin and accent survive reload", "run": case_ui29_appearance_persists_through_reload},
+    {
+        "label": "UI-30 imported history is previewed before it is written",
+        "run": case_ui30_imported_history_is_previewed_before_it_is_written,
     },
     {
         "label": "UI-7 cutover confirms a run behind the preview's fingerprint",
@@ -4011,6 +4810,11 @@ CASES = (
         "query": ACCOUNT_QUERY,
     },
     {"label": "UI-26 client menu preview, confirmation and stale reply isolation", "run": case_ui26_client_menu_preview_and_apply},
+    {
+        "label": "UI-31 the add form lands in view and takes focus",
+        "run": case_ui31_the_add_form_lands_in_view_and_takes_focus,
+        "query": {"stress": 600},
+    },
 )
 
 
