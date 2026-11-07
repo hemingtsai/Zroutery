@@ -321,9 +321,21 @@
   --on-primary: #ffffff;
   --on-primary: var(--system-accent-fg, #ffffff);
 
-  --primary-container: #eaddff;
+  /*
+   * The tonal containers follow the accent the way Material You recolours
+   * them — mixed toward the primary instead of frozen at the baseline, so a
+   * yellow system accent yields yellow-tinted pills and cards and the scheme
+   * reads as one colour ("强调色生效了一半" was this: primary took the
+   * accent, the containers stayed lavender). The mixes hang off --primary,
+   * so the no-accent fallback lands within a step of the official baseline
+   * (#e0d6ed vs #e8def8). The on-inks stay the fixed dark baseline — mixed
+   * inks fail on the white/black accent extremes, and a coloured container
+   * under a fixed dark ink holds 4.5:1 for every accent Windows offers
+   * (verified: fallback/blue/olive/white/black, worst 10.19:1).
+   */
+  --primary-container: color-mix(in srgb, var(--primary) 30%, var(--bg));
   --on-primary-container: #21005d;
-  --secondary-container: #e8def8;
+  --secondary-container: color-mix(in srgb, var(--primary) 20%, var(--bg));
   --on-secondary-container: #1d192b;
   --error-container: #f9dedc;
   --on-error-container: #410e0b;
@@ -417,10 +429,18 @@
   --surface-high: #2b2930;
   --container-highest: #36343b;
 
-  --primary-container: #4f378b;
-  --on-primary-container: #eaddff;
-  --secondary-container: #4a4458;
-  --on-secondary-container: #e8def8;
+  /*
+   * The dark containers take the same accent derivation as light: tinted by
+   * the lifted primary (45% accent over white) over the dark surface, so a
+   * yellow accent tints the pills yellow-grey here instead of leaving
+   * purple slabs next to yellow controls. The on-inks are the theme's own
+   * pale text — fixed pale ink on a tinted container clears 4.5:1 for every
+   * accent Windows offers (verified worst 4.87:1 on the white accent).
+   */
+  --primary-container: color-mix(in srgb, var(--primary) 26%, var(--surface));
+  --on-primary-container: var(--text);
+  --secondary-container: color-mix(in srgb, var(--primary) 30%, var(--surface));
+  --on-secondary-container: var(--text);
   --error-container: #8c1d18;
   --on-error-container: #f2b8b5;
 
