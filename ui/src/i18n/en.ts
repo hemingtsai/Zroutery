@@ -562,6 +562,12 @@ export const en = {
   "providers.compatibility": "Compatibility",
   "providers.compatibility_hint":
     "Switches for providers that do not follow the standard protocol exactly. Leave them all off unless a request fails.",
+  "providers.repair.title": "Request repair",
+  "providers.repair.hint":
+    "Overrides of the Routing page's global repair defaults for this provider. 'Follow the global' inherits the Routing page's switch.",
+  "providers.repair.inherit": "Follow the global default",
+  "providers.repair.on": "On for this provider",
+  "providers.repair.off": "Off for this provider",
   "quirk.max_completion_tokens": "Use max_completion_tokens",
   "quirk.drop_temperature": "Drop temperature",
   "quirk.drop_top_p": "Drop top_p",
@@ -1361,7 +1367,7 @@ export const en = {
   // --------------------------------------------------------- request repair
   "rectifier.title": "Request repair",
   "rectifier.hint":
-    "When an upstream rejects a request, send it again to the same provider and model in a form it accepts; repairs do not count against the circuit breaker and never switch providers.",
+    "When an upstream rejects a request, send it again to the same provider and model in a form it accepts; repairs do not count against the circuit breaker and never switch providers. These are the global defaults; each provider can override them in its own drawer.",
   "rectifier.enable": "Repair rejected requests",
   "rectifier.enable_hint": "Master switch: turning it off leaves every request to fail over at once.",
   "rectifier.thinking_signature": "Repair a stale thinking signature",

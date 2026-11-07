@@ -249,6 +249,10 @@ const providers: Provider[] = [
     api_surface: "chat",
     decision: { path: "/v1/systemone", threshold: 0.85 },
     quirks: { ...quirks(), use_max_completion_tokens: true },
+    // The disabled Codex relay also demonstrates a repair override: the
+    // conditional history rectification off for this upstream, everything
+    // else inherited from the routing defaults.
+    repair: { codex_auto: false },
     balance: balanceConfig("none"),
   },
 ];

@@ -205,6 +205,21 @@ export interface ProviderQuirks {
   portable_history: boolean;
 }
 
+/**
+ * Per-provider request-repair overrides. Every field left `undefined` (the
+ * default) inherits `routing.rectifier`; a set value wins for the requests
+ * this provider serves. The master switch has no override — turning repairs
+ * off wholesale is a gateway-wide policy on the Routing page.
+ */
+export interface ProviderRepairOverrides {
+  thinking_signature?: boolean;
+  media_fallback?: boolean;
+  thinking_budget?: boolean;
+  thinking_fallback?: boolean;
+  codex_metadata?: boolean;
+  codex_auto?: boolean;
+}
+
 export interface Provider {
   id: string;
   name: string;
@@ -233,6 +248,9 @@ export interface Provider {
    */
   api_surface: "chat" | "responses";
   quirks: ProviderQuirks;
+  /** Absent fields inherit `routing.rectifier` — the tri-state grammar of
+   * `bypass_proxy`: undefined is "follow the global default". */
+  repair?: ProviderRepairOverrides;
   balance: BalanceConfig;
   /** How to ask this provider for a decision, when it answers decisions.
    *
@@ -2734,6 +2752,7 @@ export function emptyProvider(
       send_reasoning_effort: false,
       portable_history: false,
     },
+    repair: {},
     balance: { preset: "none", custom: null },
     decision: { path: "/v1/systemone", threshold: 0.85 },
     accounts: [],

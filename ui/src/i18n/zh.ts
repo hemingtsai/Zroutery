@@ -517,6 +517,12 @@ export const zh: Dict = {
   "providers.compatibility": "兼容性",
   "providers.compatibility_hint":
     "这些开关用于不完全遵循标准协议的服务商。除非请求失败，否则保持全部关闭。",
+  "providers.repair.title": "请求修复",
+  "providers.repair.hint":
+    "针对本服务商覆盖路由页的全局修复默认值；「跟随全局」即沿用路由页的开关。",
+  "providers.repair.inherit": "跟随全局默认",
+  "providers.repair.on": "本服务商开启",
+  "providers.repair.off": "本服务商关闭",
   "quirk.max_completion_tokens": "使用 max_completion_tokens",
   "quirk.drop_temperature": "丢弃 temperature",
   "quirk.drop_top_p": "丢弃 top_p",
@@ -1183,7 +1189,7 @@ export const zh: Dict = {
   "vision.placeholder_hint": "无法生成描述时，替代图片的文本",
   "rectifier.title": "请求修复",
   "rectifier.hint":
-    "上游拒绝时，用同一服务商、同一模型把请求改成它能接受的形式再发一次；不计入熔断，也不换服务商。",
+    "上游拒绝时，用同一服务商、同一模型把请求改成它能接受的形式再发一次；不计入熔断，也不换服务商。这些是全局默认，可在各服务商的抽屉里单独覆盖。",
   "rectifier.enable": "修复被拒绝的请求",
   "rectifier.enable_hint": "总开关：关闭后请求不再重试修复，直接走故障转移。",
   "rectifier.thinking_signature": "修复失效的 thinking 签名",

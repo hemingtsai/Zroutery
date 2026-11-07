@@ -12,9 +12,21 @@ import {
   type Provider,
   type Snapshot,
 } from "../../api";
-import { describeBackendError, useI18n } from "../../i18n";
+import { describeBackendError, useI18n, type TKey } from "../../i18n";
 import { useMode } from "../../mode";
 import { SaveFeedbackReset, type TaskKind } from "../../saveQueue";
+import type { ProviderRepairOverrides } from "../../api";
+
+/** The repair flags a provider may override, with the Routing page's label
+ * for each — the drawer speaks the same words as the global defaults. */
+const REPAIR_OVERRIDES: { flag: keyof ProviderRepairOverrides; labelKey: TKey }[] = [
+  { flag: "thinking_signature", labelKey: "rectifier.thinking_signature" },
+  { flag: "media_fallback", labelKey: "rectifier.media_fallback" },
+  { flag: "thinking_budget", labelKey: "rectifier.thinking_budget" },
+  { flag: "thinking_fallback", labelKey: "rectifier.thinking_fallback" },
+  { flag: "codex_metadata", labelKey: "rectifier.codex_metadata" },
+  { flag: "codex_auto", labelKey: "rectifier.codex_auto" },
+];
 import {
   Button,
   Drawer,
@@ -684,6 +696,36 @@ export function ProviderDrawer({
             />
           </div>
         </div>
+      </Section>
+      )}
+
+      {geek && (
+      <Section title={t("providers.repair.title")} hint={t("providers.repair.hint")}>
+        {/*
+          * Each repair starts as "follow the global default" set on the
+          * Routing page; a tri-state select is the same grammar the proxy
+          * policy uses — undefined is inherit, not a fourth state.
+          */}
+        {REPAIR_OVERRIDES.map(({ flag, labelKey }) => (
+          <Field key={flag} label={t(labelKey)}>
+            <Select
+              ariaLabel={t(labelKey)}
+              value={provider.repair?.[flag] == null ? "inherit" : provider.repair[flag] ? "on" : "off"}
+              onChange={(value) =>
+                onUpdate((p) => {
+                  p.repair ??= {};
+                  if (value === "inherit") delete p.repair[flag];
+                  else p.repair[flag] = value === "on";
+                })
+              }
+              options={[
+                { value: "inherit", label: t("providers.repair.inherit") },
+                { value: "on", label: t("providers.repair.on") },
+                { value: "off", label: t("providers.repair.off") },
+              ]}
+            />
+          </Field>
+        ))}
       </Section>
       )}
 

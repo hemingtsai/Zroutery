@@ -524,6 +524,12 @@ export const zhTW: Dict = {
   "providers.compatibility": "相容性",
   "providers.compatibility_hint":
     "這些開關用於不完全遵循標準協議的供應商。除非請求失敗，否則保持全部關閉。",
+  "providers.repair.title": "請求修復",
+  "providers.repair.hint":
+    "針對本供應商覆寫路由頁的全局修復預設值；「跟隨全局」即沿用路由頁的開關。",
+  "providers.repair.inherit": "跟隨全局預設",
+  "providers.repair.on": "本供應商開啟",
+  "providers.repair.off": "本供應商關閉",
   "quirk.max_completion_tokens": "使用 max_completion_tokens",
   "quirk.drop_temperature": "丟棄 temperature",
   "quirk.drop_top_p": "丟棄 top_p",
@@ -1186,7 +1192,7 @@ export const zhTW: Dict = {
   "vision.placeholder_hint": "無法生成描述時，替代圖片的文本",
   "rectifier.title": "請求修復",
   "rectifier.hint":
-    "上游拒絕時，用同一供應商、同一模型把請求改成它能接受的形式再發一次；不計入熔斷，也不換供應商。",
+    "上游拒絕時，用同一供應商、同一模型把請求改成它能接受的形式再發一次；不計入熔斷，也不換供應商。這些是全局預設，可在各供應商的抽屜裡單獨覆寫。",
   "rectifier.enable": "修復被拒絕的請求",
   "rectifier.enable_hint": "總開關：關閉後請求不再重試修復，直接走故障轉移。",
   "rectifier.thinking_signature": "修復失效的 thinking 簽名",
