@@ -139,7 +139,15 @@ impl DecisionConfig {
             return base.to_string();
         }
 
-        if path.starts_with("/v1") {
+        let path = format!("/{}", path.trim_start_matches('/'));
+        if base.ends_with("/v1") {
+            format!(
+                "{base}{}",
+                path.strip_prefix("/v1/")
+                    .map(|rest| format!("/{rest}"))
+                    .unwrap_or(path)
+            )
+        } else if path == "/v1" || path.starts_with("/v1/") {
             format!("{base}{path}")
         } else {
             format!("{base}/v1{path}")
@@ -171,6 +179,20 @@ mod decision_url_tests {
             config.url("https://api.typesafe.ai"),
             "https://api.typesafe.ai/v1/systemone"
         );
+    }
+
+    #[test]
+    fn a_versioned_base_and_a_relative_path_keep_one_version_segment() {
+        for path in ["/v1/systemone", "/systemone", "systemone"] {
+            let config = DecisionConfig {
+                path: path.into(),
+                ..Default::default()
+            };
+            assert_eq!(
+                config.url("https://example.test/relay/v1/"),
+                "https://example.test/relay/v1/systemone"
+            );
+        }
     }
 }
 impl ProviderKind {
@@ -385,6 +407,8 @@ pub struct ClientIdentity {
     /// only for an `OPENCODE-CONSOLE` provider with a resolved token.
     pub org_id: Option<String>,
     pub reply_headers: crate::ir::ReplyHeaders,
+    /// One upstream send's metadata. Retries get a fresh observation handle.
+    pub observation: crate::ir::AttemptObservation,
 }
 
 /// Resolve the client profile for one request and collect its forwarding set.
@@ -438,6 +462,7 @@ pub fn resolve_client_identity(
         session: None,
         org_id: None,
         reply_headers: Default::default(),
+        observation: Default::default(),
     }
 }
 

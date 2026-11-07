@@ -92,14 +92,18 @@ impl Router {
         resolution: &Resolution,
         required_capabilities: &[Capability],
     ) -> Result<(Vec<Candidate>, RouteDecision)> {
-        self.plan_with_policy(
+        self.plan_with_policy_order(
             registry,
             resolution,
             required_capabilities,
             &PolicyRequirements::default(),
-            &PolicyPreference::default(),
+            &PolicyPreference {
+                cost_weight: 0.0,
+                ..Default::default()
+            },
             &PolicyFallback::Reject,
             None,
+            false,
         )
     }
 
@@ -139,6 +143,30 @@ impl Router {
         preference: &PolicyPreference,
         fallback: &PolicyFallback,
         task: Option<&TaskProfile>,
+    ) -> Result<(Vec<Candidate>, RouteDecision)> {
+        self.plan_with_policy_order(
+            registry,
+            resolution,
+            required_capabilities,
+            requirements,
+            preference,
+            fallback,
+            task,
+            true,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn plan_with_policy_order(
+        &self,
+        registry: &Registry,
+        resolution: &Resolution,
+        required_capabilities: &[Capability],
+        requirements: &PolicyRequirements,
+        preference: &PolicyPreference,
+        fallback: &PolicyFallback,
+        task: Option<&TaskProfile>,
+        policy_order: bool,
     ) -> Result<(Vec<Candidate>, RouteDecision)> {
         // Eligibility reads breaker state (including the cooldown), so the
         // current routing config is applied before any of it is consulted.
@@ -296,7 +324,76 @@ impl Router {
             }
         }
 
-        let (scored, score_breakdowns) = self.score_and_sort(effective, preference, task);
+        let mut execution = HashMap::new();
+        let cost_policy = policy_order && preference.cost_weight > 0.0;
+        let mut currencies = std::collections::BTreeSet::new();
+        let mut quoted = Vec::new();
+        let mut quoted_costs = HashMap::new();
+        let estimated_cost = |candidate: &Candidate| {
+            candidate.rate_quote.as_ref().and_then(|quote| {
+                let usage = crate::ir::Usage {
+                    input_tokens: u32::try_from(task.map_or(1000, |task| task.context_tokens))
+                        .ok()?,
+                    output_tokens: u32::try_from(
+                        task.map_or(500, |task| task.estimated_output_tokens),
+                    )
+                    .ok()?,
+                    ..Default::default()
+                };
+                let amount = quote.pricing.cost_of(&usage).amount;
+                amount.is_finite().then_some(amount)
+            })
+        };
+        for model in effective {
+            let provider = registry.provider_of(model)?;
+            let candidate = Candidate::new(model, provider, false);
+            let mut options = self.execution_options(registry.config(), &candidate);
+            if cost_policy {
+                options.retain(|option| estimated_cost(option).is_some());
+                for option in &options {
+                    if let Some(quote) = &option.rate_quote {
+                        currencies.insert(quote.pricing.currency.clone());
+                    }
+                }
+                options.sort_by(|a, b| {
+                    estimated_cost(a)
+                        .unwrap_or(f64::INFINITY)
+                        .total_cmp(&estimated_cost(b).unwrap_or(f64::INFINITY))
+                });
+            }
+            let Some(chosen) = options.into_iter().next() else {
+                continue;
+            };
+            let mut model = model.clone();
+            // Score a quoted model projection, keeping the public model axis
+            // singular and the executed identity on its candidate.
+            model.pricing = chosen
+                .rate_quote
+                .as_ref()
+                .map(|quote| quote.pricing.clone());
+            if let Some(amount) = estimated_cost(&chosen) {
+                quoted_costs.insert(model.exposed_id(), amount);
+            }
+            execution.insert(model.exposed_id(), chosen);
+            quoted.push(model);
+        }
+        if cost_policy && currencies.len() > 1 {
+            return Err(Error::NoCandidate(
+                "cost policy cannot compare different billing currencies or units".into(),
+            ));
+        }
+        if quoted.is_empty() {
+            return Err(Error::NoCandidate(
+                if cost_policy {
+                    "no executable identity has an effective or explicit fallback rate"
+                } else {
+                    "no executable inference credential"
+                }
+                .into(),
+            ));
+        }
+        let (scored, score_breakdowns) =
+            self.score_with_quotes(quoted.iter().collect(), preference, task, &quoted_costs);
         for (model_id, breakdown, total_score) in &score_breakdowns {
             if let Some(decision) = decisions
                 .iter_mut()
@@ -330,8 +427,17 @@ impl Router {
             pool_name.clone(),
             &request_capabilities,
             false,
-            false,
+            policy_order,
         )?;
+        for candidate in &mut candidates {
+            if let Some(chosen) = execution.remove(candidate.model_id()) {
+                candidate.provider = chosen.provider;
+                candidate.credential = chosen.credential;
+                candidate.rate_quote = chosen.rate_quote;
+                // The scoring projection is not a new configured tariff.
+                candidate.entry = chosen.entry;
+            }
+        }
         let mut remediation_capabilities = requirements.required_capabilities.clone();
         remediation_capabilities.extend_from_slice(&request_capabilities);
         let remediation_capabilities = canonical_capabilities(&remediation_capabilities);

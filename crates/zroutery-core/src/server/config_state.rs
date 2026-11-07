@@ -2,7 +2,7 @@
 
 use std::sync::Arc;
 
-use crate::config::{AppConfig, ModelTier, ProviderConfig, ProviderKind, SecretStore};
+use crate::config::{AppConfig, ModelEntry, ModelTier, ProviderConfig, ProviderKind, SecretStore};
 use crate::election::{self, Election, Measurement};
 use crate::error::{Error, Result};
 use crate::registry::Registry;
@@ -68,8 +68,32 @@ impl AppState {
         );
         let registry = Arc::new(Registry::new(Arc::new(config)));
         let mut current = crate::sync::write(&self.registry);
+        // Compare against the state actually being replaced. Another config
+        // writer may have swapped it while this registry was being built.
+        let ranking_stale = election_inputs_changed(current.config(), registry.config());
+        // A rekey keeps the key identity `(provider, account, key.id)` while
+        // replacing the secret behind it. The router's credential gates are
+        // keyed by that identity, so the old secret's authentication cooldown
+        // and key-level 429 window must be forgotten here — under the same
+        // write lock as the swap, exactly like the election invalidation above.
+        // An account's empty-wallet latch is a fact about the wallet, not the
+        // secret, and is deliberately left alone.
+        let rekeyed_keys = rekeyed_inference_keys(current.config(), registry.config());
         #[cfg(feature = "account")]
         self.accounts.sync_declarations(&registry.snapshot());
+        // The standing election's ranking belongs to the configuration being
+        // replaced. Dropping it here, under the same write lock as the swap,
+        // makes "invalidate" and "swap" one indivisible step: a publication
+        // from a `hold_election` that was still probing decides under this
+        // very lock whether the snapshot it measured is still live, so a swap
+        // either erases the cache before the late result arrives or makes it
+        // refuse to install. Neither order can resurrect the other's casualty.
+        if ranking_stale {
+            self.router.invalidate_election();
+        }
+        for (provider, account, key) in &rekeyed_keys {
+            self.router.invalidate_key_cooldowns(provider, account, key);
+        }
         *current = registry;
     }
 
@@ -176,7 +200,175 @@ impl AppState {
                 .insert(tier, election::rank(tier, &measurements, &scoring));
         }
 
-        self.router.set_election(election.clone());
+        // The probes awaited, so a configuration swap may have replaced the
+        // snapshot they ran against — and invalidated the cache with it.
+        // Install the ranking only while that snapshot is still live.
+        if !self.publish_election(&registry, election.clone()) {
+            tracing::info!(
+                "an election finished after a configuration swap; its ranking was measured \
+                 against the replaced snapshot and was not installed"
+            );
+        }
         election
     }
+
+    /// Install an election only while the snapshot it measured is still live.
+    ///
+    /// [`Self::hold_election`] awaits real probes, so a configuration swap can
+    /// land in the middle of one, and [`Self::set_config`] drops the cache
+    /// when it does. Installing the stale ranking afterwards would quietly
+    /// resurrect what the swap dropped. The install is therefore a compare
+    /// and set against the registry itself: the election keeps the snapshot
+    /// it measured, and it wins the cache only if that exact snapshot is
+    /// still the live one. Every swap builds a fresh [`Registry`], so pointer
+    /// equality is exactly "nothing was swapped since the election started".
+    ///
+    /// The check and the install share the registry's write lock with
+    /// [`Self::set_config`]'s swap, so a swap cannot slip between them. Every
+    /// lock here is taken registry first and election second, and nothing
+    /// takes the registry lock while holding the election lock, so
+    /// publication cannot deadlock against `set_config` or a routing decision
+    /// in flight. No lock is held across a probe await.
+    fn publish_election(&self, measured: &Arc<Registry>, election: Election) -> bool {
+        let live = crate::sync::write(&self.registry);
+        if !Arc::ptr_eq(&*live, measured) {
+            return false;
+        }
+        self.router.set_election(election);
+        true
+    }
+}
+
+/// Inference keys whose secret reference changed between two configurations.
+///
+/// Keys are paired by `(provider id, account id, key id)`, the identity the
+/// router uses for credential cooldowns, and only a changed `key_ref` counts:
+/// renaming an account, reordering keys or editing a note moves no secret and
+/// leaves every gate standing. Added and removed keys produce no entry — a
+/// removed key's gates are dropped by `retain_credentials`, and a new identity
+/// has no evidence to forget.
+fn rekeyed_inference_keys(previous: &AppConfig, next: &AppConfig) -> Vec<(String, String, String)> {
+    let mut rekeyed = Vec::new();
+    let mut unpaired: std::collections::HashMap<&str, &ProviderConfig> = previous
+        .providers
+        .iter()
+        .map(|provider| (provider.id.as_str(), provider))
+        .collect();
+    for provider in &next.providers {
+        let Some(old_provider) = unpaired.remove(provider.id.as_str()) else {
+            continue;
+        };
+        for account in &provider.accounts {
+            let Some(old_account) = old_provider
+                .accounts
+                .iter()
+                .find(|old| old.account_id == account.account_id)
+            else {
+                continue;
+            };
+            for key in &account.inference_keys {
+                let Some(old_key) = old_account
+                    .inference_keys
+                    .iter()
+                    .find(|old| old.id == key.id)
+                else {
+                    continue;
+                };
+                if old_key.key_ref != key.key_ref {
+                    rekeyed.push((
+                        provider.id.clone(),
+                        account.account_id.clone(),
+                        key.id.clone(),
+                    ));
+                }
+            }
+        }
+    }
+    rekeyed
+}
+
+/// Whether the configuration about to be swapped in makes the standing
+/// election's pinned ranking stale.
+///
+/// The election measured three inputs per member and scored them with the
+/// configured weights. When any of them changes, the pinned order no longer
+/// describes the configuration it would order, so the cache must be dropped
+/// and re-measured:
+///
+/// * `routing.scoring` — the price/latency weights and the reference request
+///   every price is compared through;
+/// * a provider's declaration — endpoint, protocol, credential and accounts.
+///   The probe ran through exactly these, and an account's binding, keys and
+///   effective rates are what a quote is bound to, so any credential, billing
+///   group or outbound change starts from a fresh measurement. Only the
+///   provider's display name is exempt, because no measurement depends on it;
+/// * an existing model's price or manual priority, paired by identity
+///   `(provider_id, upstream_model)`.
+///
+/// Deliberately *not* invalidating:
+///
+/// * a model the old configuration did not have. It was never measured, so it
+///   cannot take a primary slot it did not earn: the pinned order keeps it
+///   behind the measured members until the next election promotes it. This is
+///   the contract `a_model_added_after_an_election_is_used_but_not_promoted`
+///   pins in the e2e suite;
+/// * display-only edits (a model's display name or aliases) and membership
+///   flips (tier, enabled, removal). The pinned order is filtered against the
+///   live tier membership when it is used, so members that left are skipped
+///   and members it never saw fall back to priority. Probes cost real
+///   requests, so an edit that cannot change the ranking must not throw the
+///   measurement away.
+fn election_inputs_changed(previous: &AppConfig, next: &AppConfig) -> bool {
+    if previous.routing.scoring != next.routing.scoring {
+        return true;
+    }
+    if election_providers_changed(&previous.providers, &next.providers) {
+        return true;
+    }
+    election_models_changed(&previous.models, &next.models)
+}
+
+/// Whether any provider changed in a way the election measures.
+///
+/// Providers are paired by id, so reordering them alone keeps the standing
+/// measurement. Everything but the display name takes part, and new provider
+/// fields join the comparison by existing — the safe default for a probe
+/// that is a real call against real credentials.
+fn election_providers_changed(previous: &[ProviderConfig], next: &[ProviderConfig]) -> bool {
+    if previous.len() != next.len() {
+        return true;
+    }
+    let mut unpaired: std::collections::HashMap<&str, &ProviderConfig> = previous
+        .iter()
+        .map(|provider| (provider.id.as_str(), provider))
+        .collect();
+    next.iter().any(|provider| {
+        unpaired
+            .remove(provider.id.as_str())
+            .is_none_or(|old| election_provider_view(old) != election_provider_view(provider))
+    })
+}
+
+/// The provider as the election sees it: its whole declaration minus the GUI
+/// display name.
+fn election_provider_view(provider: &ProviderConfig) -> ProviderConfig {
+    let mut view = provider.clone();
+    view.name = String::new();
+    view
+}
+
+/// Whether a model the old configuration already had changed an input the
+/// election measures: its price, or its manual priority (the rank tie-break).
+///
+/// Paired by `(provider_id, upstream_model)`. A key absent from the old side
+/// is a new model and does not invalidate; an old key that vanished simply
+/// stops matching and leaves the rest of the pinned order standing.
+fn election_models_changed(previous: &[ModelEntry], next: &[ModelEntry]) -> bool {
+    let mut unpaired: std::collections::HashMap<(&str, &str), &ModelEntry> =
+        previous.iter().map(|model| (model.key(), model)).collect();
+    next.iter().any(|model| {
+        unpaired
+            .remove(&model.key())
+            .is_some_and(|old| old.pricing != model.pricing || old.priority != model.priority)
+    })
 }

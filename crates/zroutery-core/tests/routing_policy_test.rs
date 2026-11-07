@@ -1278,6 +1278,14 @@ fn e2e_cfg_with(models: Vec<ModelEntry>) -> AppConfig {
         ProviderKind::OpenAICompatible,
     ));
     cfg.models = models;
+    // Default policy preferences include cost. These capability/order fixtures
+    // have an explicit common fallback; unknown-rate refusal is covered by the
+    // execution-price contract suite rather than bypassed in production.
+    for model in &mut cfg.models {
+        if model.pricing.is_none() {
+            model.pricing = Some(zroutery_core::billing::Pricing::new("USD", 1.0, 2.0));
+        }
+    }
     cfg
 }
 

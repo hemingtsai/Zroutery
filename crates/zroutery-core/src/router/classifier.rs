@@ -114,7 +114,7 @@ impl Router {
             // Request-derived capabilities are always filtered below. These
             // legacy flags remain parameters for API/internal compatibility.
             true,
-            true,
+            false,
         )
     }
 }

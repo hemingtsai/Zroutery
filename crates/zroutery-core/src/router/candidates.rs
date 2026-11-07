@@ -267,11 +267,25 @@ impl Router {
     /// [`ObservationStore`]), its health score and latency are used instead of
     /// the legacy circuit-breaker EWMA. Candidates that have never been observed
     /// fall back to the legacy path.
+    #[cfg(test)]
     pub(super) fn score_and_sort<'a>(
         &self,
         members: Vec<&'a ModelEntry>,
         preference: &PolicyPreference,
         task: Option<&TaskProfile>,
+    ) -> (
+        Vec<&'a ModelEntry>,
+        Vec<(String, crate::policy::ScoreBreakdown, f64)>,
+    ) {
+        self.score_with_quotes(members, preference, task, &std::collections::HashMap::new())
+    }
+
+    pub(super) fn score_with_quotes<'a>(
+        &self,
+        members: Vec<&'a ModelEntry>,
+        preference: &PolicyPreference,
+        task: Option<&TaskProfile>,
+        quoted_costs: &std::collections::HashMap<String, f64>,
     ) -> (
         Vec<&'a ModelEntry>,
         Vec<(String, crate::policy::ScoreBreakdown, f64)>,
@@ -311,7 +325,20 @@ impl Router {
                     tier: m.tier,
                     task,
                 };
-                let s = score_candidate(preference, &ctx);
+                let mut s = score_candidate(preference, &ctx);
+                if let Some(cost) = quoted_costs.get(&m.exposed_id()) {
+                    let weight = preference.health_weight
+                        + preference.latency_weight
+                        + preference.cost_weight
+                        + preference.priority_weight
+                        + preference.tier_weight;
+                    let cost_score = 1.0 / (1.0 + cost);
+                    if weight > 0.0 {
+                        s.total_score +=
+                            (cost_score - s.breakdown.cost) * preference.cost_weight / weight;
+                    }
+                    s.breakdown.cost = cost_score;
+                }
                 (*m, s.total_score, s.breakdown)
             })
             .collect();

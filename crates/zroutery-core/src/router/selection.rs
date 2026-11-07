@@ -40,7 +40,7 @@ impl Router {
         pool_name: String,
         required_capabilities: &[Capability],
         _capability_filter: bool,
-        _strict: bool,
+        preserve_order: bool,
     ) -> Result<Vec<Candidate>> {
         // Request-derived capabilities are a hard gate. The old configuration
         // switches are retained in this private signature for compatibility,
@@ -113,7 +113,11 @@ impl Router {
             (closed, half_open)
         };
 
-        let mut ordered = self.order(&closed, counter_key, election_tier, strategy);
+        let mut ordered = if preserve_order {
+            closed
+        } else {
+            self.order(&closed, counter_key, election_tier, strategy)
+        };
         let mut degraded_ids: Vec<String> = Vec::new();
         if ordered.is_empty() {
             // No closed candidate: fall back to half-open probes, marked degraded.
@@ -142,7 +146,22 @@ impl Router {
                     entry,
                     required_capabilities,
                 );
-            out.push(Candidate::new(entry, provider, degraded));
+            let mut candidate = Candidate::new(entry, provider, degraded);
+            // Bind the pre-send rate now, before any credential is chosen: the
+            // shared resolver decides between an account rate it cannot know
+            // yet and the model's own price, and the attempt later settles
+            // under exactly this quote unless `expand_inference_keys` re-binds
+            // it to the credential that is actually sent. A price with
+            // problems or none at all resolves to `None` and stays unknown —
+            // it must not become a zero.
+            candidate.rate_quote = crate::billing::resolve_rate(
+                provider,
+                entry,
+                None,
+                None,
+                chrono::Utc::now().timestamp(),
+            );
+            out.push(candidate);
         }
         if out.is_empty() {
             if let Some(retry_after) = rate_wait {
@@ -238,12 +257,22 @@ impl Router {
     }
 
     /// Record an election. The order it decided is used until the next one.
-    pub fn set_election(&self, election: Election) {
+    ///
+    /// Crate-internal on purpose: the only caller is the server's publication
+    /// path, which installs an election only while the registry snapshot it
+    /// measured is still live. Keeping this private is what stops anything
+    /// outside from bypassing that guard and pinning a ranking a
+    /// configuration swap already invalidated.
+    pub(crate) fn set_election(&self, election: Election) {
         *crate::sync::lock(&self.election) = Some(election);
     }
 
     pub fn election(&self) -> Option<Election> {
         crate::sync::lock(&self.election).clone()
+    }
+
+    pub(crate) fn invalidate_election(&self) {
+        *crate::sync::lock(&self.election) = None;
     }
 
     /// Runtime observations, keyed by provider+model. Read-only access for the

@@ -12,6 +12,7 @@ use crate::ir::Capability;
 use crate::policy::{PolicyFallback, PolicyPreference, PolicyRequirements};
 use crate::registry::{Registry, Resolution};
 use std::sync::Arc;
+use std::time::Duration;
 
 fn cfg_with(models: Vec<ModelEntry>) -> AppConfig {
     let mut cfg = AppConfig::default();
@@ -1292,4 +1293,137 @@ fn legacy_scoring_unchanged_without_observations() {
     );
     // Order preserved (stable sort)
     assert_eq!(sorted[0].exposed_id(), "p1-a");
+}
+
+#[test]
+fn every_planned_attempt_binds_the_pre_send_rate_quote() {
+    use crate::billing::{Pricing, RateSource};
+
+    let mut priced = ModelEntry::for_upstream("p1", "priced", Some(ModelTier::Standard));
+    priced.pricing = Some(Pricing::new("USD", 3.0, 15.0));
+    let unpriced = ModelEntry::for_upstream("p2", "unpriced", Some(ModelTier::Standard));
+    let r = reg(cfg_with(vec![priced, unpriced]));
+    let router = Router::new();
+
+    let plan = router
+        .plan(&r, &Resolution::Direct("p1-priced".into()), &[])
+        .unwrap();
+    let quote = plan[0]
+        .rate_quote
+        .as_ref()
+        .expect("a model with a usable price binds a quote before the send");
+    assert_eq!(quote.source, RateSource::ManualFallback);
+    assert!(
+        quote.estimated,
+        "the shared model price is an estimate, not a verified account rate"
+    );
+    assert_eq!(quote.rate_id, None);
+    assert_eq!(quote.pricing.currency, "USD");
+    assert_eq!(quote.pricing.input_per_mtok, 3.0);
+    assert_eq!(
+        plan[0].settled_pricing().map(|p| p.output_per_mtok),
+        Some(15.0)
+    );
+
+    let plan = router
+        .plan(&r, &Resolution::Direct("p2-unpriced".into()), &[])
+        .unwrap();
+    assert!(
+        plan[0].rate_quote.is_none(),
+        "no price resolves to unknown, never to a zero"
+    );
+    assert!(plan[0].settled_pricing().is_none());
+}
+/// A candidate carrying one explicit inference credential; gate identity is
+/// exactly `(provider, account, key.id)`.
+fn keyed_candidate(provider_id: &str, account_id: &str, key_id: &str) -> Candidate {
+    let entry = ModelEntry::for_upstream(provider_id, "model", Some(ModelTier::Standard));
+    let provider = ProviderConfig::new(provider_id, "Provider", ProviderKind::OpenAICompatible);
+    let mut candidate = Candidate::new(&entry, &provider, false);
+    candidate.credential = Some(InferenceCredential {
+        account_id: account_id.into(),
+        key_id: key_id.into(),
+    });
+    candidate
+}
+
+#[test]
+fn a_rekeyed_key_forgets_its_auth_and_rate_limit_cooldowns() {
+    let r = reg(cfg_with(vec![ModelEntry::for_upstream(
+        "p1",
+        "model",
+        Some(ModelTier::Standard),
+    )]));
+    let router = Router::new();
+    let routing = r.config().routing.clone();
+    let first = keyed_candidate("p1", "acct", "first");
+    let second = keyed_candidate("p1", "acct", "second");
+
+    let auth = crate::failure::ClassifiedFailure::from_status(401, "unauthorized".into());
+    router.record_candidate_failure(&first, &auth, &routing);
+    router.note_candidate_rate_limit_wait(&first, Duration::from_secs(120));
+    router.note_candidate_rate_limit_wait(&second, Duration::from_secs(120));
+
+    assert!(router.is_key_gated("p1", "acct", "first"));
+    assert!(router
+        .key_rate_limit_remaining("p1", "acct", "first")
+        .is_some());
+
+    router.invalidate_key_cooldowns("p1", "acct", "first");
+
+    assert!(
+        !router.is_key_gated("p1", "acct", "first"),
+        "the old secret's authentication cooldown is gone"
+    );
+    assert!(
+        router
+            .key_rate_limit_remaining("p1", "acct", "first")
+            .is_none(),
+        "the old secret's 429 window is gone"
+    );
+    assert!(
+        router.is_key_gated("p1", "acct", "second"),
+        "a sibling key keeps its own gate"
+    );
+    assert!(
+        router
+            .key_rate_limit_remaining("p1", "acct", "second")
+            .is_some(),
+        "a sibling key keeps its own 429 window"
+    );
+}
+
+#[test]
+fn a_rekey_does_not_release_an_empty_wallet_latch() {
+    let r = reg(cfg_with(vec![ModelEntry::for_upstream(
+        "p1",
+        "model",
+        Some(ModelTier::Standard),
+    )]));
+    let router = Router::new();
+    let routing = r.config().routing.clone();
+    let first = keyed_candidate("p1", "acct", "first");
+
+    let auth = crate::failure::ClassifiedFailure::from_status(401, "unauthorized".into());
+    router.record_candidate_failure(&first, &auth, &routing);
+    router.hold_empty_wallet("p1", Some("acct"), None);
+
+    router.invalidate_key_cooldowns("p1", "acct", "first");
+
+    assert!(
+        !router.is_key_gated("p1", "acct", "first"),
+        "the secret's gate is forgotten"
+    );
+    assert!(
+        router.is_account_gated("p1", "acct"),
+        "an empty wallet is a fact about the account, not the secret"
+    );
+    assert!(
+        router.wallet_holds().iter().any(|hold| {
+            hold.provider_id == "p1"
+                && hold.account_id.as_deref() == Some("acct")
+                && hold.key_id.is_none()
+        }),
+        "the account latch survives a rekey"
+    );
 }

@@ -69,7 +69,9 @@ pub fn resolve_rate(
                     .as_deref()
                     .is_none_or(|id| Some(id) == key)
                 && rate.expires_at.is_none_or(|expires| now <= expires)
+                && rate.observed_at <= now
                 && rate.pricing.problems().is_empty()
+                && rate.pricing.currency.trim() != "?"
                 && !matches!(rate.source, RateSource::PublicCatalogue)
                 && (rate.group.is_some()
                     || matches!(
@@ -94,7 +96,8 @@ pub fn resolve_rate(
             schema_version: RATE_SCHEMA_VERSION,
             rate_id: Some(rate.id.clone()),
             source: rate.source,
-            estimated: rate.source == RateSource::ManualFallback,
+            estimated: rate.source == RateSource::ManualFallback
+                || !cache_missing(&rate.pricing).is_empty(),
             binding_version: version,
             group: rate.group.clone(),
             pricing: rate.pricing.clone(),
@@ -106,7 +109,7 @@ pub fn resolve_rate(
     model
         .pricing
         .as_ref()
-        .filter(|price| price.problems().is_empty())
+        .filter(|price| price.problems().is_empty() && price.currency.trim() != "?")
         .map(|price| RateQuote {
             schema_version: RATE_SCHEMA_VERSION,
             rate_id: None,

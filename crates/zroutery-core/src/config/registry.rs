@@ -642,6 +642,29 @@ impl ModelEntry {
         crate::config::model::normalize_effort_levels(&self.effort_levels)
     }
 
+    /// The exact provider/model/surface evidence the request gate and public
+    /// catalogue both use. A legacy declaration remains the compatibility
+    /// fallback; evidence for another surface never overrides it.
+    pub fn reasoning_evidence(
+        &self,
+        provider: &ProviderConfig,
+    ) -> Option<&super::reasoning::ReasoningCapability> {
+        self.reasoning_capability.as_ref().filter(|source| {
+            source.schema_version == crate::ir::REASONING_SCHEMA_VERSION
+                && source.provider_id == provider.id
+                && source.upstream_model == self.upstream_model
+                && source.dialect == provider.dialect()
+        })
+    }
+
+    pub fn effective_effort_levels(&self, provider: &ProviderConfig) -> Vec<String> {
+        crate::config::model::normalize_effort_levels(
+            self.reasoning_evidence(provider)
+                .map(|source| source.effort_levels.as_slice())
+                .unwrap_or(&self.effort_levels),
+        )
+    }
+
     /// True when `id` is this model's exposed id or one of its aliases.
     pub fn answers_to(&self, id: &str) -> bool {
         self.exposed_id() == id || self.aliases.iter().any(|a| a == id)

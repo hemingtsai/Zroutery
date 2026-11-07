@@ -632,7 +632,8 @@ fn first_candidate_pricing(state: &AppState, requested: &str) -> Option<(String,
     let resolution = registry.resolve(requested).ok()?;
     let plan = state.router().plan(&registry, &resolution, &[]).ok()?;
     let candidate = plan.into_iter().next()?;
-    Some((candidate.exposed_id, candidate.entry.pricing))
+    let pricing = candidate.settled_pricing().cloned();
+    Some((candidate.exposed_id, pricing))
 }
 
 async fn list_models(State(state): State<Arc<AppState>>) -> Response {

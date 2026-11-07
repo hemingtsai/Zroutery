@@ -35,7 +35,11 @@ fn registry(cfg: AppConfig) -> Registry {
 }
 
 fn model(name: &str, tier: ModelTier) -> ModelEntry {
-    ModelEntry::for_upstream("provider-a", name, Some(tier))
+    let mut model = ModelEntry::for_upstream("provider-a", name, Some(tier));
+    // These cases exercise capability fallback under a default policy, whose
+    // non-zero cost weight requires an explicit usable tariff.
+    model.pricing = Some(zroutery_core::billing::Pricing::new("USD", 1.0, 2.0));
+    model
 }
 
 fn with_vision(mut entry: ModelEntry) -> ModelEntry {

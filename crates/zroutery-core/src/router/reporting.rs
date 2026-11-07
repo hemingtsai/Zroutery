@@ -119,6 +119,27 @@ impl Router {
         self.retain_wallet_providers(&known);
     }
 
+    /// Forget credential-scoped cooldowns for one inference key whose secret
+    /// changed.
+    ///
+    /// Router gates are keyed by `(provider, account, key.id)`, not by the
+    /// secret's reference. A rekey keeps that identity — publication writes the
+    /// replacement under a fresh reference and repoints the key — so evidence
+    /// gathered against the old secret would otherwise keep gating the new
+    /// one: an authentication cooldown would outlive the credential it
+    /// describes, and a key-level 429 window would answer locally for a secret
+    /// the upstream never saw.
+    ///
+    /// Only the credential gates are dropped. An empty-wallet latch is a fact
+    /// about the wallet, not about the secret, so a rekey must not release it;
+    /// the operator releases that after topping up. Sibling keys are separate
+    /// identities and keep their own windows.
+    pub fn invalidate_key_cooldowns(&self, provider: &str, account: &str, key: &str) {
+        let id = (provider.to_string(), account.to_string(), key.to_string());
+        crate::sync::lock(&self.key_gates).remove(&id);
+        crate::sync::lock(&self.key_rate_limit_gates).remove(&id);
+    }
+
     /// Operator-requested retry after replenishing funds or resolving a limit.
     pub fn reset_provider_gate(&self, provider_id: &str) {
         crate::sync::lock(&self.provider_gates).remove(provider_id);

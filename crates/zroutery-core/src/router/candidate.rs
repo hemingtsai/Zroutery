@@ -55,6 +55,25 @@ impl Candidate {
         &self.exposed_id
     }
 
+    /// The tariff this attempt settles under: the rate bound before the send
+    /// when one was resolved, otherwise the model's shared catalogue price.
+    ///
+    /// A bound quote is the stronger fact — it names its source, its binding
+    /// version and whether it is an estimate — so settlement, budgets and the
+    /// execution snapshot all read through here instead of reaching for
+    /// `entry.pricing` and silently ignoring a verified account rate.
+    pub fn settled_pricing(&self) -> Option<&crate::billing::Pricing> {
+        self.rate_quote
+            .as_ref()
+            .map(|quote| &quote.pricing)
+            .or_else(|| {
+                self.entry
+                    .pricing
+                    .as_ref()
+                    .filter(|price| price.problems().is_empty() && price.currency.trim() != "?")
+            })
+    }
+
     /// The identity selected for this candidate before an attempt begins.
     pub fn planned_identity(&self) -> PlannedIdentity {
         PlannedIdentity::new(
