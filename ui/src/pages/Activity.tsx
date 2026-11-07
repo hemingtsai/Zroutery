@@ -9,12 +9,10 @@ import {
 import {
   api,
   compactCount,
-  costText,
   isSideKind,
   money,
   ms,
   tierName,
-  tps,
   totalsText,
   modelName,
   type BudgetScope,
@@ -27,34 +25,40 @@ import {
   type UsageImportPreview,
   type UsageHistorySourceOffer,
   type ImportedUsageView,
-  type UsageSourceView,
   type UsageSourcesView,
   type AppConfig,
-  type UsageAttempt,
-  type DeclaredIdentity,
 } from "../api";
 import type { TaskKind } from "../saveQueue";
 import {
-  Badge,
   Button,
   ConfirmDialog,
-  Disclosure,
-  Drawer,
-  KeyValue,
   PageHead,
-  Section,
-  Segment,
-  Select,
   StatusDot,
   Tabs,
-  num,
   useToast,
   type ConfirmRequest,
 } from "../components";
 import { useI18n } from "../i18n";
+import {
+  Badge,
+  Drawer,
+  Segment,
+  Select,
+  Disclosure,
+  num,
+  Section,
+} from "../components";
 import { useMode } from "../mode";
 import UsageCharts, { HEATMAP_DAYS, type Metric as ChartMetric } from "./UsageCharts";
 import Budgets from "./Budgets";
+import { Kpi } from "./activity/Kpi";
+import { RequestDrawer } from "./activity/RequestDrawer";
+import { TimelineRow } from "./activity/TimelineRow";
+import {
+  selectSourceDays,
+  selectSourceRecords,
+  selectSourceSummary,
+} from "./activity/select";
 
 /**
  * stats.rs (`UNRESOLVED_MODEL_KEY`) files every request that never resolved
@@ -1907,334 +1911,3 @@ export default function Activity({
   );
 }
 
-function TimelineRow({
-  record,
-  onOpen,
-}: {
-  record: RequestRecord;
-  onOpen: () => void;
-}) {
-  const isAuto = isSideKind(record.kind);
-  const { t } = useI18n();
-  const speed = tps(record);
-  return (
-    <button type="button" className="timeline-item" onClick={onOpen}>
-      <span className="timeline-time">
-        {new Date(record.at).toLocaleTimeString([], { hour12: false })}
-      </span>
-      <span className={`timeline-kind ${isAuto ? "auto-mode" : ""}`}>
-        {isAuto ? t("kind.review") : t("kind.main")}
-      </span>
-      <span className="timeline-main-cell">
-        {/*
-         * The dot is the row's only sign of whether the request worked — the
-         * row carries the model, the provider and the latency, and nothing
-         * else said "this one failed". A dot is a colour, and a colour is
-         * invisible to a screen reader, so the outcome is said in words here.
-         */}
-        <StatusDot
-          tone={record.ok ? "ok" : "danger"}
-          state={record.ok ? t("status.succeeded") : t("status.failed")}
-        />
-        <span className="timeline-model">{record.model_name ?? record.resolved_model ?? record.requested_model}</span>
-        {record.provider_name && <span className="timeline-provider">{record.provider_name}</span>}
-        {record.usage_source && (
-          <span className="timeline-provider">
-            {t("activity.source_tag", {
-              source: t(record.usage_source === "8788" ? "activity.source_standby" : "activity.source_local"),
-            })}
-          </span>
-        )}
-        {record.attempts > 1 && (
-          <span className="timeline-provider">{t("activity.tries", { n: record.attempts })}</span>
-        )}
-      </span>
-      {/*
-       * First token and generation speed sit beside the latency because they
-       * are timing figures too. Each renders only when the record can say it
-       * honestly — the same convention as the cost cell: a figure the data
-       * does not support renders nothing, not a dash or a zero (cc-switch's
-       * rule that a missing first-token time means "no speed", never 0). Both
-       * are ok-gated like cost: a failed row's meta reads its status code,
-       * not performance numbers.
-       */}
-      <span className="timeline-meta">
-        <span>{ms(record.latency_ms)}</span>
-        {record.ok && record.stream && record.ttft_ms !== null && (
-          <span>{t("activity.ttft", { v: ms(record.ttft_ms) })}</span>
-        )}
-        {record.ok && speed !== null && <span>{Math.round(speed)} tok/s</span>}
-        {record.ok ? (
-          record.cost ? <span>{costText(record.cost)}</span> : null
-        ) : (
-          <span>{record.status}</span>
-        )}
-      </span>
-    </button>
-  );
-}
-
-function selectSourceSummary(sources: UsageSourcesView, source: "local" | "standby") {
-  if (source === "standby" && sources.standby) return sources.standby.summary;
-  return sources.local.summary;
-}
-
-function taggedRecords(source: UsageSourceView, label: string) {
-  return source.recent.map((record) => ({ ...record, usage_source: label }));
-}
-
-function selectSourceRecords(
-  sources: UsageSourcesView,
-  source: "local" | "standby",
-): RequestRecord[] {
-  if (source === "standby" && sources.standby) return taggedRecords(sources.standby, "8788");
-  return taggedRecords(sources.local, "local");
-}
-
-function selectSourceDays(sources: UsageSourcesView, source: "local" | "standby"): UsageDay[] {
-  if (source === "standby" && sources.standby) return sources.standby.days;
-  return sources.local.days;
-}
-
-/**
- * Cache hit rate as a percent of the cache-inclusive input total: stats.rs
- * documents `cache_read_tokens` as a subset of `input_tokens`, never an
- * addition, so the denominator is the input figure itself. One decimal is
- * kept when it has one — a 99.6% hit must not round into a claimed-perfect
- * 100%, which cc-switch reserves for a true full read of the prompt.
- */
-function cacheHitRate(read: number, input: number): string {
-  const pct = Math.round((read / input) * 1000) / 10;
-  return `${Number.isInteger(pct) ? pct : pct.toFixed(1)}%`;
-}
-
-/** One request's whole story: the three model names, the outcome, the usage. */
-function RequestDrawer({ record, onClose }: { record: RequestRecord; onClose: () => void }) {
-  const { t } = useI18n();
-  const [attempts, setAttempts] = useState<UsageAttempt[] | null>(null);
-  const [attemptError, setAttemptError] = useState<string | null>(null);
-  useEffect(() => {
-    let active = true;
-    setAttempts(null);
-    setAttemptError(null);
-    if (record.usage_source && record.usage_source !== "local") {
-      setAttempts([]);
-      return;
-    }
-    api.usageAttempts(record.id).then((rows) => {
-      if (active) setAttempts(rows);
-    }).catch((error) => {
-      if (active) setAttemptError(String(error));
-    });
-    return () => { active = false; };
-  }, [record.id, record.usage_source]);
-  const declaration = (value: DeclaredIdentity | undefined) => {
-    switch (value?.state) {
-      case "declared": return value.value;
-      case "auto_only": return t("activity.model_auto_only", { value: value.value });
-      case "conflicting": return t("activity.model_conflict", { value: value.value.join(" / ") });
-      default: return t("activity.model_missing");
-    }
-  };
-  return (
-    <Drawer
-      showSaveStatus={false}
-      title={
-        <>
-          <StatusDot
-            tone={record.ok ? "ok" : "danger"}
-            state={record.ok ? t("status.succeeded") : t("status.failed")}
-          />
-          {isSideKind(record.kind) ? t("activity.review") : t("activity.request")}
-        </>
-      }
-      onClose={onClose}
-    >
-      <KeyValue
-        rows={[
-          [t("activity.asked_for"), <span className="mono">{record.requested_model}</span>],
-          [
-            t("activity.answered_by"),
-            record.resolved_model ? (
-              <span className="mono">{record.resolved_model}</span>
-            ) : (
-              t("common.dash")
-            ),
-          ],
-          [t("models.provider"), record.provider_name ?? t("common.dash")],
-          ...(record.usage_source
-            ? [[t("activity.usage_source"), record.usage_source] as [string, ReactNode]]
-            : []),
-          [
-            t("activity.kind"),
-            isSideKind(record.kind) ? t("kind.check_kv") : t("kind.main_kv"),
-          ],
-          [t("activity.inbound_api"), record.ingress],
-          [
-            t("activity.result"),
-            record.ok ? (
-              <Badge tone="ok">200</Badge>
-            ) : (
-              <Badge tone="danger">{record.status}</Badge>
-            ),
-          ],
-          [t("activity.attempts"), <span className="mono">{record.attempts}</span>],
-        ]}
-      />
-
-      {record.error && <p className="field-hint">{record.error}</p>}
-
-      <Section title={t("activity.attempt_route")}>
-        {attemptError ? <p className="field-error" role="status">{attemptError}</p> :
-          attempts === null ? <p className="field-hint">{t("common.working")}</p> :
-          attempts.length === 0 ? <p className="field-hint">{t("activity.attempt_unavailable")}</p> :
-          attempts.map((attempt, index) => (
-            <div className="import-section" key={attempt.id}>
-              <h3>{index + 1}. {attempt.execution.provider_name} · {attempt.state}</h3>
-              <KeyValue rows={[
-                [t("activity.outbound_api"), attempt.execution.upstream_protocol ?? t("activity.model_missing")],
-                [t("activity.planned_model"), attempt.execution.upstream_model],
-                [t("activity.declared_model"), declaration(attempt.declared?.model)],
-                [t("activity.declared_version"), declaration(attempt.declared?.model_version)],
-                [t("accounting.usage_evidence"), attempt.usage_evidence
-                  ? t(`accounting.usage_${attempt.usage_evidence}`)
-                  : t("activity.model_missing")],
-                [t("activity.cost"), attempt.cost ? costText(attempt.cost) : t("activity.unpriced")],
-              ]} />
-            </div>
-          ))}
-        {attempts && attempts.length > 0 && <p className="field-hint">{t("activity.declaration_hint")}</p>}
-      </Section>
-
-      <Section title={t("activity.timing")}>
-        <KeyValue
-          rows={[
-            [t("activity.total"), <span className="mono">{ms(record.latency_ms)}</span>],
-            [
-              t("activity.first_token"),
-              record.stream ? (
-                <span className="mono">{ms(record.ttft_ms)}</span>
-              ) : (
-                t("common.dash")
-              ),
-            ],
-            [t("activity.streamed"), record.stream ? t("common.yes") : t("common.no")],
-          ]}
-        />
-      </Section>
-
-      <Section title={t("activity.usage")}>
-        <KeyValue
-          rows={[
-            [t("activity.input_tokens"), <span className="mono">{num(record.usage.input_tokens)}</span>],
-            [t("activity.output_tokens"), <span className="mono">{num(record.usage.output_tokens)}</span>],
-            [t("activity.cache_read"), <span className="mono">{num(record.usage.cache_read_tokens)}</span>],
-            [t("activity.cache_write"), <span className="mono">{num(record.usage.cache_write_tokens)}</span>],
-            /*
-             * A ratio needs a prompt to be a ratio over: with zero input
-             * tokens there is no rate, so the row stays out entirely instead
-             * of printing 0% — a request without prompt tokens did not miss
-             * the cache, it had nothing to hit.
-             */
-            ...(record.usage.input_tokens > 0
-              ? ([
-                  [
-                    t("activity.cache_hit_rate"),
-                    <span className="mono" title={t("activity.cache_hit_hint")}>
-                      {cacheHitRate(record.usage.cache_read_tokens, record.usage.input_tokens)}
-                    </span>,
-                  ],
-                ] as [ReactNode, ReactNode][])
-              : []),
-            [
-              t("activity.cost"),
-              record.cost ? (
-                <span className="mono">{costText(record.cost)}</span>
-              ) : (
-                t("activity.unpriced")
-              ),
-            ],
-          ]}
-        />
-      </Section>
-      {record.accounting && (
-        <Section title={t("accounting.title")}>
-          <KeyValue rows={[
-            [t("accounting.state"), t(`accounting.${record.accounting.persistence}`)],
-            [t("accounting.known_cost"), totalsText(record.accounting.known_cost)],
-            [t("accounting.unknown_cost"), num(record.accounting.unknown_cost_attempts)],
-            [t("accounting.unknown_usage"), num(record.accounting.unknown_usage_attempts)],
-            [t("accounting.identity"), [record.account_id, record.inference_key_id].filter(Boolean).join(" / ") || t("common.dash")],
-          ]} />
-          <p className="field-hint">{t("accounting.no_replay")}</p>
-        </Section>
-      )}
-    </Drawer>
-  );
-}
-
-/**
- * One figure of the KPI row: a small muted label over a display-size value,
- * separated from its neighbours by a hairline rather than a card.
- *
- * With `onSelect` the cell is a chart controller — a pressed button whose
- * pressed state IS the chart's measure, not a memory of its own. Without one
- * the cell is a readout and renders as plain content: no pointer, no pressed
- * state, no tab stop. A cell that activates and leaves the chart where it
- * stood would promise an action the row cannot perform.
- */
-function Kpi({
-  label,
-  value,
-  title,
-  help,
-  selected,
-  onSelect,
-}: {
-  label: string;
-  value: string;
-  /** The exact figure behind an abbreviated value, on hover. */
-  title?: string;
-  /** A formula note, rendered as a "?" beside the label. */
-  help?: string;
-  selected?: boolean;
-  onSelect?: () => void;
-}) {
-  const body = (
-    <>
-      <span className="kpi-label">
-        {label}
-        {help && (
-          // The "?" carries its own title, which also wins while the pointer
-          // rests on it inside a titled cell — the formula is what a reader
-          // parked on the mark is asking for, not the figure again. It stays
-          // in the accessibility tree on purpose: the formula is content,
-          // and a screen-reader user is the reader least likely to have it
-          // already.
-          <span className="kpi-help" title={help}>
-            ?
-          </span>
-        )}
-      </span>
-      <span className="kpi-value">{value}</span>
-    </>
-  );
-  if (onSelect === undefined) {
-    return (
-      <div className="kpi-cell" title={title}>
-        {body}
-      </div>
-    );
-  }
-  return (
-    <button
-      type="button"
-      className="kpi-cell kpi-trigger"
-      aria-pressed={selected}
-      title={title}
-      onClick={onSelect}
-    >
-      {body}
-    </button>
-  );
-}
