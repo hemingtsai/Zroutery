@@ -1048,6 +1048,32 @@ html[data-skin="md3"] input[type="checkbox"] {
   font-weight: 400;
 }
 
+/*
+ * The shell chrome merges into the surface, the way M3's own top app bar and
+ * navigation drawer do: the page reads as one sheet of surface (#141218 /
+ * #FEF7FF), so the top bar loses its container-low band and its hairline, the
+ * nav drawer's edge hairline goes with it, and the bar grows to the official
+ * 64dp small-top-app-bar height. The title stops being an industrial tracked
+ * caption and becomes title-large — the thing the user's screenshot flagged.
+ */
+[data-skin="md3"] .mainbar {
+  height: 64px;
+  background: transparent;
+  border-bottom-color: transparent;
+}
+[data-skin="md3"] .sidebar {
+  background: transparent;
+  border-right-color: transparent;
+}
+[data-skin="md3"] .mainbar .page-title {
+  font-size: 22px;
+  font-weight: 400;
+  color: var(--text);
+  text-transform: none;
+  letter-spacing: 0;
+}
+
+
 
 /*
  * Fluent — Windows 11 (fluent2.microsoft.design shapes, v9 web states).
