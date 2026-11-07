@@ -265,6 +265,7 @@ export const en = {
   "accounts.remove_title": "Remove account {id}",
   "accounts.remove_body": "The account and its stored key are removed.",
   "accounts.checkin": "Browser check-in",
+  "accounts.checkin_settings": "Check-in settings",
   "accounts.login_path": "Panel sign-in path",
   "accounts.login_path_hint": "NewAPI signs in at /sign-in; older forks use /login.",
   "accounts.panel_url": "Panel address",
@@ -495,6 +496,7 @@ export const en = {
     "Which OpenAI API this endpoint speaks; some Codex gateways only accept Responses.",
   "providers.surface_chat": "Chat Completions",
   "providers.surface_responses": "Responses",
+  "providers.advanced_settings": "Advanced",
   "providers.client_profile": "Client identity",
   "providers.client_profile_hint":
     "Who Zroutery presents as upstream. Claude Code and Codex also forward that client's own headers.",

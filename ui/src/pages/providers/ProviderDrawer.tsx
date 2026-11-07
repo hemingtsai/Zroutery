@@ -29,6 +29,7 @@ const REPAIR_OVERRIDES: { flag: keyof ProviderRepairOverrides; labelKey: TKey }[
 ];
 import {
   Button,
+  Disclosure,
   Drawer,
   Field,
   KeyValue,
@@ -367,84 +368,6 @@ export function ProviderDrawer({
               />
             </Field>
           ) : null}
-          <NumberField
-            label={t("field.timeout")}
-            hint={t("field.timeout_hint")}
-            min={1}
-            integer
-            value={provider.timeout_secs}
-            onCommit={(timeout_secs) =>
-              onUpdate((p) => {
-                p.timeout_secs = timeout_secs ?? 600;
-              })
-            }
-          />
-          <NumberField
-            label={t("field.connect_timeout")}
-            min={1}
-            integer
-            value={provider.connect_timeout_secs}
-            onCommit={(connect_timeout_secs) =>
-              onUpdate((p) => {
-                p.connect_timeout_secs = connect_timeout_secs ?? 15;
-              })
-            }
-          />
-          <Field label={t("providers.proxy_policy")} hint={t("providers.proxy_policy_hint")}>
-            <Select
-              ariaLabel={t("providers.proxy_policy")}
-              value={provider.bypass_proxy == null ? "inherit" : provider.bypass_proxy ? "direct" : "system"}
-              onChange={(value) => onUpdate((p) => {
-                p.bypass_proxy = value === "inherit" ? null : value === "direct";
-              })}
-              options={[
-                { value: "inherit", label: t("providers.proxy_inherit") },
-                { value: "direct", label: t("providers.proxy_direct") },
-                { value: "system", label: t("providers.proxy_system") },
-              ]}
-            />
-          </Field>
-          {provider.kind === "anthropic" && (
-            <>
-              {/*
-                The dated versions are mutually exclusive wire contracts, not
-                free-text: 2026-10-21 removes the sampling parameters and
-                confines documents, and an arbitrary string the upstream has
-                never met answers 400 for a reason the operator cannot see. Two
-                segments — the three-year baseline and the 2026 revision — so
-                the choice can only name a shape the encoder actually
-                implements.
-              */}
-              <Field label={t("providers.f_version")} hint={t("providers.f_version_hint")}>
-                <Segment
-                  ariaLabel={t("providers.f_version")}
-                  value={provider.anthropic_version ?? "2023-06-01"}
-                  onChange={(version) =>
-                    onUpdate((p) => {
-                      p.anthropic_version = version === "2023-06-01" ? null : version;
-                    })
-                  }
-                  options={[
-                    { value: "2023-06-01", label: "2023-06-01" },
-                    { value: "2026-10-21", label: "2026-10-21" },
-                  ]}
-                />
-              </Field>
-              <TextField
-                label={t("providers.f_beta")}
-                hint={t("providers.f_beta_hint")}
-                value={provider.extra_headers["anthropic-beta"] ?? ""}
-                placeholder="context-management-2025-06-27"
-                onCommit={(v) =>
-                  onUpdate((p) => {
-                    const trimmed = v.trim();
-                    if (trimmed) p.extra_headers["anthropic-beta"] = trimmed;
-                    else delete p.extra_headers["anthropic-beta"];
-                  })
-                }
-              />
-            </>
-          )}
         </div>
         <div className="grid-two">
           <Toggle
@@ -456,49 +379,127 @@ export function ProviderDrawer({
               })
             }
           />
-          <Field
-            label={t("providers.client_profile")}
-            hint={
-              isOpencodeKind(provider.kind)
-                ? t("providers.client_profile_locked_hint")
-                : t("providers.client_profile_hint")
-            }
-          >
-            <Select
-              ariaLabel={t("providers.client_profile")}
-              value={provider.client_profile ?? "auto"}
-              // The OpenCode gateway checks a fixed fingerprint, so config.rs
-              // refuses any other profile on these kinds. Offering the others
-              // here would only offer a choice that fails to save.
-              disabled={isOpencodeKind(provider.kind)}
-              onChange={(client_profile) =>
-                onUpdate((p) => {
-                  p.client_profile = client_profile;
-                })
-              }
-              options={
-                isOpencodeKind(provider.kind)
-                  ? CLIENT_PROFILES.filter((c) => c.id === "opencode_cli").map((c) => ({
-                      value: c.id,
-                      label: t(c.labelKey),
-                    }))
-                  : clientProfilesFor(snapshot.opencode_available).map((c) => ({ value: c.id, label: t(c.labelKey) }))
-              }
-            />
-          </Field>
-          {provider.kind === "anthropic" && (
-            <Toggle
-              label={t("providers.bearer_auth")}
-              hint={t("providers.bearer_auth_hint")}
-              checked={provider.bearer_auth}
-              onChange={(bearer_auth) =>
-                onUpdate((p) => {
-                  p.bearer_auth = bearer_auth;
-                })
-              }
-            />
-          )}
         </div>
+        {/*
+          * The advanced fold: timeouts, proxy, client identity and the
+          * Anthropic wire contract are fields most providers never need to
+          * touch — the defaults are correct for the overwhelming majority.
+          * Collapsed so the drawer opens showing what the operator came for.
+          */}
+        <Disclosure title={t("providers.advanced_settings")}>
+          <div className="controls">
+            <NumberField
+              label={t("field.timeout")}
+              hint={t("field.timeout_hint")}
+              min={1}
+              integer
+              value={provider.timeout_secs}
+              onCommit={(timeout_secs) =>
+                onUpdate((p) => {
+                  p.timeout_secs = timeout_secs ?? 600;
+                })
+              }
+            />
+            <NumberField
+              label={t("field.connect_timeout")}
+              min={1}
+              integer
+              value={provider.connect_timeout_secs}
+              onCommit={(connect_timeout_secs) =>
+                onUpdate((p) => {
+                  p.connect_timeout_secs = connect_timeout_secs ?? 15;
+                })
+              }
+            />
+            <Field label={t("providers.proxy_policy")} hint={t("providers.proxy_policy_hint")}>
+              <Select
+                ariaLabel={t("providers.proxy_policy")}
+                value={provider.bypass_proxy == null ? "inherit" : provider.bypass_proxy ? "direct" : "system"}
+                onChange={(value) => onUpdate((p) => {
+                  p.bypass_proxy = value === "inherit" ? null : value === "direct";
+                })}
+                options={[
+                  { value: "inherit", label: t("providers.proxy_inherit") },
+                  { value: "direct", label: t("providers.proxy_direct") },
+                  { value: "system", label: t("providers.proxy_system") },
+                ]}
+              />
+            </Field>
+            {provider.kind === "anthropic" && (
+              <>
+                <Field label={t("providers.f_version")} hint={t("providers.f_version_hint")}>
+                  <Segment
+                    ariaLabel={t("providers.f_version")}
+                    value={provider.anthropic_version ?? "2023-06-01"}
+                    onChange={(version) =>
+                      onUpdate((p) => {
+                        p.anthropic_version = version === "2023-06-01" ? null : version;
+                      })
+                    }
+                    options={[
+                      { value: "2023-06-01", label: "2023-06-01" },
+                      { value: "2026-10-21", label: "2026-10-21" },
+                    ]}
+                  />
+                </Field>
+                <TextField
+                  label={t("providers.f_beta")}
+                  hint={t("providers.f_beta_hint")}
+                  value={provider.extra_headers["anthropic-beta"] ?? ""}
+                  placeholder="context-management-2025-06-27"
+                  onCommit={(v) =>
+                    onUpdate((p) => {
+                      const trimmed = v.trim();
+                      if (trimmed) p.extra_headers["anthropic-beta"] = trimmed;
+                      else delete p.extra_headers["anthropic-beta"];
+                    })
+                  }
+                />
+              </>
+            )}
+          </div>
+          <div className="grid-two">
+            <Field
+              label={t("providers.client_profile")}
+              hint={
+                isOpencodeKind(provider.kind)
+                  ? t("providers.client_profile_locked_hint")
+                  : t("providers.client_profile_hint")
+              }
+            >
+              <Select
+                ariaLabel={t("providers.client_profile")}
+                value={provider.client_profile ?? "auto"}
+                disabled={isOpencodeKind(provider.kind)}
+                onChange={(client_profile) =>
+                  onUpdate((p) => {
+                    p.client_profile = client_profile;
+                  })
+                }
+                options={
+                  isOpencodeKind(provider.kind)
+                    ? CLIENT_PROFILES.filter((c) => c.id === "opencode_cli").map((c) => ({
+                        value: c.id,
+                        label: t(c.labelKey),
+                      }))
+                    : clientProfilesFor(snapshot.opencode_available).map((c) => ({ value: c.id, label: t(c.labelKey) }))
+                }
+              />
+            </Field>
+            {provider.kind === "anthropic" && (
+              <Toggle
+                label={t("providers.bearer_auth")}
+                hint={t("providers.bearer_auth_hint")}
+                checked={provider.bearer_auth}
+                onChange={(bearer_auth) =>
+                  onUpdate((p) => {
+                    p.bearer_auth = bearer_auth;
+                  })
+                }
+              />
+            )}
+          </div>
+        </Disclosure>
       </Section>
       ) : (
         /* Simple mode keeps the one switch that decides whether this provider

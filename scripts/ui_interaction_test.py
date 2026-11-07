@@ -3157,11 +3157,24 @@ def case_ui14_a_select_inside_a_drawer_keeps_its_focus(devtools) -> list[str]:
     devtools.click_selector(".page .list-row")
     devtools.wait_for("Boolean(document.querySelector('.drawer'))", "the provider drawer")
 
+    # The provider drawer opens with the fields most providers need; the
+    # select that matters for this case lives in the advanced fold, whose body
+    # is mounted but inert while collapsed. Open it, then drive a dropdown that
+    # is actually on screen.
+    devtools.evaluate(
+        """
+        (() => {
+          const closed = document.querySelector('.drawer .disclosure-head[aria-expanded="false"]');
+          if (closed) closed.click();
+        })()
+        """
+    )
     # Open a dropdown that lives inside the drawer.
     point = devtools.evaluate(
         """
         (() => {
-          const trigger = document.querySelector('.drawer [role="combobox"]');
+          const trigger = [...document.querySelectorAll('.drawer [role="combobox"]')]
+            .find((el) => !el.closest('[inert]') && el.offsetParent !== null);
           if (!trigger) return null;
           // The provider drawer is taller than the window; a coordinate
           // measured before scrolling lands on whatever the control's

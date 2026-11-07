@@ -20,6 +20,7 @@ import {
   Button,
   CompactNumber,
   ConfirmDialog,
+  Disclosure,
   Empty,
   Field,
   NumberField,
@@ -663,55 +664,57 @@ export function AccountSection({
                     })
                   }
                 />
-                <NumberField
-                  label={t("accounts.interval")}
-                  hint={t("accounts.interval_hint")}
-                  min={1}
-                  integer
-                  value={a.maintenance.checkin_interval_secs}
-                  onCommit={(v) =>
-                    edit(a.account_id, (d) => {
-                      d.maintenance.checkin_interval_secs = v;
-                    })
-                  }
-                />
-                <TextField
-                  label={t("accounts.panel_url")}
-                  hint={t("accounts.panel_url_hint")}
-                  value={a.maintenance.panel_url ?? ""}
-                  placeholder="https://panel.example"
-                  wide
-                  onCommit={(v) =>
-                    edit(a.account_id, (d) => {
-                      d.maintenance.panel_url = v.trim() || null;
-                    })
-                  }
-                />
-                <TextField
-                  label={t("accounts.new_api_user")}
-                  hint={t("accounts.new_api_user_hint")}
-                  value={a.maintenance.new_api_user ?? ""}
-                  placeholder="354394"
-                  onCommit={(v) =>
-                    edit(a.account_id, (d) => {
-                      d.maintenance.new_api_user = v.trim() || null;
-                    })
-                  }
-                />
-                <TextField
-                  label={t("accounts.login_path")}
-                  hint={t("accounts.login_path_hint")}
-                  value={a.maintenance.login_path ?? ""}
-                  placeholder="/sign-in"
-                  wide
-                  onCommit={(v) =>
-                    edit(a.account_id, (d) => {
-                      d.maintenance.login_path = v.trim() || null;
-                    })
-                  }
-                />
-                {a.maintenance.checkin_enabled && (
-                  <>
+              </div>
+              {a.maintenance.checkin_enabled && (
+                <Disclosure title={t("accounts.checkin_settings")}>
+                  <div className="controls">
+                    <NumberField
+                      label={t("accounts.interval")}
+                      hint={t("accounts.interval_hint")}
+                      min={1}
+                      integer
+                      value={a.maintenance.checkin_interval_secs}
+                      onCommit={(v) =>
+                        edit(a.account_id, (d) => {
+                          d.maintenance.checkin_interval_secs = v;
+                        })
+                      }
+                    />
+                    <TextField
+                      label={t("accounts.panel_url")}
+                      hint={t("accounts.panel_url_hint")}
+                      value={a.maintenance.panel_url ?? ""}
+                      placeholder="https://panel.example"
+                      wide
+                      onCommit={(v) =>
+                        edit(a.account_id, (d) => {
+                          d.maintenance.panel_url = v.trim() || null;
+                        })
+                      }
+                    />
+                    <TextField
+                      label={t("accounts.new_api_user")}
+                      hint={t("accounts.new_api_user_hint")}
+                      value={a.maintenance.new_api_user ?? ""}
+                      placeholder="354394"
+                      onCommit={(v) =>
+                        edit(a.account_id, (d) => {
+                          d.maintenance.new_api_user = v.trim() || null;
+                        })
+                      }
+                    />
+                    <TextField
+                      label={t("accounts.login_path")}
+                      hint={t("accounts.login_path_hint")}
+                      value={a.maintenance.login_path ?? ""}
+                      placeholder="/sign-in"
+                      wide
+                      onCommit={(v) =>
+                        edit(a.account_id, (d) => {
+                          d.maintenance.login_path = v.trim() || null;
+                        })
+                      }
+                    />
                     <TextField
                       label={t("accounts.checkin_path")}
                       hint={t("accounts.checkin_path_hint")}
@@ -735,9 +738,9 @@ export function AccountSection({
                         })
                       }
                     />
-                  </>
-                )}
-              </div>
+                  </div>
+                </Disclosure>
+              )}
             </div>
           ))}
         </div>
