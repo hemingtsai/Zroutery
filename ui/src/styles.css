@@ -1003,6 +1003,14 @@ html[data-skin="md3"] input[type="checkbox"] {
   border-radius: 12px;
   background: var(--surface-muted);
 }
+/* Cards in a tab panel: the panel is a plain block, and borderless flat
+   sections could stack touched — bordered cards cannot. One column, one
+   gap; the strip-to-panel distance is the tabs' own 16px. */
+[data-skin="md3"] .tab-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
 [data-skin="md3"] .section .section,
 [data-skin="md3"] .drawer .section,
 [data-skin="md3"] .confirm .section,
@@ -1376,6 +1384,13 @@ html[data-skin="fluent"] input[type="checkbox"] {
   background: var(--card-fill);
   border: 1px solid var(--card-stroke);
   box-shadow: var(--card-shadow);
+}
+/* The same panel rule as the MD3 sheet: bordered cards cannot stack
+   border-to-border — that was the "挤成一团" on the settings page. */
+[data-skin="fluent"] .tab-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
 }
 [data-skin="fluent"] .section .section,
 [data-skin="fluent"] .drawer .section,
