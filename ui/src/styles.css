@@ -303,8 +303,8 @@
   --hover: color-mix(in srgb, var(--text) 8%, transparent);
   --selected: color-mix(in srgb, var(--text) 12%, transparent);
 
-  --line: #79747e;
-  --line-muted: #cac4d0;
+  --line: #747790;
+  --line-muted: #c3c7cf;
   /*
    * v3.2 REVERTED the accent-following derivations for the containers and
    * these lines: layered CSS color-mix "derivations" (tone-limited primary,
@@ -329,8 +329,8 @@
   --text-2: #49454f;
   --muted: #49454f;
 
-  --primary: #6750a4;
-  --primary: var(--system-accent, #6750a4);
+  --primary: #0b57d0;
+  --primary: var(--system-accent, #0b57d0);
   /* The official filled-button hover — one formula for fallback and accent
      alike, because both speak the same grammar: the state layer is the *on*
      colour at 8% over the container, so a light-theme button gets lighter
@@ -341,10 +341,10 @@
   --on-primary: #ffffff;
   --on-primary: var(--system-accent-fg, #ffffff);
 
-  --primary-container: #eaddff;
-  --on-primary-container: #21005d;
-  --secondary-container: #e8def8;
-  --on-secondary-container: #1d192b;
+  --primary-container: #d3e3fd;
+  --on-primary-container: #041e49;
+  --secondary-container: #dbe2f9;
+  --on-secondary-container: #141b2c;
   --error-container: #f9dedc;
   --on-error-container: #410e0b;
 
@@ -382,8 +382,8 @@
   --shadow-3: 0 1px 3px rgba(0, 0, 0, 0.3), 0 4px 8px 3px rgba(0, 0, 0, 0.15);
 
   /* Thumbs from the line pair: outline-variant at rest, outline grabbed. */
-  --scrollbar-thumb: #cac4d0;
-  --scrollbar-thumb-hover: #79747e;
+  --scrollbar-thumb: #c3c7cf;
+  --scrollbar-thumb-hover: #747790;
 }
 
 /*
@@ -407,8 +407,8 @@
   --hover: color-mix(in srgb, var(--text) 8%, transparent);
   --selected: color-mix(in srgb, var(--text) 12%, transparent);
 
-  --line: #938f99;
-  --line-muted: #49454f;
+  --line: #8e9099;
+  --line-muted: #44474e;
   /* v3.2: the accent-following line derivation was reverted with the light
      sheet's — see the note there. */
 
@@ -416,7 +416,7 @@
   --text-2: #cac4d0;
   --muted: #cac4d0;
 
-  --primary: #d0bcff;
+  --primary: #a8c7fa;
   /* Dark inverts the tone, it does not take the raw accent: a saturated
      accent on the near-black surface glows (the classic dark-mode halo). The
      inversion is MD3's own baseline rule — light #6750a4 becomes dark
@@ -427,22 +427,22 @@
      #8cc1ff is 7.80:1; the 8% on-primary hover state layer below only
      darkens the fill, so the pair can only widen; the tonal button 7.95:1,
      ghost 8.6:1. */
-  --primary: color-mix(in srgb, var(--system-accent, #6750a4) 45%, #ffffff);
+  --primary: color-mix(in srgb, var(--system-accent, #0b57d0) 45%, #ffffff);
   /* The official filled-button hover — the same on-colour state layer as
      light: 8% of the dark ink over the tone-80 container, the direction the
      M3 dark state layer takes (darker under the pointer, where light theme
      gets lighter). One formula covers fallback and accent. */
   --primary-hover: color-mix(in srgb, var(--on-primary) 8%, var(--primary));
-  --on-primary: #381e72;
-  --on-primary: color-mix(in srgb, var(--system-accent, #6750a4) 15%, #1d1b20);
+  --on-primary: #062e6f;
+  --on-primary: color-mix(in srgb, var(--system-accent, #0b57d0) 15%, #1d1b20);
 
   --surface-high: #2b2930;
   --container-highest: #36343b;
 
-  --primary-container: #4f378b;
-  --on-primary-container: #eaddff;
-  --secondary-container: #4a4458;
-  --on-secondary-container: #e8def8;
+  --primary-container: #0842a0;
+  --on-primary-container: #d3e3fd;
+  --secondary-container: #3f4759;
+  --on-secondary-container: #dae2f9;
   --error-container: #8c1d18;
   --on-error-container: #f2b8b5;
 
@@ -450,7 +450,7 @@
      dark. Official component token values. */
   --inverse-surface: #e6e0e9;
   --inverse-on-surface: #322f35;
-  --inverse-primary: #6750a4;
+  --inverse-primary: #a8c7fa;
 
   /* ok/warn, dark: the same custom pair as the light sheet, stepped to
      tones 80/30 the way the baseline steps its own containers (the dark
@@ -466,8 +466,8 @@
   --danger: #f2b8b5;
   --danger-bg: #8c1d18;
 
-  --scrollbar-thumb: #49454f;
-  --scrollbar-thumb-hover: #938f99;
+  --scrollbar-thumb: #44474e;
+  --scrollbar-thumb-hover: #8e9099;
 
   /* Dark elevation is surface tint, not shadow (m3.material.io/elevation):
      "surfaces use a surface tint color overlaid at a set opacity". The
