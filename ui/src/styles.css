@@ -876,15 +876,15 @@ html[data-skin="md3"] input[type="checkbox"] {
 [data-skin="md3"] .kpi-row {
   column-gap: 12px;
 }
-[data-skin="md3"] .kpi-cell {
+[data-skin="md3"] .kpi-row .kpi-cell {
   border-left: none;
   border-radius: 12px;
   background: var(--surface);
 }
-[data-skin="md3"] .kpi-cell:first-child {
+[data-skin="md3"] .kpi-row .kpi-cell:first-child {
   padding-left: 24px;
 }
-[data-skin="md3"] .kpi-cell.kpi-trigger:hover {
+[data-skin="md3"] .kpi-row .kpi-cell.kpi-trigger:hover {
   background: color-mix(in srgb, var(--text) 8%, var(--surface));
 }
 
@@ -1017,7 +1017,7 @@ html[data-skin="md3"] input[type="checkbox"] {
 
 /* The KPI tiles read as elevated cards on the filled card: the official
    elevated-card recipe (surface-container-low fill + the level-1 shadow). */
-[data-skin="md3"] .kpi-cell {
+[data-skin="md3"] .kpi-row .kpi-cell {
   box-shadow: var(--shadow-1);
 }
 /* The chart controller's selected state: the industrial 2px underline lives
@@ -1025,16 +1025,16 @@ html[data-skin="md3"] input[type="checkbox"] {
    grammar as every other M3 selection here — the secondary-container fill
    with its own ink — and the hover layers that ink instead of washing the
    fill away. */
-[data-skin="md3"] .kpi-trigger[aria-pressed="true"] {
+[data-skin="md3"] .kpi-row .kpi-trigger[aria-pressed="true"] {
   border-bottom-color: transparent;
   background: var(--secondary-container);
   color: var(--on-secondary-container);
 }
-[data-skin="md3"] .kpi-trigger[aria-pressed="true"] .kpi-label,
-[data-skin="md3"] .kpi-trigger[aria-pressed="true"] .kpi-value {
+[data-skin="md3"] .kpi-row .kpi-trigger[aria-pressed="true"] .kpi-label,
+[data-skin="md3"] .kpi-row .kpi-trigger[aria-pressed="true"] .kpi-value {
   color: inherit;
 }
-[data-skin="md3"] .kpi-trigger[aria-pressed="true"]:hover {
+[data-skin="md3"] .kpi-row .kpi-trigger[aria-pressed="true"]:hover {
   background: color-mix(in srgb, var(--on-secondary-container) 8%, var(--secondary-container));
 }
 
@@ -1282,7 +1282,7 @@ html[data-skin="fluent"] input[type="checkbox"] {
 [data-skin="fluent"] .kpi-row {
   column-gap: 12px;
 }
-[data-skin="fluent"] .kpi-cell {
+[data-skin="fluent"] .kpi-row .kpi-cell {
   border-left: none;
   border-radius: var(--radius);
   /* The tiles sit on the section card now, so they take the card fill — one
@@ -1295,17 +1295,17 @@ html[data-skin="fluent"] input[type="checkbox"] {
    the selection is the skin's own selection register — Background1Selected,
    the fill a WinUI collection uses — with the hover keeping it rather than
    washing it back to the rest fill. */
-[data-skin="fluent"] .kpi-trigger[aria-pressed="true"] {
+[data-skin="fluent"] .kpi-row .kpi-trigger[aria-pressed="true"] {
   border-bottom-color: transparent;
   background: var(--selected);
 }
-[data-skin="fluent"] .kpi-trigger[aria-pressed="true"]:hover {
+[data-skin="fluent"] .kpi-row .kpi-trigger[aria-pressed="true"]:hover {
   background: var(--selected);
 }
-[data-skin="fluent"] .kpi-cell:first-child {
+[data-skin="fluent"] .kpi-row .kpi-cell:first-child {
   padding-left: 24px;
 }
-[data-skin="fluent"] .kpi-cell.kpi-trigger:hover {
+[data-skin="fluent"] .kpi-row .kpi-cell.kpi-trigger:hover {
   box-shadow: var(--shadow-toast);
 }
 
