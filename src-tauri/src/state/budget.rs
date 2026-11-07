@@ -19,6 +19,24 @@ impl Desktop {
         }
     }
 
+    /// Daily totals for the Activity page's charts.
+    ///
+    /// Exposed on `Desktop` rather than only through the Tauri command so the
+    /// same reading has a second caller: the live preview server answers the
+    /// window from the same ledger, and a browser page that computed its own
+    /// totals from `recent` would disagree with the window's heatmap.
+    pub fn usage_days(&self, days: u32) -> Result<Vec<zroutery_core::stats::UsageDay>, String> {
+        self.core.stats().usage_days(days)
+    }
+
+    /// A page of durable usage history, as the Activity export and filters see it.
+    pub fn query_usage_history(
+        &self,
+        query: &zroutery_core::stats::UsageHistoryQuery,
+    ) -> Result<zroutery_core::stats::UsageHistoryPage, String> {
+        self.core.stats().query_history(query)
+    }
+
     /// Hold an election and pin the result. Costs one tiny request per model, which
     /// is why it happens on demand or at startup and never on a timer.
     pub async fn hold_election(&self) -> Election {

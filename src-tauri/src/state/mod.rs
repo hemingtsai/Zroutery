@@ -36,6 +36,7 @@ pub struct Desktop {
     pub(crate) core: Arc<AppState>,
     pub(crate) secrets: Arc<KeychainSecrets>,
     pub(crate) config_dir: PathBuf,
+    pub(crate) runtime_path: PathBuf,
     pub(super) server: AsyncMutex<Option<ServerHandle>>,
     /// Serialises configuration changes and listener migration, so a save that
     /// has to rebind cannot interleave with a concurrent stop or save.
@@ -51,6 +52,9 @@ pub struct Desktop {
     /// Durable runtime data shared with the headless instance: usage history,
     /// wallet latches and the last balance seen for each provider.
     pub(crate) runtime: Option<Arc<zroutery_core::runtime_store::RuntimeStore>>,
+    /// Optional, read-only usage view into the local development standby.
+    pub(crate) standby_usage: Mutex<Option<Arc<zroutery_core::runtime_store::UsageReader>>>,
+    pub(crate) history_imports: crate::history_imports::HistoryImports,
     /// The window layer's live view of the lifecycle settings: the close
     /// handler reads this synchronously, `apply_config` keeps it current.
     pub(crate) window_rules: Mutex<WindowRules>,
@@ -181,6 +185,38 @@ mod views;
 
 #[cfg(test)]
 mod tests;
+
+impl Desktop {
+    pub(crate) fn standby_usage_reader(
+        &self,
+    ) -> Option<Arc<zroutery_core::runtime_store::UsageReader>> {
+        helpers::lock(&self.standby_usage).clone()
+    }
+
+    pub(crate) fn set_standby_usage_reader(
+        &self,
+        reader: Arc<zroutery_core::runtime_store::UsageReader>,
+    ) -> Result<(), String> {
+        let local = self
+            .runtime_path
+            .canonicalize()
+            .map_err(|error| format!("cannot resolve the local usage database: {error}"))?;
+        let standby = reader
+            .path()
+            .canonicalize()
+            .map_err(|error| error.to_string())?;
+        if local == standby {
+            return Err("the local usage database cannot also be selected as the standby".into());
+        }
+        std::fs::write(
+            self.config_dir.join("standby-usage-db.path"),
+            reader.path().to_string_lossy().as_bytes(),
+        )
+        .map_err(|error| format!("cannot save the standby usage database path: {error}"))?;
+        *helpers::lock(&self.standby_usage) = Some(reader);
+        Ok(())
+    }
+}
 
 pub use helpers::{needs_rebind, server_addr};
 pub use takeover::{ClientSetupOptions, ClientSetupPreview};

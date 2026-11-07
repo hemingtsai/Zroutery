@@ -31,6 +31,28 @@ impl Desktop {
             .map(std::path::PathBuf::from)
             .unwrap_or_else(|| config_dir.join("runtime.sqlite3"));
         let runtime = zroutery_core::runtime_store::RuntimeStore::open(&runtime_path).map(Arc::new);
+        let saved_standby_path = std::fs::read_to_string(config_dir.join("standby-usage-db.path"))
+            .ok()
+            .map(|path| PathBuf::from(path.trim()));
+        let standby_path = saved_standby_path.unwrap_or_else(|| {
+            std::env::var_os("LOCALAPPDATA")
+                .map(PathBuf::from)
+                .map(|root| {
+                    root.join("Zroutery")
+                        .join("standby-8788")
+                        .join("runtime.sqlite3")
+                })
+                .unwrap_or_else(|| config_dir.join("standby-8788").join("runtime.sqlite3"))
+        });
+        let same_database = runtime_path
+            .canonicalize()
+            .ok()
+            .zip(standby_path.canonicalize().ok())
+            .is_some_and(|(local, standby)| local == standby);
+        let standby_usage = (!same_database)
+            .then(|| zroutery_core::runtime_store::UsageReader::open(&standby_path).ok())
+            .flatten()
+            .map(Arc::new);
         let mut startup_warning = None;
         let mut balances = BTreeMap::new();
         let runtime = match runtime {
@@ -82,12 +104,15 @@ impl Desktop {
             core,
             secrets,
             config_dir,
+            runtime_path,
             server: AsyncMutex::new(None),
             migration: AsyncMutex::new(()),
             prober: Box::new(TcpListenerProber),
             warning: Mutex::new(startup_warning),
             balances: Mutex::new(balances),
             runtime,
+            standby_usage: Mutex::new(standby_usage),
+            history_imports: crate::history_imports::HistoryImports::default(),
             window_rules: Mutex::new(window_rules),
             #[cfg(feature = "account-maint")]
             checkin,
@@ -107,6 +132,12 @@ impl Desktop {
         if let Err(error) = desktop.recover_bindings() {
             desktop.set_warning(Some(format!(
                 "account binding recovery needs attention: {error}"
+            )));
+        }
+        #[cfg(feature = "account")]
+        if let Err(error) = desktop.recover_inference_publications() {
+            desktop.set_warning(Some(format!(
+                "inference credential recovery needs attention: {error}"
             )));
         }
         if let Err(error) = desktop.recover_client_files() {

@@ -73,7 +73,7 @@ impl Desktop {
     }
 
     /// Where a cutover stands, and whether the way back is open.
-    pub(crate) fn migration_status(&self) -> MigrationStatusView {
+    pub fn migration_status(&self) -> MigrationStatusView {
         let executor = match self.migration_executor() {
             Ok(executor) => executor,
             Err(reason) => {
@@ -120,7 +120,7 @@ impl Desktop {
     /// Every agent is listed, including the ones that cannot be cut over, so an
     /// unsupported client renders as an explained refusal rather than silently
     /// vanishing -- the same reason `Takeover` keeps Gemini in its row.
-    pub(crate) fn migration_previews(&self) -> Vec<CutoverPreview> {
+    pub fn migration_previews(&self) -> Vec<CutoverPreview> {
         let (base_url, port) = self.migration_gateway();
         AgentType::ALL
             .iter()

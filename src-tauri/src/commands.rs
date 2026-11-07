@@ -94,6 +94,401 @@ pub async fn query_usage_history(
         .map_err(|error| error.to_string())?
 }
 
+#[tauri::command]
+pub async fn get_usage_attempts(
+    desktop: State<'_, Arc<Desktop>>,
+    request_id: String,
+) -> Cmd<Vec<zroutery_core::accounting::AttemptFact>> {
+    let desktop = Arc::clone(desktop.inner());
+    tauri::async_runtime::spawn_blocking(move || {
+        desktop
+            .runtime
+            .as_ref()
+            .ok_or("runtime storage is unavailable")?
+            .usage_attempts(&request_id)
+    })
+    .await
+    .map_err(|error| error.to_string())?
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct UsageSourceView {
+    pub source_name: String,
+    pub revision: i64,
+    pub summary: zroutery_core::stats::StatsSummary,
+    pub recent: Vec<zroutery_core::stats::RequestRecord>,
+    pub days: Vec<zroutery_core::stats::UsageDay>,
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct UsageSourcesView {
+    pub local: UsageSourceView,
+    pub standby: Option<UsageSourceView>,
+}
+
+#[tauri::command]
+pub async fn get_usage_sources(
+    desktop: State<'_, Arc<Desktop>>,
+    days: u32,
+) -> Cmd<UsageSourcesView> {
+    let desktop = Arc::clone(desktop.inner());
+    tauri::async_runtime::spawn_blocking(move || {
+        let stats = desktop.core.stats();
+        /*
+         * Imported history is part of this device's history: it was made here,
+         * by another tool, and the Activity page is where a person looks for
+         * it. The headline and the day series therefore carry both stores.
+         *
+         * What is added is only what the imported store measures. Its per-day
+         * and per-request rows are already deduplicated by source, instance
+         * and entity id, so a re-import cannot make the figures grow; the
+         * client and model breakdowns stay the live ledger's own and are
+         * labelled as such, because the imported store carries no request kind
+         * or attribution evidence to build an honest split from.
+         */
+        let mut summary = stats.summary();
+        let mut days_rows = stats.usage_days(days)?;
+        if let Some(store) = desktop.runtime.as_ref() {
+            let totals = store.imported_totals(None, None)?;
+            let first_day = store
+                .imported_first_day()?
+                .as_deref()
+                .and_then(|day| chrono::NaiveDate::parse_from_str(day, "%Y-%m-%d").ok());
+            summary.add_imported(&totals, first_day);
+            let today = chrono::Local::now().date_naive();
+            let first = today - chrono::Duration::days(i64::from(days.clamp(1, 400)) - 1);
+            days_rows = zroutery_core::stats::merge_imported_days(
+                days_rows,
+                store.imported_days(first, today)?,
+            );
+        }
+        let local = UsageSourceView {
+            source_name: "This device".into(),
+            revision: 0,
+            summary,
+            recent: stats.recent(200),
+            days: days_rows,
+        };
+        let reader = desktop.standby_usage_reader();
+        let standby = reader
+            .map(|reader| {
+                let snapshot = reader.snapshot(days)?;
+                Ok::<UsageSourceView, String>(UsageSourceView {
+                    source_name: snapshot.source_name,
+                    revision: snapshot.revision,
+                    summary: snapshot.summary,
+                    recent: snapshot.recent,
+                    days: snapshot.days,
+                })
+            })
+            .transpose()?;
+        Ok(UsageSourcesView { local, standby })
+    })
+    .await
+    .map_err(|error| error.to_string())?
+}
+
+#[tauri::command]
+pub async fn choose_standby_usage_database(
+    app: AppHandle,
+    window: tauri::WebviewWindow,
+    desktop: State<'_, Arc<Desktop>>,
+) -> Cmd<Option<String>> {
+    use tauri_plugin_dialog::DialogExt;
+    let (send, receive) = tokio::sync::oneshot::channel();
+    app.dialog()
+        .file()
+        .set_parent(&window)
+        .add_filter("SQLite database", &["sqlite3", "sqlite", "db"])
+        .pick_file(move |path| {
+            let _ = send.send(path);
+        });
+    let Some(path) = receive.await.map_err(|error| error.to_string())? else {
+        return Ok(None);
+    };
+    let path = path.into_path().map_err(|error| error.to_string())?;
+    let display = path.display().to_string();
+    let reader = tauri::async_runtime::spawn_blocking(move || {
+        zroutery_core::runtime_store::UsageReader::open(&path).map(Arc::new)
+    })
+    .await
+    .map_err(|error| error.to_string())??;
+    desktop.set_standby_usage_reader(reader)?;
+    Ok(Some(display))
+}
+
+/// Imported history, as the Activity page reports it: canonical totals over the
+/// requested window plus the same per-day rows the local chart uses.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct ImportedUsageView {
+    pub totals: zroutery_core::history_import::ImportTotals,
+    pub days: Vec<zroutery_core::stats::UsageDay>,
+    /// The earliest counted imported day in the whole store, `YYYY-MM-DD`.
+    ///
+    /// Separate from `days[0]`, which is only the first day of the requested
+    /// window: an import older than the window still moves the period the page
+    /// reports over, and the lede must not name the window's edge as its start.
+    pub first_day: Option<String>,
+}
+
+/// The default label for a source copy: the file's stem.
+///
+/// The label is the importer's identity for a copy of a source database, so it
+/// has to stay the same across re-imports. A stem is stable for a relocated or
+/// re-copied file, and the confirmation screen shows it, which is why a person
+/// can correct it rather than having a path-derived guess applied silently.
+fn default_import_instance(path: &std::path::Path) -> String {
+    let name = if path.is_dir() {
+        path.file_name()
+    } else {
+        path.file_stem()
+    };
+    name.and_then(|name| name.to_str())
+        .map(|name| name.to_string())
+        .unwrap_or_else(|| "history".into())
+}
+
+/// Choose a history source: a database file, or a folder of client transcripts.
+///
+/// Only the path is returned. Opening and reading happen in the preview step so
+/// a source the importer cannot understand produces a readable error next to the
+/// confirmation screen instead of failing the file dialog.
+#[tauri::command]
+pub async fn pick_usage_history_source(
+    app: AppHandle,
+    desktop: State<'_, Arc<Desktop>>,
+    window: tauri::WebviewWindow,
+    kind: Option<String>,
+) -> Cmd<Option<String>> {
+    use tauri_plugin_dialog::DialogExt;
+    let folder = kind.as_deref() == Some("folder");
+    // Open where this kind of source was last used, so a copy in an unusual
+    // place is one confirmation away instead of a filesystem hunt.
+    let start = crate::history_sources::load(&desktop.config_dir)
+        .into_iter()
+        .map(|entry| std::path::PathBuf::from(entry.path))
+        .find(|path| {
+            if folder {
+                path.is_dir()
+            } else {
+                path.is_file()
+            }
+        });
+    let (send, receive) = tokio::sync::oneshot::channel();
+    let mut dialog = app.dialog().file().set_parent(&window);
+    if let Some(path) = start {
+        let dir = if folder {
+            path
+        } else {
+            path.parent()
+                .map(std::path::Path::to_path_buf)
+                .unwrap_or(path)
+        };
+        if dir.is_dir() {
+            dialog = dialog.set_directory(dir);
+        }
+    }
+    if folder {
+        dialog.pick_folder(move |path| {
+            let _ = send.send(path);
+        });
+    } else {
+        dialog
+            .add_filter("Source database", &["db", "sqlite", "sqlite3"])
+            .pick_file(move |path| {
+                let _ = send.send(path);
+            });
+    }
+    let Some(path) = receive.await.map_err(|error| error.to_string())? else {
+        return Ok(None);
+    };
+    let path = path.into_path().map_err(|error| error.to_string())?;
+    Ok(Some(path.display().to_string()))
+}
+
+/// History sources this machine already has, and paths used before.
+///
+/// Nothing is opened here: the command reports paths that exist, so the
+/// dashboard can offer one without a file dialog. Reading stays the preview's
+/// job, where a source that turns out to be unreadable can say why beside the
+/// counts.
+#[tauri::command]
+pub async fn discover_usage_history_sources(
+    desktop: State<'_, Arc<Desktop>>,
+) -> Cmd<Vec<crate::history_sources::HistorySourceOffer>> {
+    let config_dir = desktop.config_dir.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let remembered = crate::history_sources::load(&config_dir);
+        crate::history_sources::offers(&crate::history_sources::Discovery::from_env(), &remembered)
+    })
+    .await
+    .map_err(|error| error.to_string())
+}
+
+/// Prepare a durable, unpublished snapshot from a read-only history source.
+#[tauri::command]
+pub async fn preview_usage_history_import(
+    desktop: State<'_, Arc<Desktop>>,
+    path: String,
+    instance: Option<String>,
+    run_id: String,
+    range: Option<zroutery_core::history_import::ImportRange>,
+) -> Cmd<zroutery_core::history_import::ImportPreview> {
+    let desktop = Arc::clone(desktop.inner());
+    let config_dir = desktop.config_dir.clone();
+    let chosen = path.clone();
+    let preview = tauri::async_runtime::spawn_blocking(move || {
+        let operation = desktop.history_imports.begin(&run_id)?;
+        if operation.cancel.is_cancelled() {
+            return Ok(zroutery_core::history_import::ImportPreview {
+                cancelled: true,
+                ..Default::default()
+            });
+        }
+        let store = desktop
+            .runtime
+            .as_ref()
+            .ok_or("runtime storage is unavailable")?;
+        let path = std::path::PathBuf::from(path);
+        let instance = instance.unwrap_or_else(|| default_import_instance(&path));
+        let source = zroutery_core::history_import::Source::open_with_cancel(
+            &path,
+            instance,
+            &operation.cancel,
+        )?;
+        source.stage(
+            store,
+            &range.unwrap_or_default(),
+            &run_id,
+            &operation.cancel,
+        )
+    })
+    .await
+    .map_err(|error| error.to_string())??;
+    // Reading it worked, so the path is worth offering next time. Failing to
+    // file that note must not turn a readable source into a refused import.
+    if !preview.cancelled {
+        if let Err(error) = crate::history_sources::remember(&config_dir, &chosen, &preview.source)
+        {
+            tracing::warn!(%error, "cannot remember the usage history source");
+        }
+    }
+    Ok(preview)
+}
+
+/// Store the facts the preview showed.
+///
+/// Confirmation uses only the saved snapshot and its fingerprint. A retry after
+/// a lost IPC response returns the saved outcome instead of publishing twice.
+#[tauri::command]
+pub async fn commit_usage_history_import(
+    desktop: State<'_, Arc<Desktop>>,
+    run_id: String,
+    fingerprint: String,
+) -> Cmd<zroutery_core::history_import::ImportOutcome> {
+    let desktop = Arc::clone(desktop.inner());
+    tauri::async_runtime::spawn_blocking(move || {
+        let operation = desktop.history_imports.begin(&run_id)?;
+        let store = desktop
+            .runtime
+            .as_ref()
+            .ok_or("runtime storage is unavailable, so usage history cannot be imported")?;
+        match store.publish_import(&run_id, &fingerprint, &operation.cancel) {
+            Err(_) if operation.cancel.is_cancelled() => {
+                store.discard_import_run(&run_id)?;
+                Ok(zroutery_core::history_import::ImportOutcome {
+                    cancelled: true,
+                    revision: store.imported_revision()?,
+                    ..Default::default()
+                })
+            }
+            result => result,
+        }
+    })
+    .await
+    .map_err(|error| error.to_string())?
+}
+
+#[tauri::command]
+pub async fn cancel_usage_history_import(
+    desktop: State<'_, Arc<Desktop>>,
+    run_id: String,
+) -> Cmd<bool> {
+    // Signal first: the writer may currently own the runtime database lock.
+    if !desktop.history_imports.cancel(&run_id)? {
+        return Ok(false);
+    }
+    let desktop = Arc::clone(desktop.inner());
+    tauri::async_runtime::spawn_blocking(move || {
+        desktop
+            .runtime
+            .as_ref()
+            .ok_or("runtime storage is unavailable")?
+            .discard_import_run(&run_id)
+    })
+    .await
+    .map_err(|error| error.to_string())?
+}
+
+#[tauri::command]
+pub async fn pending_usage_history_imports(
+    desktop: State<'_, Arc<Desktop>>,
+) -> Cmd<Vec<zroutery_core::history_import::ImportPreview>> {
+    let desktop = Arc::clone(desktop.inner());
+    tauri::async_runtime::spawn_blocking(move || {
+        desktop
+            .runtime
+            .as_ref()
+            .ok_or("runtime storage is unavailable")?
+            .pending_imports()
+    })
+    .await
+    .map_err(|error| error.to_string())?
+}
+
+/// Imported history for the Activity page: totals for the window and its days.
+#[tauri::command]
+pub async fn get_imported_usage(
+    desktop: State<'_, Arc<Desktop>>,
+    days: u32,
+) -> Cmd<ImportedUsageView> {
+    let desktop = Arc::clone(desktop.inner());
+    tauri::async_runtime::spawn_blocking(move || {
+        let store = desktop
+            .runtime
+            .as_ref()
+            .ok_or("runtime storage is unavailable")?;
+        let days = days.clamp(1, 400);
+        let today = chrono::Local::now().date_naive();
+        let first = today - chrono::Duration::days(i64::from(days) - 1);
+        let from =
+            zroutery_core::history_import::day_start_utc(&first.format("%Y-%m-%d").to_string());
+        Ok::<ImportedUsageView, String>(ImportedUsageView {
+            totals: store.imported_totals(from, None)?,
+            days: store.imported_days(first, today)?,
+            first_day: store.imported_first_day()?,
+        })
+    })
+    .await
+    .map_err(|error| error.to_string())?
+}
+
+/// Remove every imported fact. Local usage, spend, wallet and health are
+/// untouched: this clears history that came from another tool.
+#[tauri::command]
+pub async fn clear_imported_usage(desktop: State<'_, Arc<Desktop>>) -> Cmd<usize> {
+    let desktop = Arc::clone(desktop.inner());
+    tauri::async_runtime::spawn_blocking(move || {
+        let store = desktop
+            .runtime
+            .as_ref()
+            .ok_or("runtime storage is unavailable")?;
+        store.clear_imported(None)
+    })
+    .await
+    .map_err(|error| error.to_string())?
+}
+
 /// Recent tracing output for the Logs tab. The buffer is capped in memory, so
 /// this is a rolling window rather than the full process log.
 #[tauri::command]
@@ -682,11 +1077,8 @@ pub async fn preview_newapi_pricing(
     adapter.probe_pricing().await.map_err(|e| e.to_string())
 }
 
-/// Apply the panel's published prices to this provider's models.
-///
-/// Matching uses the upstream model name. Display labels and routing aliases
-/// may name a different model, so they are not evidence of its billing rate.
-/// Per-request models are skipped because `Pricing` only represents token rates.
+/// Explicitly adopt public panel prices as estimated account/key fallbacks.
+/// Public group ratios are not evidence of the account's actual billed group.
 #[cfg(feature = "newapi")]
 #[tauri::command]
 pub async fn import_newapi_pricing(
@@ -695,6 +1087,7 @@ pub async fn import_newapi_pricing(
     provider_id: String,
     account_id: Option<String>,
     group: Option<String>,
+    inference_key_id: Option<String>,
 ) -> Cmd<crate::state::Snapshot> {
     let provider = desktop
         .core
@@ -704,13 +1097,32 @@ pub async fn import_newapi_pricing(
         .ok_or_else(|| format!("unknown provider `{provider_id}`"))?;
     let adapter = newapi_adapter(&provider, account_id.as_deref())?;
     let prices = adapter.probe_pricing().await.map_err(|e| e.to_string())?;
-    let mut config = (*desktop.core.config()).clone();
-    if config.provider(&provider_id) != Some(&provider) {
-        return Err("the provider changed while reading its panel; read the panel again".into());
+    {
+        let _migration = desktop.migration.lock().await;
+        let mut config = (*desktop.core.config()).clone();
+        if config.provider(&provider_id) != Some(&provider) {
+            return Err(
+                "the provider changed while reading its panel; read the panel again".into(),
+            );
+        }
+        let account = account_id
+            .as_deref()
+            .ok_or("select the account whose fallback price will change")?;
+        let group = group
+            .as_deref()
+            .filter(|group| !group.trim().is_empty())
+            .ok_or("select a billing group explicitly")?;
+        apply_newapi_prices(
+            &mut config,
+            &provider_id,
+            account,
+            inference_key_id.as_deref(),
+            group,
+            &prices,
+        )?;
+        store::save(&desktop.config_dir, &config)?;
+        desktop.core.set_config(config);
     }
-    let group = group.as_deref().unwrap_or("default");
-    apply_newapi_prices(&mut config, &provider_id, group, &prices)?;
-    desktop.apply_config(config).await?;
     announce_config(&app);
     Ok(refreshed(&app, &desktop).await)
 }
@@ -719,13 +1131,34 @@ pub async fn import_newapi_pricing(
 fn apply_newapi_prices(
     config: &mut AppConfig,
     provider_id: &str,
+    account_id: &str,
+    inference_key_id: Option<&str>,
     group: &str,
     prices: &[zroutery_core::account::adapters::newapi::NewApiPrice],
 ) -> Cmd<usize> {
-    let mut matched = 0usize;
+    use zroutery_core::billing::{EffectiveRate, RateSource, RATE_SCHEMA_VERSION};
+    let provider = config
+        .provider(provider_id)
+        .ok_or("unknown price provider")?;
+    let dialect = provider.dialect();
+    let account = provider
+        .accounts
+        .iter()
+        .find(|account| account.account_id == account_id)
+        .ok_or("unknown price account")?;
+    let binding = account
+        .binding
+        .as_ref()
+        .ok_or("account has no versioned binding; save the account before assigning its price")?;
+    if inference_key_id.is_some_and(|id| !account.inference_keys.iter().any(|key| key.id == id)) {
+        return Err("unknown inference key for price scope".into());
+    }
+    let version = binding.version();
+    let now = chrono::Utc::now().timestamp();
+    let mut rates = Vec::new();
     for model in config
         .models
-        .iter_mut()
+        .iter()
         .filter(|m| m.provider_id == provider_id)
     {
         let Some(price) = prices
@@ -734,25 +1167,120 @@ fn apply_newapi_prices(
         else {
             continue;
         };
-        let (Some(input), Some(output)) = (price.input_per_mtok, price.output_per_mtok) else {
-            continue;
+        let (input, output) = match (
+            price.per_request,
+            price.input_per_mtok,
+            price.output_per_mtok,
+        ) {
+            (Some(_), _, _) => (0.0, 0.0),
+            (None, Some(input), Some(output)) => (input, output),
+            _ => continue,
         };
-        model.pricing = Some(zroutery_core::billing::Pricing {
+        let pricing = zroutery_core::billing::Pricing {
             per_request: price.per_request,
             currency: "USD".into(),
             input_per_mtok: input,
             output_per_mtok: output,
             cache_read_per_mtok: price.cache_read_per_mtok,
             cache_write_per_mtok: price.cache_write_per_mtok,
+        };
+        if !pricing.problems().is_empty() {
+            continue;
+        }
+        rates.push(EffectiveRate {
+            schema_version: RATE_SCHEMA_VERSION,
+            id: uuid::Uuid::new_v4().simple().to_string(),
+            upstream_model: model.upstream_model.clone(), dialect,
+            binding_version: version.clone(), inference_key_id: inference_key_id.map(str::to_string),
+            group: Some(group.into()), source: RateSource::ManualFallback,
+            observed_at: now, expires_at: Some(now + 86_400),
+            evidence: "operator selected public NewAPI /api/pricing group as a fallback; actual key group and invoice unverified".into(),
+            pricing,
         });
-        matched += 1;
     }
-    if matched == 0 {
+    if rates.is_empty() {
         return Err(format!(
-            "the panel published no usable token prices for this provider's models in group `{group}`"
+            "the panel published no usable token or per-request prices for this account in group `{group}`"
         ));
     }
+    let matched = rates.len();
+    let account = config
+        .providers
+        .iter_mut()
+        .find(|provider| provider.id == provider_id)
+        .and_then(|provider| {
+            provider
+                .accounts
+                .iter_mut()
+                .find(|account| account.account_id == account_id)
+        })
+        .ok_or("price account disappeared")?;
+    account.effective_rates.retain(|previous| {
+        previous.source != RateSource::ManualFallback
+            || previous.inference_key_id.as_deref() != inference_key_id
+            || !rates.iter().any(|rate| {
+                rate.upstream_model == previous.upstream_model && rate.dialect == previous.dialect
+            })
+    });
+    account.effective_rates.extend(rates);
     Ok(matched)
+}
+
+#[cfg(all(test, feature = "newapi"))]
+mod price_scope_tests {
+    use super::*;
+    use zroutery_core::billing::{Pricing, RateSource};
+    use zroutery_core::config::{
+        AccountBinding, AccountConfig, InferenceKeyConfig, ModelEntry, ProviderKind,
+    };
+
+    #[test]
+    fn public_prices_are_scoped_estimates_and_accept_per_call_tariffs() {
+        let mut config = AppConfig::default();
+        let mut provider = ProviderConfig::new("p", "p", ProviderKind::OpenAICompatible);
+        for id in ["a", "b"] {
+            provider.accounts.push(AccountConfig {
+                account_id: id.into(),
+                enabled: true,
+                binding: Some(AccountBinding::fresh()),
+                inference_keys: vec![InferenceKeyConfig {
+                    id: "key".into(),
+                    key_ref: format!("inference-{id}"),
+                    ..Default::default()
+                }],
+                ..Default::default()
+            });
+        }
+        config.providers.push(provider);
+        let mut model = ModelEntry::for_upstream("p", "m", None);
+        model.pricing = Some(Pricing::new("CNY", 3.0, 9.0));
+        config.models.push(model);
+        let models_before = config.models.clone();
+        let sibling_before = config.providers[0].accounts[1].clone();
+        let prices = vec![zroutery_core::account::adapters::newapi::NewApiPrice {
+            model: "m".into(),
+            group: "vip".into(),
+            input_per_mtok: None,
+            output_per_mtok: None,
+            cache_read_per_mtok: None,
+            cache_write_per_mtok: None,
+            per_request: Some(0.03),
+        }];
+        assert_eq!(
+            apply_newapi_prices(&mut config, "p", "a", Some("key"), "vip", &prices).unwrap(),
+            1
+        );
+        assert_eq!(config.models, models_before);
+        assert_eq!(config.providers[0].accounts[1], sibling_before);
+        let rate = &config.providers[0].accounts[0].effective_rates[0];
+        assert_eq!(rate.source, RateSource::ManualFallback);
+        assert_eq!(rate.inference_key_id.as_deref(), Some("key"));
+        assert_eq!(rate.pricing.per_request, Some(0.03));
+        assert_eq!(rate.expires_at, Some(rate.observed_at + 86_400));
+        assert!(
+            apply_newapi_prices(&mut config, "p", "a", Some("missing"), "vip", &prices).is_err()
+        );
+    }
 }
 
 #[cfg(feature = "newapi")]

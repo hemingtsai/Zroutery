@@ -9,15 +9,27 @@
 //! Removing a declaration deletes its secret only when the post-change document
 //! no longer names that reference. Two accounts may deliberately share one
 //! secret, and one account's delete must not rekey another.
+//!
+//! A change that carries a secret publishes through
+//! [`publication`]: the secret is staged on a reference nothing has used
+//! before, the document naming it is saved under the migration lock, and only
+//! a landed document moves the running state onto the new reference. The
+//! reference that was replaced is never overwritten and never deleted while a
+//! sibling names it, so a failed save leaves the previous credential exactly
+//! as the configuration served it.
 
 use std::collections::BTreeSet;
 use std::sync::Arc;
 
 use tauri::{AppHandle, State};
-use zroutery_core::config::{AppConfig, InferenceKeyConfig};
+use zroutery_core::config::AppConfig;
 
 use crate::commands::{refreshed, Cmd};
 use crate::state::Desktop;
+
+mod publication;
+#[cfg(test)]
+mod tests;
 
 /// Longest accepted key id. It is part of a keychain reference and a table
 /// column rather than a free-form note, and core validation checks the same
@@ -32,7 +44,9 @@ const MAX_KEYS: usize = 32;
 ///
 /// Derived from the triple rather than stored by the caller, so the reference is
 /// reproducible and can never collide with a panel credential's
-/// `provider:{p}:account:{a}` or a provider key's `provider:{p}`.
+/// `provider:{p}:account:{a}` or a provider key's `provider:{p}`. Publications
+/// append a fresh suffix to this base, so a staged reference keeps the same
+/// shape plus one more segment.
 pub(crate) fn inference_key_ref(provider_id: &str, account_id: &str, key_id: &str) -> String {
     format!("provider:{provider_id}:account:{account_id}:inference:{key_id}")
 }
@@ -140,72 +154,24 @@ pub async fn set_account_inference_key(
     {
         return Err(format!("the inference key exceeds {MAX_SECRET} bytes"));
     }
-
-    let mut config = (*desktop.core.config()).clone();
-    let key_ref = {
-        let provider = config
-            .providers
-            .iter_mut()
-            .find(|p| p.id == provider_id)
-            .ok_or_else(|| format!("unknown provider `{provider_id}`"))?;
-        let account = provider
-            .accounts
-            .iter_mut()
-            .find(|a| a.account_id == account_id)
-            .ok_or_else(|| format!("unknown account `{account_id}` on provider `{provider_id}`"))?;
-        let key_ref = inference_key_ref(&provider_id, &account_id, &key_id);
-        match account.inference_keys.iter_mut().find(|k| k.id == key_id) {
-            Some(existing) => {
-                if let Some(priority) = priority {
-                    existing.priority = priority;
-                }
-                if let Some(enabled) = enabled {
-                    existing.enabled = enabled;
-                }
-                if let Some(note) = &note {
-                    existing.note = note.chars().take(200).collect();
-                }
-                // A hand-edited reference is kept so the repair does not move a
-                // secret the operator put somewhere on purpose.
-                if existing.key_ref.trim().is_empty() {
-                    existing.key_ref = key_ref.clone();
-                }
-                existing.key_ref.clone()
-            }
-            None => {
-                if secret.is_none() {
-                    return Err("a new inference key needs its secret".into());
-                }
-                if account.inference_keys.len() >= MAX_KEYS {
-                    return Err(format!(
-                        "an account cannot hold more than {MAX_KEYS} inference keys"
-                    ));
-                }
-                account.inference_keys.push(InferenceKeyConfig {
-                    id: key_id.clone(),
-                    key_ref: key_ref.clone(),
-                    enabled: enabled.unwrap_or(true),
-                    priority: priority.unwrap_or(0),
-                    note: note.unwrap_or_default().chars().take(200).collect(),
-                });
-                key_ref
-            }
-        }
-    };
-
-    if let Some(secret) = secret {
-        let secrets = Arc::clone(&desktop.secrets);
-        let target = key_ref.clone();
-        tauri::async_runtime::spawn_blocking(move || secrets.set(&target, &secret))
-            .await
-            .map_err(|e| e.to_string())??;
-    }
-
-    desktop.apply_config(config).await?;
+    publication::apply_inference_key_change(
+        &desktop,
+        &provider_id,
+        &account_id,
+        &key_id,
+        secret,
+        priority,
+        enabled,
+        note,
+    )
+    .await?;
     Ok(refreshed(&app, &desktop).await)
 }
 
 /// Remove one inference key and the secret only it referenced.
+///
+/// Lookup is by the id exactly as the caller sent it: an unknown id is an
+/// error, not a trimmed near-miss.
 #[tauri::command]
 pub async fn remove_account_inference_key(
     app: AppHandle,
@@ -214,51 +180,6 @@ pub async fn remove_account_inference_key(
     account_id: String,
     key_id: String,
 ) -> Cmd<crate::state::Snapshot> {
-    let mut config = (*desktop.core.config()).clone();
-    let key_ref = {
-        let provider = config
-            .providers
-            .iter_mut()
-            .find(|p| p.id == provider_id)
-            .ok_or_else(|| format!("unknown provider `{provider_id}`"))?;
-        let account = provider
-            .accounts
-            .iter_mut()
-            .find(|a| a.account_id == account_id)
-            .ok_or_else(|| format!("unknown account `{account_id}` on provider `{provider_id}`"))?;
-        let position = account
-            .inference_keys
-            .iter()
-            .position(|k| k.id == key_id)
-            .ok_or_else(|| format!("unknown inference key `{key_id}` on account `{account_id}`"))?;
-        account.inference_keys.remove(position).key_ref
-    };
-    desktop.apply_config(config.clone()).await?;
-    let warnings = forget_unreferenced(&desktop, &[key_ref], &config).await;
-    store(&warnings, &desktop);
+    publication::remove_inference_key(&desktop, &provider_id, &account_id, &key_id).await?;
     Ok(refreshed(&app, &desktop).await)
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn an_inference_reference_never_collides_with_a_panel_reference() {
-        assert_eq!(
-            inference_key_ref("p", "a", "k1"),
-            "provider:p:account:a:inference:k1"
-        );
-        assert_ne!(inference_key_ref("p", "a", "k1"), "provider:p:account:a");
-        assert_ne!(inference_key_ref("p", "a", "k1"), "provider:p");
-    }
-
-    #[test]
-    fn key_ids_are_trimmed_and_reject_separators() {
-        assert_eq!(validated_key_id("  alpha  ").unwrap(), "alpha");
-        assert!(validated_key_id("").is_err());
-        assert!(validated_key_id("has space").is_err());
-        assert!(validated_key_id("has:colon").is_err());
-        assert!(validated_key_id(&"x".repeat(MAX_KEY_ID + 1)).is_err());
-    }
 }

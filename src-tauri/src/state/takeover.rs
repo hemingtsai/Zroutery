@@ -148,11 +148,15 @@ impl Desktop {
             return None;
         }
 
-        // A class offers the ordered union of its usable members' effort levels.
-        // Members whose provider is disabled, or that are decision endpoints,
-        // cannot serve chat traffic and must not contribute a level. The request
-        // pipeline filters the candidate plan by the requested effort, so a level
-        // is safe to publish when at least one usable member accepts it.
+        // The class publishes only the effort levels **every** usable member
+        // accepts — the accepted common intersection, not the union. A level is
+        // a promise about the class as a whole: the client's picker offers it
+        // for every request, and a member that cannot honour it must not hide
+        // behind the ones that can. A member that declares no levels is not
+        // known to support any, so it empties the intersection instead of
+        // inheriting its siblings' levels. Requests that carry an effort
+        // anyway are still narrowed per request by the pipeline; the picker
+        // just stops advertising what the class cannot commonly deliver.
         let classes: Vec<TierClass> = ModelTier::ALL
             .iter()
             .filter_map(|tier| {
@@ -170,16 +174,15 @@ impl Desktop {
                 if members.is_empty() {
                     return None;
                 }
-                // Keep canonical picker order and publish no levels when none
-                // of the usable members declares an accepted native effort.
+                // Keep canonical picker order and publish no levels unless
+                // every usable member declares an accepted native effort.
                 let effort_levels: Vec<String> = zroutery_core::config::EFFORT_LEVELS
                     .iter()
                     .filter(|level| {
-                        members.iter().any(|model| {
-                            model
-                                .normalized_effort_levels()
-                                .iter()
-                                .any(|value| value == **level)
+                        members.iter().all(|model| {
+                            config.provider(&model.provider_id).is_some_and(|provider| {
+                                model.effective_effort_levels(provider).iter().any(|value| value == **level)
+                            })
                         })
                     })
                     .map(|level| (*level).to_string())
@@ -230,7 +233,7 @@ impl Desktop {
                         })
                         .flatten(),
                     capability_source:
-                        "configured enabled members; effort union filtered per request, shared capabilities and limits remain conservative, not client defaults"
+                        "configured enabled members; common effort intersection, shared capabilities and limits remain conservative, not client defaults"
                             .into(),
                 })
             })
@@ -408,7 +411,7 @@ impl Desktop {
     }
 
     /// Every agent's takeover reading, in `AgentType::ALL` order.
-    pub(crate) fn takeover_views(&self) -> Vec<(AgentType, TakeoverStatus)> {
+    pub fn takeover_views(&self) -> Vec<(AgentType, TakeoverStatus)> {
         let _files = lock(&self.client_files);
         if let Err(reason) = self.recover_client_files_locked() {
             return AgentType::ALL

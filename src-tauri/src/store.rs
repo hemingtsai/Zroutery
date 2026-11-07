@@ -245,7 +245,7 @@ pub fn save(dir: &Path, cfg: &AppConfig) -> Result<PathBuf, String> {
 /// The temporary file is flushed to disk before the rename: without that, a
 /// power cut could make the rename durable while the data was not, leaving a
 /// new name over empty bytes.
-fn write_atomically(dir: &Path, name: &str, text: &str) -> Result<PathBuf, String> {
+pub(crate) fn write_atomically(dir: &Path, name: &str, text: &str) -> Result<PathBuf, String> {
     use std::io::Write;
 
     #[cfg(unix)]

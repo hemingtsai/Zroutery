@@ -1459,7 +1459,7 @@ fn the_gateway_target_offers_exactly_the_tiers_that_have_enabled_models() {
 }
 
 #[test]
-fn the_gateway_target_publishes_the_safe_union_of_member_effort_levels() {
+fn the_gateway_target_publishes_the_common_intersection_of_member_effort_levels() {
     let config: AppConfig = serde_json::from_value(serde_json::json!({
         "server": {"auth_token": "gw-token"},
         "providers": [
@@ -1470,14 +1470,16 @@ fn the_gateway_target_publishes_the_safe_union_of_member_effort_levels() {
         ],
         "models": [
             {"provider_id": "p", "upstream_model": "m-a", "tier": "fast",
-             "effort_levels": ["low", "high"]},
+             "effort_levels": ["low", "high", "medium"]},
             {"provider_id": "p", "upstream_model": "m-b", "tier": "fast",
              "effort_levels": ["high", "max", "ultra"]},
             {"provider_id": "off", "upstream_model": "m-c", "tier": "fast",
              "effort_levels": ["medium"]},
             {"provider_id": "p", "upstream_model": "m-empty", "tier": "standard"},
             {"provider_id": "p", "upstream_model": "m-unknown", "tier": "standard",
-             "effort_levels": ["ultra"]}
+             "effort_levels": ["ultra"]},
+            {"provider_id": "p", "upstream_model": "m-all", "tier": "reasoning",
+             "effort_levels": ["minimal", "low", "medium", "high"]}
         ]
     }))
     .expect("the fixture is a valid configuration");
@@ -1491,13 +1493,14 @@ fn the_gateway_target_publishes_the_safe_union_of_member_effort_levels() {
         .expect("the fast class");
     assert_eq!(
         fast.effort_levels,
-        ["low", "high", "max"],
-        "an effort is published when at least one usable member supports it; canonical order is \
-         retained, the disabled provider does not contribute `medium`, and unknown `ultra` is dropped"
+        ["high"],
+        "an effort is published only when every usable member supports it: `low` and `medium` \
+         fail on m-b, `max` fails on m-a, unknown `ultra` is not encodable; canonical order is \
+         retained and the disabled provider does not contribute `medium`"
     );
     assert_eq!(
         fast.capability_source,
-        "configured enabled members; effort union filtered per request, shared capabilities and limits remain conservative, not client defaults"
+        "configured enabled members; common effort intersection, shared capabilities and limits remain conservative, not client defaults"
     );
 
     let catalogue = zroutery_core::agent_takeover::codex_catalogue(&target.classes);
@@ -1517,8 +1520,8 @@ fn the_gateway_target_publishes_the_safe_union_of_member_effort_levels() {
     };
     assert_eq!(
         published_efforts("fast-class"),
-        ["low", "high", "max"],
-        "the Codex catalogue publishes the same safe union"
+        ["high"],
+        "the Codex catalogue publishes the same common intersection"
     );
     let standard = target
         .classes
@@ -1527,12 +1530,39 @@ fn the_gateway_target_publishes_the_safe_union_of_member_effort_levels() {
         .expect("the standard class still exists because it has usable members");
     assert!(
         standard.effort_levels.is_empty(),
-        "when no usable member declares a valid effort the published list remains empty"
+        "a member that declares no levels is not known to support any, so the class publishes \
+         no level on its behalf"
     );
     assert!(
         published_efforts("standard-class").is_empty(),
-        "Codex also receives an empty list when no usable member supports an effort"
+        "Codex also receives an empty list when the class has no common effort"
     );
+    let reasoning = target
+        .classes
+        .iter()
+        .find(|class| class.model == "reasoning-class")
+        .expect("the reasoning class");
+    assert_eq!(
+        reasoning.effort_levels,
+        ["minimal", "low", "medium", "high"],
+        "a single-member class publishes exactly what that member declares, in picker order"
+    );
+}
+
+#[test]
+fn public_effort_uses_the_same_surface_evidence_as_execution() {
+    let config: AppConfig = serde_json::from_value(serde_json::json!({
+        "server":{"auth_token":"gw-token"},
+        "providers":[{"id":"p","name":"p","kind":"openai_compatible","base_url":"https://example.invalid"}],
+        "models":[{"provider_id":"p","upstream_model":"auto","tier":"standard",
+            "effort_levels":["low","high","max"],
+            "reasoning_capability":{"schema_version":1,"source":"operator fixture",
+                "observed_at":1,"provider_id":"p","upstream_model":"auto","dialect":"open_a_i",
+                "effort_levels":["medium","high"],"token_budget":false,"manual":true}}]
+    })).unwrap();
+    let (desktop, _dir) = desktop_with(config);
+    let target = desktop.gateway_target().unwrap();
+    assert_eq!(target.classes[0].effort_levels, ["medium", "high"]);
 }
 
 /// Each agent's ownership store is durable from first use: the manifest lives

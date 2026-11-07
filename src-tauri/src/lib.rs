@@ -14,6 +14,8 @@ pub mod checkin;
 #[cfg(feature = "account-maint")]
 mod checkin_commands;
 mod commands;
+mod history_imports;
+mod history_sources;
 #[cfg(feature = "account")]
 mod inference_commands;
 mod logs;
@@ -100,6 +102,17 @@ pub fn run() {
             tray_commands::tray_set_gateway_running,
             commands::get_usage_days,
             commands::query_usage_history,
+            commands::get_usage_attempts,
+            commands::get_usage_sources,
+            commands::choose_standby_usage_database,
+            commands::discover_usage_history_sources,
+            commands::pick_usage_history_source,
+            commands::preview_usage_history_import,
+            commands::commit_usage_history_import,
+            commands::cancel_usage_history_import,
+            commands::pending_usage_history_imports,
+            commands::get_imported_usage,
+            commands::clear_imported_usage,
             commands::get_logs,
             #[cfg(feature = "ml")]
             commands::get_ml_status,
