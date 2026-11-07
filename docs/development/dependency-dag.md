@@ -103,7 +103,7 @@ failed node. Historical tags are not graph edges.
 | `UI-UX-U13` | `DONE` | `UI-NEW-TRACKS` |
 | `UI-UX-M1` | `DONE` | `UI-LAYOUT` |
 | `UI-UX-M2` | `DONE` | `UI-UX-M1`, `UI-UX-U12` |
-| `UI-UX-M3` | `DONE` | `UI-UX-M1` |
+| `UI-UX-M3` | `REVALIDATE` | `UI-UX-M1` |
 | `UI-UX-P2` | `DONE` | `UI-NEW-TRACKS`, `TEST-UI-BUILD` |
 | `BACKEND-OPTIMIZATION` | `PARTIAL` | none |
 
@@ -196,7 +196,7 @@ UI-NEW-TRACKS ──────┬─> UI-UX-U3 (usage KPI row)           DONE
                     └─> UI-UX-P2 (perf baseline, also behind TEST-UI-BUILD)
 UI-LAYOUT ─> UI-UX-M1 (simple and geek modes)
                  └─> UI-UX-M2 (simple home workbench)
-                 └─> UI-UX-M3 (skins: md3 / fluent)
+                 └─> UI-UX-M3 (skins: md3 / fluent)       REVALIDATE
 ```
 
 These seven nodes carry the frontend queue from
@@ -210,6 +210,13 @@ reason: mode switching changes the sidebar inventory and folds forms, and the
 layout harness must describe those surfaces before the feature can pass.
 Backend-gated items (batch P1: the P0 fixes' UI faces) are not nodes here yet —
 they join when the backend P0 work has DAG nodes to depend on.
+
+The 2026-11-01 upgrade status reconciliation (E-204) returns `UI-UX-M3`
+to `REVALIDATE`: its implementation and mock persistence checks exist, but
+the node still requires the full six-state page/contrast comparison and native
+accent acceptance. `UI-UX-M1` remains its sole dependency and already lists it
+as a dependent; no edge or reverse edge changed. The UI batch's M1/M2/M3 IDs
+are not the accepted master plan's M1/M2/M3 milestones.
 
 `I2` and `I3` have no Core implementation dependency because their local
 state-machine and adapter seams are independently testable. `I4` cannot be

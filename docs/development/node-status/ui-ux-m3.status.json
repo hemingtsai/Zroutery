@@ -2,8 +2,8 @@
   "schema_version": 1,
   "node_id": "UI-UX-M3",
   "display_name": "Skins: MD3 and Fluent on the token architecture",
-  "status": "DONE",
-  "implementation_state": "v2 landed: MD3 baseline color roles (Theme Builder light/dark), official shape scale mapped per component (4/8/12/16/28/full), on-color state layers (8%/12% color-mix), elevation level1/2; Fluent 2 Shapes 4/8/12, v9 web neutrals, brand #0F6CBD ramp, acrylic sidebar, pivot short-bar tabs, dual-ring focus, infobar toast. Two v1 specificity bugs fixed (shared rules outranked the skin rules — html[data-skin] prefix added; Fluent primary hover isolated). Dark accent inversion (E-195) preserved. Charts auto-tint via color-mix(--text) with zero chart overrides. --control-h 30px constant; industrial pixel-identical.",
+  "status": "REVALIDATE",
+  "implementation_state": "v2 is implemented: MD3 color roles/shape/state layers/elevation and Fluent neutrals/brand/acrylic/pivot/focus/infobar, with E-195's dark-accent correction. E-196 adds native accent wiring, synchronous skin/theme persistence, per-skin fonts, popover shapes and separate 3:1 interactive boundaries; charts use shared tokens and --control-h stays 30px. E-191/E-194 retain their historical visual observations. The 2026-11-01 state audit returns this node to REVALIDATE: the required full three-skin by light/dark page/contrast comparison and current native WebView2 accent acceptance are explicitly unfinished, so implementation and mock reload tests cannot keep the aggregate DONE.",
   "dependencies": [
     "UI-UX-M1"
   ],
@@ -17,28 +17,36 @@
     "真机只读目视"
   ],
   "blocked_by": [],
-  "unblock_condition": "Settings 外观区 gains 皮肤 Select (persisted zroutery-skin); md3 and fluent token sheets for light+dark; component overrides limited to shape (radius/rotation) with --control-h kept at 30px across skins so the layout harness stays valid; text-bearing color pairs pass 4.5:1 in all six combinations; charts auto-tint via color-mix on --text (no new chart tokens).",
+  "unblock_condition": "Retain the implemented Settings skin selector, persistence and all six token combinations, --control-h at 30px and chart tinting through shared tokens. Complete the required all-page three-skin by light/dark screenshots, text contrast >=4.5:1 and interactive boundaries >=3:1, keyboard/focus and skin-switch checks, plus native WebView2 accent/theme-change and unavailable-accent fallback acceptance. Use the accepted v2 component-form matrix rather than the superseded shape-only restriction; decorative Fluent separators may retain weak contrast. Record each platform's native evidence separately.",
   "evidence": [
     "E-190",
     "E-191",
     "E-195",
-    "E-194"
+    "E-194",
+    "E-196",
+    "E-204"
   ],
   "source_references": [
     "ui/src/styles.css",
     "ui/src/mode.ts",
     "ui/src/pages/Settings.tsx",
-    "docs/development/upgrade-master-plan.md"
+    "docs/development/upgrade-contracts.md",
+    "docs/development/skin-spec-md3-fluent.md",
+    "docs/development/upgrade-execution.md",
+    "ui/src/accent.ts",
+    "ui/src/skin.ts",
+    "ui/src/theme.ts"
   ],
   "notes": [
     "INCIDENT: mid-task a Write call truncated styles.css to 316 lines; recovered in full from the ZCode session database readFileState snapshots and re-verified (brace balance, build, tests, per-batch markers, industrial pixel-identical). Reviewer independently confirmed all batch markers post-recovery.",
     "Contrast: all hardcoded fallback pairs >= 4.5:1 (table in E-191); AccentColor itself is user-controlled — same caveat as OS-native buttons.",
-    "Follow-ups: Fluent light --line #E0E0E0 1.6:1 non-text contrast (design decision pending); popover menus not yet skinned (square corners); font-per-skin deferred to the font first-paint work.",
+    "The original Fluent weak separator remains decorative at 1.53:1; interactive frames use the separate >=3:1 --control-line token per the user's decision. Popover shapes and per-skin font loading are implemented; full browser contrast comparison remains open.",
     "Fluent dark --danger lightened to #E87F76 (industrial red on #272727 was 4.40:1).",
     "v2 (official-spec rebuild): see docs/development/skin-spec-md3-fluent.md — the implementation contract. v1 kept only the skin.ts/select infrastructure.",
     "Dark-accent fix (E-195, formerly the duplicate E-192) closed the user-reported glow: raw AccentColor on near-black surfaces glows — MD3 baseline dark inverts the tone (#6750A4 -> #D0BCFF), so the system accent gets the same 45%-white mix. The subagent also caught the reviewer spec error (60% mix was darker than 45%) and implemented the intent at 40%.",
-    "Remaining follow-ups unchanged: Fluent light line contrast decision, popover skinning, font-per-skin, simple-mode harness surfaces.",
+    "Follow-ups now locally implemented: Fluent control-boundary contrast decision, popover skinning, per-skin font loading and Simple Overview harness declaration. Full browser revalidation remains open.",
     "v2 landed per docs/development/skin-spec-md3-fluent.md (the official-spec contract written after the v1 rejection). Cover-the-logo recognition check passed for both skins across light/dark.",
-    "Pending decisions: Fluent light stroke1 1.53:1 non-text (official value vs WCAG 1.4.11); popover menus not yet skinned; font-per-skin deferred to the first-paint work."
+    "Follow-up implementation: interactive control boundaries must reach 3:1; decorative separators may retain Fluent stroke2. Fluent --control-line is strengthened independently from weak decorative --line; MD3/Fluent popover surfaces and item radii are skinned. Font CSS loads by skin; MD3 uses Roboto with system CJK fallback to stay inside the CSS budget. UI now calls systemAccent() and uses CSS fallback tokens; verify native WebView2 integration and null cases. Full browser contrast/skin-switch visual revalidation remains open.",
+    "E-204 reconciles current state with the node's existing required gates; historical DONE/implementation evidence is retained but is not a pass for the still-open follow-up acceptance. No dependency edge changed."
   ]
 }

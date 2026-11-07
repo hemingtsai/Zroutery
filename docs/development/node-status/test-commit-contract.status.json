@@ -3,7 +3,7 @@
   "node_id": "TEST-COMMIT-CONTRACT",
   "display_name": "Commit contract fixtures",
   "status": "DONE",
-  "implementation_state": "The commit contract validator and finite fixtures are implemented, workflow-integrated, and pass the real post-merge Git range.",
+  "implementation_state": "The commit contract validator and finite fixtures are implemented and workflow-integrated; E-032/E-143/E-144 preserve their passing historical ranges. The validator correctly rejects two existing commits in the 2026-11-01 audit of a2fa145..4075a54 (E-204). This DONE state covers the validator/fixtures/workflow gates, not an assertion that every later Git range passes.",
   "dependencies": [
     "COMMIT-CONTRACT"
   ],
@@ -19,17 +19,21 @@
     "E-016",
     "E-032",
     "E-143",
-    "E-144"
+    "E-144",
+    "E-204"
   ],
   "source_references": [
     "docs/development/repository-audit-2026-09-25.md",
     "docs/development/WORKFLOW.md",
-    ".github/workflows/commit-lint.yml"
+    ".github/workflows/commit-lint.yml",
+    "scripts/commit_contract_test.py",
+    "docs/development/upgrade-execution.md"
   ],
   "notes": [
     "Accepted repair commits: efd8092, cf50328, 8ea7696, afba42c, and 0d3367b.",
     "Commit validation passed for c66072f..c782a49.",
     "Re-run over the integration range in E-143: 39 non-merge commits from `5566915`, including the thirty whose messages were rewritten and the merge that carries them. The validator checks non-merge commits reached from the tip, which is how the thirty could be repaired without editing a single tree.",
-    "The `opencode` boundary was missing from the scope table while twelve commits already used it; E-144 adds it and re-validates `main..dev` at 125 non-merge commits, all valid, with the remaining six repairs confined to subject grammar and no identity changed."
+    "The `opencode` boundary was missing from the scope table while twelve commits already used it; E-144 adds it and re-validates `main..dev` at 125 non-merge commits, all valid, with the remaining six repairs confined to subject grammar and no identity changed.",
+    "2026-11-01: commit_contract_test.py --base a2fa145 --head HEAD at 4075a54 failed on 1f31a88 (development is not an allowed scope; subject is 83 characters) and 72f5b1e (dual is not an allowed imperative verb). The validator is behaving correctly and its grammar/workflow did not change. M6 tracks this range failure; no exemption, history rewrite or current-range PASS is implied. Dependencies and reverse edges are unchanged."
   ]
 }

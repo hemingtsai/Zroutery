@@ -18,16 +18,20 @@
   "blocked_by": [],
   "unblock_condition": "Reopen if the pool drag, the provider list or the CTA breaks in either mode.",
   "evidence": [
-    "E-190"
+    "E-190",
+    "E-196",
+    "E-204"
   ],
   "source_references": [
     "ui/src/pages/Overview.tsx",
     "ui/src/pages/Routing.tsx",
-    "docs/development/ui-optimization-plan.md"
+    "docs/development/ui-optimization-plan.md",
+    "scripts/ui_layout_test.py",
+    "docs/development/upgrade-execution.md"
   ],
   "notes": [
     "RoutePool reuse drags the Routing chunk into the Overview lazy load (37KB/9KB gzip) — accepted reuse price.",
-    "Simple-mode harness surfaces remain undeclared (协作约定 3 follow-up).",
+    "Simple Overview layout coverage is declared and passed in scripts/ui_layout_test.py. Full layout measured 11 surfaces / 70 controls, including Simple mode; overflow passed all 9 task areas at 820x560 with the forced-width table containment probe.",
     "Two honest-call decisions: classifier line hidden in simple (it is M1-defined advanced config); model-count CTA only for zero-model providers (a provider with models but all disabled needs 启用, not 添加)."
   ]
 }

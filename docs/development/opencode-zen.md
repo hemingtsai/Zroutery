@@ -361,3 +361,57 @@ JSON body, not the URL). On 2026-10-23 both Zen and TypeSafe answered HTTP 451
 from the machine this was written on, so the endpoint is covered by a mock on a
 real socket and an optional `#[ignore]` live probe; the free promotion has not
 been verified live from here.
+
+## The free tier is gated by the client's transport, not by headers (2026-11-07)
+
+A live capture (official CLI 1.18.31 pointed at a local recording relay that
+forwarded to `https://opencode.ai/zen/v1/chat/completions`) settled why a
+third-party client cannot use the anonymous free tier even with a perfect copy
+of the official request:
+
+| Client (same bytes, same headers, same IP) | Answer |
+| --- | --- |
+| official CLI (bun / BoringSSL), direct | `200` — `"pong"` |
+| curl.exe (schannel), HTTP/2 and HTTP/1.1 | `429 FreeUsageLimitError` |
+| Python urllib (OpenSSL) | `429 FreeUsageLimitError` |
+| Zroutery (reqwest `native-tls` → schannel) | `429 FreeUsageLimitError` |
+
+The recorded official request carries `Authorization: Bearer public`,
+`User-Agent: opencode/1.18.31 ai-sdk/provider-utils/4.0.23 runtime/bun/1.3.14`,
+`x-opencode-client: cli`, `x-opencode-project: global`, `x-opencode-session`,
+`x-opencode-request`, a full client tool list, `tool_choice: "auto"`,
+`stream: true` and `stream_options.include_usage`. Replaying exactly that over
+curl, Python or any non-BoringSSL transport still answers:
+
+```json
+{"type":"error","error":{"type":"FreeUsageLimitError","message":"Free usage limit reached. Free models work in OpenCode (https://opencode.ai); subscribe to OpenCode Go to keep going: https://opencode.ai/go"}}
+```
+
+So the gateway distinguishes the client below the HTTP message — TLS/HTTP
+fingerprint (bun's BoringSSL stack) — and the anonymous tier is effectively
+reserved for the official runtime. Nothing in `headers.rs` or the body shaping
+can change that verdict. HTTP/1.1 versus HTTP/2 made no difference, so the
+discriminator is the TLS handshake, not ALPN.
+
+Two facts that matter for the product:
+
+- **`https://opencode.ai/inference/openai/v1` is token-authenticated, not
+  fingerprint-gated.** With a dummy bearer it answers
+  `401 {"type":"authentication_error","message":"Invalid credential"}` rather
+  than the free-tier 429, so an authenticated Console/Go token reaches the
+  normal auth path. That lane is the one a third-party client can actually use;
+  the `OpenCodeZenFree` kind with `Bearer public` cannot.
+- **The live model list moved.** `GET /zen/v1/models` now serves
+  `deepseek-v4.1-flash-free`, `glm-5.3-flash-free`, `mimo-v2.6-flash-free` and
+  others, while the 1.18.31 CLI's bundled catalogue still names
+  `space-bunny-free` / `ling-3.0-flash-fin-free` / `mimo-v2.5-free`, which the
+  gateway answers with `Model is unavailable`. Zroutery discovers models from
+  the live list, so it is not affected; this only matters when reproducing with
+  the old CLI.
+
+Classification: the refusal is now recognised as `QuotaExhausted`
+(`is_client_policy_refusal`), not `RateLimit`. It is not retryable, it is
+fallbackable to another provider, and it does not open the model's circuit:
+the model is healthy for a client the policy admits, and a cooldown would
+misrepresent a settled policy as a transient limit. A regression test pins the
+captured body and keeps an ordinary 429 a rate limit.

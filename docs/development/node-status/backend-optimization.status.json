@@ -3,7 +3,7 @@
   "node_id": "BACKEND-OPTIMIZATION",
   "display_name": "Backend optimization slice",
   "status": "PARTIAL",
-  "implementation_state": "B3 desktop client attribution, B5 cache/cost history aggregates and indexed revision-bound pages, B6 streamed file export, B1 recoverable client-file transactions, B4 Gemini native ingress and composite takeover, T least-privilege tray window/commands and B7 native accent are implemented. Full workspace all-feature verification: 3238 passed, zero failed, 22 existing ignored; strict Clippy, Rust 1.90, no-default checks and UI contract build/tests pass. Frontend/native handoff remains open in backend-optimization-execution.md; master milestones remain open.",
+  "implementation_state": "B3 desktop client attribution, B5 cache/cost history aggregates and indexed revision-bound pages, B6 streamed file export, B1 recoverable client-file transactions, B4 Gemini native ingress and composite takeover, T least-privilege tray window/commands and B7 native accent command/UI CSS wiring are implemented. Historical full-workspace all-feature verification is recorded in E-192. The current follow-up adds a read-only local standby usage source and source-selectable UI (E-196). The first imported-history slice adds the Core contract, runtime schema v5 storage and a read-only cc-switch adapter with preview/commit (E-197), the second adds the desktop commands and an Activity confirmation flow (E-198), the third adds a Claude Code transcripts adapter selected by the chosen path itself (E-199), the fourth finds existing history sources and remembers paths used before (E-200), and the fifth repairs what the first real import and the live preview exposed: a REAL day-rollup average, legacy client names at aggregation, the imported period in the Activity lede, a year-shaped heatmap and the wallet hold moved into its provider's drawer (E-201, E-202), and the sixth merges imported history into the local headline and day curve while accepting a schema-4 standby database read-only (E-203); the Codex/OpenCode adapters, chart/export parity and cross-source duplicate identity remain open. Native tray/Gemini/accent acceptance and remaining frontend/native handoff remain open in backend-optimization-execution.md; master milestones remain open.",
   "dependencies": [],
   "dependents": [],
   "required_gates": [
@@ -14,8 +14,8 @@
     "Frontend panel/chart/export/Gemini handoff and native interaction acceptance"
   ],
   "blocked_by": [],
-  "unblock_condition": "Finish the documented frontend wiring and native tray/Gemini acceptance; retain honest partial status until those gates close.",
-  "evidence": ["E-192"],
+  "unblock_condition": "Finish the tray-panel page/readiness and native interaction, Gemini's setup-menu entry with an explicit default and native acceptance, and B5's daily per-currency cost and SQL pager UI. Preserve the connected B6 export and B7 accent paths while completing their native acceptance and the real desktop/standby read-only observation. The broader master history/P0 milestones remain independently open.",
+  "evidence": ["E-192", "E-196", "E-197", "E-198", "E-199", "E-200", "E-201", "E-202", "E-203", "E-204"],
   "source_references": [
     "docs/development/backend-optimization-plan.md",
     "docs/development/backend-optimization-execution.md",
@@ -27,11 +27,22 @@
     "src-tauri/src/tray_panel.rs",
     "src-tauri/src/tray_commands.rs",
     "src-tauri/src/usage_export.rs",
-    "src-tauri/src/accent.rs"
+    "src-tauri/src/accent.rs",
+    "crates/zroutery-core/src/history_import/mod.rs",
+    "crates/zroutery-core/src/runtime_store/imports.rs",
+    "crates/zroutery-core/src/runtime_store/usage_reader.rs",
+    "src-tauri/src/history_sources.rs",
+    "docs/development/upgrade-execution.md"
   ],
   "notes": [
-    "Existing dirty upgrade work is preserved; no commit or public release was created.",
-    "B3 verified image is observed on authorized standby PID 46568; subsequent source changes are not assumed deployed.",
-    "Layout harness preserves two real 18px alignment failures for frontend ownership; a later concurrent-UI rebuild run timed out closing a drawer. Per-attempt model/day reconciliation remains master-plan work."
+    "The original execution made no commit; its backend work was subsequently committed through 4075a54. E-196 through E-203 describe later uncommitted work. E-204 is a status-only reconciliation and creates no code commit or release.",
+    "The 2026-10-31 B3 verified image was observed on authorized standby PID 46568; this is a dated observation, not a claim about the current process or later source deployment.",
+    "E-196 records 29 interaction cases; E-198 adds UI-30 and E-203 retains 30/30, layout 11 surfaces / 70 controls and overflow 9 areas. These are prior scoped runs, not tests re-executed by E-204. The read-only source still awaits real desktop/8788 acceptance. Per-attempt model/day reconciliation remains master-plan work.",
+    "Imported history is stored in schema-v5 tables, keyed by source, instance and entity id; cc-switch and Claude Code adapters have fixture evidence. The initial schema-4 refusal described in E-197 was superseded by E-203: schemas 4-5 are accepted read-only without migration.",
+    "History sources are discovered by existence only — CC Switch's cc-switch.db in its conventional directories, Claude Code's projects folder when it holds a transcript — and a successfully previewed path is remembered in import-sources.json (five newest, atomic write, corrupt file means nothing remembered). Discovery and memory are verified against temporary roots, not a real installation, and never read a database or transcript.",
+    "The first real-looking import exposed two defects that fixtures had hidden: the cc-switch day rollup stores AVG(latency_ms) as REAL and the reader demanded INTEGER, and a client record written before the desktop rule stored raw user-agent text as its display name. The reader now accepts either numeric type (with a REAL regression fixture) and the per-client ledger looks the name up at aggregation, leaving the stored record, family and confidence unchanged.",
+    "The imported period is read from the store's own earliest counted day, not from the first row of the windowed day list: an import older than the chart window still moves the period, and a suspected duplicate does not get to claim it.",
+    "Imported history is part of this device's history, so the Activity headline and day curve carry both stores: the additive counters and known spend are summed and `since` moves back, while the client/model split and attribution remain the live ledger's own and say so — the imported store has no request kind or attribution evidence, and fabricating either would make the split disagree with the headline. The read-only standby opener accepts schema 4 through 5 because v5 only added the imported tables; older layouts still need their owning build.",
+    "E-204 source review narrows the multi-currency claim: both imported_totals and imported_days currently sum cost_usd; other currencies survive only in the stored fact JSON. Unified non-USD headline/chart/export accounting and cross-source identity remain incomplete. B5 SQL history paging exists in the backend but Activity still pages its recent window; B6 file export is already connected."
   ]
 }

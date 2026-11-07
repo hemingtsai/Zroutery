@@ -242,22 +242,37 @@ of release or of genuine upstream/client observation.
 
 ### Frontend handoff / remaining native acceptance
 
-- The synchronized interaction harness passes **25/25** cases. Layout harness
-  self-test passes **15/15** and measures all **9 surfaces / 63 controls**. Its
-  full run is correctly red for two existing page geometries: the client setup
-  row in `ui/src/pages/Takeover.tsx` and budget-add row in `ui/src/pages/Budgets.tsx`
-  have an 18px label/button top-edge spread. These page/style fixes remain with
-  the frontend owner; no required coverage was removed to obtain a green result.
-  A repeat after the concurrent frontend rebuild stopped earlier at “waiting
-  for drawer to close”; that latest run is also a failure, not a replacement
-  green claim. Re-run the page owner's layout gate after the frontend settles.
-- Connect T's panel page/readiness, hover-intent/search/feedback, B5 graph metrics
-  and history query source, B6 export-file action, B7 theme injection and
-  `onConfigStateChanged` refresh in the owning frontend flow.
-- Add Gemini to the setup selector and require an offered default (no “keep”
-  default); verify the real CLI menu/request path and recovery in the user's
-  chosen entrypoint. Command implementations and local mock requests do not
-  prove a native CLI menu.
+- Historical finalization recorded 26 interaction cases / 10 surfaces / 64
+  controls. The 2026-11-01 follow-up added UI-27 (inference Key drag/keyboard
+  priority reordering), UI-28 (read-only standby source) and UI-29 (theme, skin
+  and accent persistence through a real reload) for **29/29** (E-196); history
+  import slice 2 added UI-30 (preview/confirm/report/clear) for **30/30**,
+  held through E-203. Current verification is therefore **30/30** interaction
+  cases and **11 surfaces / 70 controls**, all aligned. The 820×560 overflow
+  gate passes all 9 areas and the forced-width table containment probe. The
+  fixture emits expected connection-reset traces as its browser child exits;
+  assertions pass.
+- T's panel page/readiness, hover-intent/search/feedback, Gemini selector/native
+  menu, and `onConfigStateChanged` refresh remain frontend/native handoff items.
+  B6 export is connected (native save dialog with the textarea fallback, E-193);
+  of B5, the cache aggregates and the chart's cache metric are connected, while
+  the daily per-currency cost view and the history-list pager remain unwired
+  (frontend-owned; the backend `query_usage_history` pagination and
+  `UsageDay.cost` are delivered). B7 system accent is
+  wired from `get_system_accent()` to UI CSS variables with fallback. Actual
+  Tauri accent display and macOS/Linux native reads remain external acceptance.
+- The local 8788 follow-up now offers a file-selected standby `runtime.sqlite3`
+  source opened read-only, without migration or write capability; the source is
+  explicit in the UI and not combined with desktop totals because cross-instance
+  deduplication is undefined. Core live-WAL read/write-refusal test passes; a
+  desktop + real standby observation remains unrun.
+- Gemini's setup entry is missing from the UI menu, not from the page:
+  `ui/src/pages/Takeover.tsx` lists it in `AGENTS` but not in `MENU_AGENTS`, so
+  no setup-menu entry is offered, and the explicit-default choice the Gemini
+  field set requires is not wired in the UI. Adding it (with an offered default,
+  no “keep” default) and verifying the real CLI menu/request path and recovery
+  in the user's chosen entrypoint remain handoff items. Command implementations
+  and local mock requests do not prove a native CLI menu.
 - Gemini setup accepts strict JSON settings; comments are refused with their
   location rather than stripped. Dotenv preserves unrelated multiline text,
   comments, duplicates and line endings. A held legacy settings-only takeover
@@ -295,3 +310,65 @@ contains the prior executable, config/instance/spend and a consistent SQLite
 snapshot made before draining. No after-drain snapshot was made by the timed-out
 command. The later source changes in this session are not assumed to be deployed
 merely because B3's verified image is running.
+
+## Read-only reconciliation of master-plan U-items — 2026-11-01
+
+Facts checked against source at `dev` = `4075a54` in the dirty worktree. This
+record locates what remains; it closes no acceptance and was produced without
+running gates, upstreams, 8788, or writing any code. Every claim below is
+scoped to what this pass actually read — the absence of evidence here is not
+evidence of absence elsewhere. Path shorthand: `core/` =
+`crates/zroutery-core/src/`, `desktop/` = `src-tauri/src/` (as in the master
+plan).
+
+- **U3 wallet release**: `core/router/wallets.rs` still implements and documents
+  operator-only release ("Neither a success nor a balance refresh releases
+  them; only an operator does"). No evidence-gated automatic release for
+  verified fund recovery was found in the checked wallet path. The
+  provider-row/drawer hold display and
+  its manual release button are wired in the UI (E-202).
+- **U6 generic multi-Key**: the per-account inference-key pool is reachable for
+  any provider — `AccountSection` renders whenever `snapshot.account_available`
+  (no NewAPI restriction) and `set_account_inference_key` is provider-agnostic
+  (`src-tauri/src/inference_commands.rs`); drag/keyboard priority reordering is
+  verified (UI-27, E-196). No per-key balance/quota observation was found in
+  the checked provider/account scope; balances remain account-level.
+- **U7 probe kind**: `AccountProbeKind::{none, new_api}` exists
+  (`core/config/binding.rs`) with per-account selection in the provider page,
+  and legacy declarations migrate visibly
+  (`core/server/accounts.rs` defaults OpenAICompatible to NewApi). The NewAPI
+  panel section is still gated by the build/provider-level flag
+  `snapshot.newapi_available` (`ui/src/pages/Providers.tsx`), not by the
+  account's declared probe kind or capability evidence.
+- **U8 check-in**: the browser-driven base is present — `desktop/checkin/`
+  state machine with WAF pause/resume (`WaitingForUser`/`UserResumed`),
+  scheduler, persisted timestamps, and start/resume/cancel/report commands.
+  The login-expired → user login → dedicated check-in page → server
+  confirmation → balance-refresh loop has no dedicated state or event in the
+  checked state machine (`desktop/checkin/state.rs`) and no acceptance
+  evidence in this pass; it is unverified end to end.
+- **U12 OAuth / Token Plan**: the OAuth basis found in the checked scope is
+  OpenCode Console device-code (`core/opencode/oauth.rs`, `console.rs`); this
+  pass found no ChatGPT/Codex or Claude OAuth implementation or acceptance
+  evidence. No token/coding-plan model was found in the checked account/config
+  scope. The plan-shaped facts seen are NewAPI's `/api/subscription/self`
+  probe, `core/account/resource.rs` event kinds, and the existing ML
+  resource/bucket machinery (`core/ml/resource_buckets.rs`,
+  `core/ml/temporal_planner.rs`, `core/ml/account_projection.rs`), which
+  predates this batch — a basis to extend, not a completed Token Plan.
+- **U13**: `core/ml/shadow.rs::from_policy_plan` still passes `account: None`
+  under the account feature, and `FEATURE_SCHEMA_VERSION` is still 1
+  (`core/ml/features.rs`).
+- **U14 / M5**: this pass found no record of a small-production run in the
+  checked docs and node records. The ML closed loop (collection, shadow,
+  serving, gating, promotion/rollback) is present under `core/ml/`; the U14
+  baseline comparison and the authorized small-traffic production remain
+  unstarted, as the master plan already states.
+- **M6**: no Windows batch acceptance (self-contained `custom-protocol` build,
+  NSIS/MSI install/reinstall/uninstall) is recorded for the current state in
+  the checked development records.
+- **Full-workspace green scope**: the 3,238-case all-feature pass is E-192,
+  dated 2026-10-31. Later work is covered by the focused E-196–E-203 runs;
+  no fresh full-workspace pass is claimed. The read-only standby opener
+  accepts schema 4–5 (E-203); only older layouts still need their owning
+  build.
