@@ -6532,7 +6532,7 @@ checksum = "29666d0abbfad1e3dc4dcf6144730dd3a3ab225bbbdac83319345b1b44ccfc1b"
 
 [[package]]
 name = "zroutery"
-version = "1.0.0-rc.1"
+version = "1.0.0-rc.2"
 dependencies = [
  "axum",
  "chrono",
@@ -6563,7 +6563,7 @@ dependencies = [
 
 [[package]]
 name = "zroutery-core"
-version = "1.0.0-rc.1"
+version = "1.0.0-rc.2"
 dependencies = [
  "axum",
  "bytes",
@@ -6584,7 +6584,7 @@ dependencies = [
 
 [[package]]
 name = "zroutery-headless"
-version = "1.0.0-rc.1"
+version = "1.0.0-rc.2"
 dependencies = [
  "axum",
  "reqwest 0.12.28",
