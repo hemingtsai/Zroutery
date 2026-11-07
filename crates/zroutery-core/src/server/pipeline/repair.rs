@@ -38,6 +38,9 @@ pub(super) async fn try_rectify_buffered(
     error: &Error,
     lifecycle: &mut RequestLifecycle,
 ) -> std::result::Result<Option<crate::ir::ChatResponse>, Error> {
+    if candidate.provider.kind.is_decision() {
+        return Ok(None);
+    }
     // Resolve the provider credential once; every retry below reuses it.
     let mut client = client_for(req, &candidate.provider);
     let key = match console_key(state, candidate, key.map(str::to_string), &mut client).await {
@@ -59,13 +62,16 @@ pub(super) async fn try_rectify_buffered(
         && !crate::media::collect::collect(req).is_empty()
     {
         apply_vision_fallback(state, req, "upstream rejected media").await;
+        state.accounting_ready()?;
         let key_owned = key.map(str::to_string);
         if let Some(mut body) = reencode(candidate, req) {
             state
                 .upstream_sessions
                 .resolve(candidate, &mut body, &mut client);
             let started = Instant::now();
-            lifecycle.begin_attempt(candidate, true)?;
+            lifecycle.begin_send(candidate, true)?;
+            client.observation = Default::default();
+            lifecycle.bind_transport(&client.observation);
             match state
                 .upstream
                 .send_with_identity(&candidate.provider, key_owned.as_deref(), &body, &client)
@@ -122,7 +128,9 @@ pub(super) async fn try_rectify_buffered(
                 "request repaired, retrying same provider without health accounting"
             );
             let started = Instant::now();
-            lifecycle.begin_attempt(candidate, true)?;
+            lifecycle.begin_send(candidate, true)?;
+            client.observation = Default::default();
+            lifecycle.bind_transport(&client.observation);
             match state
                 .upstream
                 .send_with_identity(&candidate.provider, key, &modified, &client)
@@ -182,6 +190,9 @@ pub(super) async fn try_rectify_stream(
     error: &Error,
     lifecycle: &mut RequestLifecycle,
 ) -> std::result::Result<Option<crate::upstream::EventStream>, Error> {
+    if candidate.provider.kind.is_decision() {
+        return Ok(None);
+    }
     // Resolve the provider credential once; every retry below reuses it.
     let mut client = client_for(req, &candidate.provider);
     let key = match console_key(state, candidate, key.map(str::to_string), &mut client).await {
@@ -203,21 +214,25 @@ pub(super) async fn try_rectify_stream(
         && !crate::media::collect::collect(req).is_empty()
     {
         apply_vision_fallback(state, req, "upstream rejected media").await;
+        state.accounting_ready()?;
         let key_owned = key.map(str::to_string);
         if let Some(mut body) = reencode(candidate, req) {
             state
                 .upstream_sessions
                 .resolve(candidate, &mut body, &mut client);
             let started = Instant::now();
-            lifecycle.begin_attempt(candidate, true)?;
+            lifecycle.begin_send(candidate, true)?;
+            client.observation = Default::default();
+            lifecycle.bind_transport(&client.observation);
             match state
                 .upstream
-                .stream_with_identity(
+                .stream_with_identity_policy(
                     &candidate.provider,
                     key_owned.as_deref(),
                     &body,
                     &candidate.entry.upstream_model,
                     &client,
+                    true,
                 )
                 .await
             {
@@ -272,15 +287,18 @@ pub(super) async fn try_rectify_stream(
                 "stream request repaired, retrying same provider without health accounting"
             );
             let started = Instant::now();
-            lifecycle.begin_attempt(candidate, true)?;
+            lifecycle.begin_send(candidate, true)?;
+            client.observation = Default::default();
+            lifecycle.bind_transport(&client.observation);
             match state
                 .upstream
-                .stream_with_identity(
+                .stream_with_identity_policy(
                     &candidate.provider,
                     key,
                     &modified,
                     &candidate.entry.upstream_model,
                     &client,
+                    true,
                 )
                 .await
             {

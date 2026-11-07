@@ -78,7 +78,7 @@ pub(super) fn stream_response(
         StreamContext {
             lifecycle,
             usage: Usage::default(),
-            pricing: candidate.entry.pricing.clone(),
+            pricing: candidate.settled_pricing().cloned(),
             provider_id: candidate.provider.id.clone(),
             tier: candidate.entry.tier,
             kind,

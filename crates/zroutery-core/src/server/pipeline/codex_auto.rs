@@ -69,7 +69,7 @@ struct Completed {
     usage: Usage,
     candidate: Candidate,
     started: Instant,
-    declared_model: Option<String>,
+    declaration: crate::ir::UpstreamModelDeclaration,
 }
 
 struct Delivery {
@@ -117,6 +117,7 @@ async fn compact_inner(
         .router
         .plan(&registry, &resolution, &req.required_capabilities)?;
     let plan = super::effort::filter(&req, plan)?;
+    let plan = super::credentials::expand_inference_keys(app, plan, usize::MAX)?;
     let candidate = plan
         .into_iter()
         .find(|candidate| {
@@ -129,6 +130,8 @@ async fn compact_inner(
             )
         })?;
     let mut identity = client_for(&req, &candidate.provider);
+    super::credentials::validate_execution(app, &candidate)?;
+    super::credentials::validate_budget_price(app, &candidate, true)?;
     let key = app.api_key(&candidate.provider)?;
     let key = console_key(app, &candidate, key, &mut identity).await?;
     body["model"] = json!(candidate.entry.upstream_model);
@@ -155,14 +158,19 @@ async fn compact_inner(
         filter_active: false,
     };
     guard.lifecycle.attempted(&candidate);
-    guard.lifecycle.begin_attempt(&candidate, false)?;
+    guard.lifecycle.begin_send(&candidate, false)?;
+    guard.lifecycle.bind_transport(&identity.observation);
     let started = Instant::now();
-    match app
+    let result = app
         .upstream
         .compact_codex(&candidate.provider, key.as_deref(), &body, &identity)
-        .await
-    {
+        .await;
+    guard.lifecycle.observe_transport(&identity.observation);
+    match result {
         Ok(mut response) => {
+            guard
+                .lifecycle
+                .note_declaration(&crate::ir::declaration_from_wire(&response));
             session_binding::annotate_response(&mut response, &req.reply_headers);
             let usage = protocol::responses::response_usage(&response);
             response["model"] = json!(candidate.exposed_id);
@@ -171,7 +179,7 @@ async fn compact_inner(
                 TerminalKind::Served,
                 Settlement {
                     usage,
-                    pricing: candidate.entry.pricing.clone(),
+                    pricing: candidate.settled_pricing().cloned(),
                     provider_id: candidate.provider.id.clone(),
                     tier: candidate.entry.tier,
                 },
@@ -262,15 +270,14 @@ pub(super) async fn handle(
                     &completed.candidate,
                     RequestKind::Main,
                 );
-                let cost = completed
-                    .candidate
-                    .entry
-                    .pricing
-                    .as_ref()
-                    .map(|p| p.cost_of(&completed.usage));
-                inject_cost_header(response.headers_mut(), cost.as_ref());
                 match finish(&mut guard, &completed, input, previous, storage) {
-                    Ok(()) => response,
+                    Ok(()) => {
+                        inject_cost_header(
+                            response.headers_mut(),
+                            guard.lifecycle.last_attempt_cost(),
+                        );
+                        response
+                    }
                     Err(error) => super::error_response(Dialect::OpenAIResponses, &error),
                 }
             }
@@ -320,7 +327,7 @@ pub(super) async fn handle(
             Some(Ok(mut completed)) => {
                 guard.pending_settlement = Settlement {
                     usage: completed.usage,
-                    pricing: completed.candidate.entry.pricing.clone(),
+                    pricing: completed.candidate.settled_pricing().cloned(),
                     provider_id: completed.candidate.provider.id.clone(),
                     tier: completed.candidate.entry.tier,
                 };
@@ -454,12 +461,7 @@ fn finish(
         "success"
     });
     guard.lifecycle.ttft_ms(guard.lifecycle.elapsed_ms());
-    #[cfg(feature = "ml")]
-    guard
-        .lifecycle
-        .note_declared_model(completed.declared_model.as_deref());
-    #[cfg(not(feature = "ml"))]
-    let _ = &completed.declared_model;
+    guard.lifecycle.note_declaration(&completed.declaration);
     guard.lifecycle.served_attempt(completed.started);
     guard.app.router.record_classified_outcome(
         candidate.model_id(),
@@ -473,7 +475,7 @@ fn finish(
         TerminalKind::Served,
         Settlement {
             usage: completed.usage,
-            pricing: candidate.entry.pricing.clone(),
+            pricing: candidate.settled_pricing().cloned(),
             provider_id: candidate.provider.id.clone(),
             tier: candidate.entry.tier,
         },
@@ -527,13 +529,25 @@ async fn run(
         if !app.router.credential_available(candidate) {
             continue;
         }
-        let shaped = shape_for_candidate(app, candidate, req).await;
+        let shaped = match shape_for_candidate(app, candidate, req, RequestKind::Main).await {
+            Ok(shaped) => shaped,
+            Err(error) => {
+                lifecycle.attempted(candidate);
+                lifecycle.begin_preparation(candidate)?;
+                lifecycle.failed_attempt(Instant::now(), &error);
+                last = error;
+                continue;
+            }
+        };
         // Auto cleans history only after a targeted error, but an explicitly
         // enabled provider portability quirk must still apply before every send,
         // including tool-only staging when Auto is disabled.
         let (key, mut body) = match prepare(app, candidate, &shaped, EncodeMode::Normal) {
             Ok(prepared) => prepared,
             Err(error) => {
+                lifecycle.attempted(candidate);
+                lifecycle.begin_preparation(candidate)?;
+                lifecycle.failed_attempt(Instant::now(), &error);
                 last = error;
                 continue;
             }
@@ -541,19 +555,21 @@ async fn run(
         if budget.cleaned && candidate.provider.dialect() == Dialect::OpenAIResponses {
             policy::clean_history(&mut body)?;
         }
-        if !app.router.allow_candidate_request(candidate) {
-            continue;
-        }
-        candidates_sent += 1;
         let mut identity = client_for(&shaped, &candidate.provider);
         let key = match console_key(app, candidate, key, &mut identity).await {
             Ok(key) => key,
             Err(error) => {
-                app.router.release_half_open_permit(candidate.model_id());
+                lifecycle.attempted(candidate);
+                lifecycle.begin_preparation(candidate)?;
+                lifecycle.failed_attempt(Instant::now(), &error);
                 last = error;
                 continue;
             }
         };
+        if !app.router.allow_candidate_request(candidate) {
+            continue;
+        }
+        candidates_sent += 1;
         let mut tried_rectifiers = std::collections::HashSet::new();
         let mut binding = app
             .upstream_sessions
@@ -565,7 +581,14 @@ async fn run(
             }
             let started = Instant::now();
             lifecycle.attempted(candidate);
-            lifecycle.begin_attempt(candidate, budget.cleaned || !tried_rectifiers.is_empty())?;
+            if let Err(error) =
+                lifecycle.begin_send(candidate, budget.cleaned || !tried_rectifiers.is_empty())
+            {
+                app.router.release_half_open_permit(candidate.model_id());
+                return Err(error);
+            }
+            identity.observation = Default::default();
+            lifecycle.bind_transport(&identity.observation);
             let result = tokio::time::timeout_at(
                 deadline,
                 app.upstream.stage_codex(
@@ -578,8 +601,13 @@ async fn run(
             )
             .await;
             let result = result.unwrap_or_else(|_| Err(Error::Timeout(policy::DEADLINE.as_secs())));
+            lifecycle.observe_transport(&identity.observation);
             match result {
                 Ok(staged) => {
+                    // Capture before normalization can reject or rewrite a
+                    // response. Failed local validation still retains the
+                    // upstream's structured model evidence.
+                    lifecycle.note_declaration(&staged_declaration(&staged));
                     let mut completed = match normalize(staged, &shaped, candidate, id) {
                         Ok(completed) => completed,
                         Err(error) => {
@@ -746,7 +774,7 @@ fn normalize(
     id: Option<&str>,
 ) -> Result<Completed> {
     let mut frames = Vec::new();
-    let mut declared_model = None;
+    let declaration = staged_declaration(&staged);
     let mut wire = match staged {
         StagedResponse::Responses(raw) => {
             frames = raw;
@@ -780,7 +808,6 @@ fn normalize(
                 StagedResponse::Responses(_) => unreachable!(),
             };
             let mut wire = protocol::responses::encode_response(&response);
-            declared_model = (!response.model.trim().is_empty()).then(|| response.model.clone());
             protocol::responses::restore_response_tools(&mut wire, req);
             wire
         }
@@ -789,13 +816,6 @@ fn normalize(
         return Err(Error::BadUpstreamPayload(
             "Responses response must be an object".into(),
         ));
-    }
-    if declared_model.is_none() {
-        declared_model = wire
-            .get("model")
-            .and_then(Value::as_str)
-            .filter(|m| !m.trim().is_empty())
-            .map(str::to_string);
     }
     if let Some(id) = id {
         wire["id"] = json!(id);
@@ -843,6 +863,34 @@ fn normalize(
         usage,
         candidate: candidate.clone(),
         started: Instant::now(),
-        declared_model,
+        declaration,
     })
+}
+
+fn staged_declaration(staged: &StagedResponse) -> crate::ir::UpstreamModelDeclaration {
+    let mut declaration = crate::ir::UpstreamModelDeclaration::default();
+    match staged {
+        StagedResponse::Json(value) => declaration.merge(&crate::ir::declaration_from_wire(value)),
+        StagedResponse::Responses(frames) => {
+            for frame in frames {
+                if let Ok(value) = frame.json() {
+                    declaration.merge(&crate::ir::declaration_from_wire(&value));
+                    if let Some(response) = value.get("response") {
+                        declaration.merge(&crate::ir::declaration_from_wire(response));
+                    }
+                }
+            }
+        }
+        StagedResponse::Events(events) => {
+            for event in events {
+                if let crate::ir::StreamEvent::UpstreamDeclaration {
+                    declaration: observed,
+                } = event
+                {
+                    declaration.merge(observed);
+                }
+            }
+        }
+    }
+    declaration
 }

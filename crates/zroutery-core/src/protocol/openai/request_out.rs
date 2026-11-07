@@ -462,6 +462,59 @@ fn coalesce_assistant_items(messages: Vec<Value>) -> Vec<Value> {
     out
 }
 
+/// Close tool rounds the client abandoned, before the send boundary validates
+/// them.
+///
+/// A client that cancels a tool call — or resumes a conversation written by an
+/// older runtime — can leave an assistant `tool_calls` round with no `tool`
+/// results before the next user message. Providers disagree about whether that
+/// is legal, so forwarding it blindly fails on some and the strict validator
+/// refuses it on all. Neither is acceptable: the history is the client's, and
+/// the missing result is a real event, not a reason to block the turn.
+///
+/// The repair inserts an explicit result per unanswered call — one that states
+/// the call was not executed — rather than inventing an output or deleting the
+/// call. The round stays paired, the transcript stays truthful, and a result
+/// that *does* arrive is never touched. Orphan results (a result without a
+/// call) and duplicate ids are left for the validator to refuse, because those
+/// cannot be explained by an abandoned round.
+///
+/// Returns how many results were inserted.
+pub fn close_abandoned_tool_rounds(body: &mut Value) -> usize {
+    let Some(messages) = body.get_mut("messages").and_then(Value::as_array_mut) else {
+        return 0;
+    };
+    let mut out: Vec<Value> = Vec::with_capacity(messages.len());
+    let mut pending: Vec<String> = Vec::new();
+    let mut repaired = 0;
+    for message in messages.drain(..) {
+        if message["role"] == "tool" {
+            let id = message["tool_call_id"].as_str().unwrap_or_default();
+            pending.retain(|call| call != id);
+            out.push(message);
+            continue;
+        }
+        // A new turn began with calls still unanswered: close them, in call
+        // order, so the transcript keeps its round.
+        for id in pending.drain(..) {
+            out.push(json!({
+                "role": "tool",
+                "tool_call_id": id,
+                "content": "Tool call not executed: the conversation continued without its result.",
+            }));
+            repaired += 1;
+        }
+        for call in message["tool_calls"].as_array().into_iter().flatten() {
+            if let Some(id) = call["id"].as_str().filter(|id| !id.is_empty()) {
+                pending.push(id.to_string());
+            }
+        }
+        out.push(message);
+    }
+    *messages = out;
+    repaired
+}
+
 /// Verify pairing at the send boundary, after continuation expansion and
 /// dialect translation. Never fabricate/drop a call or expose payloads in errors.
 pub fn validate_tool_history(body: &Value) -> Result<()> {

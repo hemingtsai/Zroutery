@@ -313,6 +313,21 @@ impl FailureClass {
                 return Self::BalanceExhausted;
             }
         }
+        // The OpenCode Zen free tier answers any request it does not accept
+        // from an official client with 429 `FreeUsageLimitError`, whose text is
+        // "Free usage limit reached. Free models work in OpenCode; subscribe to
+        // OpenCode Go". That is not a transient rate window and not an empty
+        // wallet: replaying, waiting out a cooldown or retrying the same
+        // candidate against the same client can never succeed, while another
+        // provider may serve the request. It is the provider's pool policy, so
+        // it must not open the model's circuit (the model is healthy for a
+        // client the policy admits) and must not be recorded as a rate limit
+        // that will quietly "cool down".
+        if let Some(body) = lower.as_deref() {
+            if is_client_policy_refusal(body) {
+                return Self::QuotaExhausted;
+            }
+        }
         if status == 400 && lower.as_deref().is_some_and(is_rate_limit_message) {
             return Self::RateLimit;
         }
@@ -595,6 +610,10 @@ fn is_rate_limit_message(message: &str) -> bool {
 /// the other would take a provider out of routing that recovers by itself.
 fn is_balance_exhausted_message(message: &str) -> bool {
     message.contains("insufficient_quota")
+        // NewAPI-family relays answer an exhausted wallet with their own code,
+        // which does not contain the OpenAI spelling (`insufficient_user_quota`
+        // is not `insufficient_quota`), over statuses from 403 upward.
+        || message.contains("insufficient_user_quota")
         || message.contains("insufficient quota")
         || message.contains("insufficient balance")
         || message.contains("insufficient credit")
@@ -607,8 +626,25 @@ fn is_balance_exhausted_message(message: &str) -> bool {
         || message.contains("account balance exhausted")
         || message.contains("余额不足")
         || message.contains("额度不足")
+        // The pre-charge refusal NewAPI prints when the wallet cannot cover
+        // the request's own estimate ("预扣费额度失败, 用户剩余额度: …").
+        || message.contains("预扣费额度失败")
         || message.contains("欠费")
         || message.contains("请充值")
+}
+
+/// Markers of a provider refusing this *client*, not this request.
+///
+/// The OpenCode Zen free tier admits only the official OpenCode runtime and
+/// answers everything else with `429 FreeUsageLimitError`; the message explains
+/// that free models work in OpenCode and that Go is the paid way to continue.
+/// No header or body change alters that answer — it is decided by the client
+/// the gateway observed — so the classifier must not turn it into a cooldown
+/// that looks recoverable.
+fn is_client_policy_refusal(message: &str) -> bool {
+    message.contains("freeusagelimiterror")
+        || message.contains("free usage limit reached")
+        || message.contains("free models work in opencode")
 }
 
 fn is_no_candidate_message(message: &str) -> bool {
@@ -1118,6 +1154,58 @@ mod tests {
     #[test]
     fn status_403_is_authentication() {
         assert_eq!(FailureClass::from_status(403), FailureClass::Authentication);
+    }
+
+    #[test]
+    fn an_opencode_free_tier_client_refusal_is_a_pool_policy_fact_not_a_rate_limit() {
+        // Captured live on 2026-11-07: the same bytes and headers answered 200
+        // to the official client and this 429 to a third-party transport. The
+        // gateway decides by the client it observed, so no retry, wait or
+        // cooldown can change the answer — and another provider still can.
+        let body = r#"{"type":"error","error":{"type":"FreeUsageLimitError","message":"Free usage limit reached. Free models work in OpenCode (https://opencode.ai); subscribe to OpenCode Go to keep going: https://opencode.ai/go"}}"#;
+        let failure = ClassifiedFailure::from_status(429, body.into());
+        assert_eq!(failure.class, FailureClass::QuotaExhausted);
+        assert!(!failure.retryable(), "the same client is refused again");
+        assert!(
+            failure.fallbackable(),
+            "another provider may serve the request"
+        );
+        assert!(
+            !failure.affects_circuit(),
+            "the model is healthy for a client the policy admits"
+        );
+        // An ordinary 429 remains a rate limit.
+        assert_eq!(
+            FailureClass::from_status_with_body(429, r#"{"error":{"type":"rate_limit_error"}}"#),
+            FailureClass::RateLimit
+        );
+    }
+
+    #[test]
+    fn a_newapi_precharge_refusal_is_an_empty_wallet_even_over_403() {
+        // A NewAPI-family relay answers an exhausted wallet with 403 and its
+        // own `insufficient_user_quota` code. The wallet does not refill on a
+        // schedule, so this is a balance fact with the wallet latch and
+        // failover, not an authentication failure and not a bare 403 replay.
+        let body = r#"{"error":{"message":"预扣费额度失败, 用户剩余额度: X0.000020, 需要预扣费额度: X0.019568 (request id: 202611061324250318188558268d9d6uchl1kpC)","type":"new_api_error","param":"","code":"insufficient_user_quota"}}"#;
+        assert_eq!(
+            FailureClass::from_status_with_body(403, body),
+            FailureClass::BalanceExhausted
+        );
+        // The message-only adapters see the same refusal with a relay prefix
+        // that names "403"; the wallet marker is checked before that string
+        // can make it an authentication.
+        assert_eq!(
+            FailureClass::from_error_message(
+                "upstream relay returned 403: 预扣费额度失败, 用户剩余额度: X0.000020, 需要预扣费额度: X0.019568 (request id: fixture)"
+            ),
+            FailureClass::BalanceExhausted
+        );
+        // A plain 403 without the wallet markers stays authentication.
+        assert_eq!(
+            FailureClass::from_status_with_body(403, r#"{"error":{"message":"forbidden"}}"#),
+            FailureClass::Authentication
+        );
     }
 
     #[test]

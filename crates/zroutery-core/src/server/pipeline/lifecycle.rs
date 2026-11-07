@@ -16,7 +16,9 @@ use crate::error::Error;
 use crate::failure::ClassifiedFailure;
 #[cfg(feature = "ml")]
 use crate::ir::ChatRequest;
-use crate::ir::{Dialect, Usage};
+#[cfg(feature = "ml")]
+use crate::ir::DeclaredIdentity;
+use crate::ir::{ChatResponse, Dialect, UpstreamModelDeclaration, Usage};
 #[cfg(feature = "ml")]
 use crate::ml::ShadowInput;
 use crate::outcome::{Attempt as OutcomeAttempt, CandidateIdentity, Outcome};
@@ -196,6 +198,7 @@ pub(super) struct RequestLifecycle {
     routing: RoutingConfig,
     dialect: Dialect,
     streaming: bool,
+    kind: RequestKind,
     started: Instant,
     /// The decision trace, kept for the record, the stored response and the
     /// outcome's decision id.
@@ -249,13 +252,44 @@ pub(super) struct RequestLifecycle {
     /// reason and on the same terms as `ingested`.
     projected: bool,
     last_candidate: Option<Candidate>,
+    /// What the upstream's structured response declared it ran, for the
+    /// attempt that is currently open.
+    ///
+    /// This is the non-ML, always-persisted form of the declared-model fact
+    /// ([`crate::ir::UpstreamModelDeclaration`]): the client's requested id
+    /// and the configured plan model already have their own fields, and the
+    /// one name that used to be lost — the one the upstream's own response
+    /// carried before the proxy rewrote it to the exposed id — is kept here,
+    /// per attempt, on every build. Missing and placeholder values stay
+    /// missing and placeholder; nothing is back-filled from the requested or
+    /// configured model. Reset when an attempt opens, folded into the attempt
+    /// fact when it settles, so a failover chain keeps each candidate's own
+    /// declaration and a stream that contradicts itself is recorded as a
+    /// conflict rather than a last-write win.
+    declaration: UpstreamModelDeclaration,
+    transport_observation: Option<crate::ir::AttemptObservation>,
+    /// Whether this attempt's "response" is one Zroutery itself synthesized.
+    ///
+    /// A decision endpoint answers a probability, not a message; the bridge
+    /// speaks the verdict back in the client's protocol, and the `model` on
+    /// those synthetic frames and responses is the configured plan model that
+    /// Zroutery injected — routing identity, never an upstream declaration.
+    /// The automatic stream capture is suppressed for such an attempt, because
+    /// nothing it received can be a declaration; the honest value is the
+    /// explicit absence [`Self::declaration`] starts with. A structured model
+    /// field on the decision wire itself, when one exists, is wired directly
+    /// through [`Self::note_declared_model`], which merges regardless of this
+    /// flag.
+    synthetic_stream: bool,
     /// What the upstream actually declared it ran, kept separate from the routing
     /// identity in `served` and captured *before* the response's model field is
     /// rewritten to the client-facing `exposed_id`.
     ///
-    /// Unobserved values stay unknown; they are never inferred from the requested
-    /// model, because a relay that fronts several backends behind one name would
-    /// otherwise report a confident identity it cannot support.
+    /// Fed from the same capture as [`Self::declaration`]; the ML trace keeps
+    /// its own layered shape. Unobserved values stay unknown; they are never
+    /// inferred from the requested model, because a relay that fronts several
+    /// backends behind one name would otherwise report a confident identity it
+    /// cannot support.
     #[cfg(feature = "ml")]
     execution_identity: crate::ml::ExecutionIdentity,
     /// The request being served, retained for the stream verifier.
@@ -304,6 +338,7 @@ impl RequestLifecycle {
             routing,
             dialect,
             streaming,
+            kind,
             started: Instant::now(),
             decision: None,
             planned: None,
@@ -329,6 +364,9 @@ impl RequestLifecycle {
             task_evidence: Vec::new(),
             projected: false,
             last_candidate: None,
+            declaration: UpstreamModelDeclaration::default(),
+            transport_observation: None,
+            synthetic_stream: false,
         }
     }
 
@@ -348,6 +386,17 @@ impl RequestLifecycle {
     /// Whether this request already reached its terminal transition.
     pub(super) fn is_terminal(&self) -> bool {
         self.terminal
+    }
+
+    /// Whether the open attempt's stream frames are upstream declarations.
+    ///
+    /// False only for an attempt against a decision endpoint, whose frames
+    /// are Zroutery's own synthesis of a probability and carry the configured
+    /// plan model as routing identity. The stream capture reads this before
+    /// recording anything, so a synthetic frame can never become a claim the
+    /// upstream never made.
+    pub(super) fn synthetic_upstream(&self) -> bool {
+        self.synthetic_stream
     }
 
     /// How long this request has been running, for the record's own fields.
@@ -375,35 +424,133 @@ impl RequestLifecycle {
         self.response_id = Some(id.to_string());
     }
 
-    /// Record what the upstream said it ran, before the wire value is normalised.
+    /// Record what the upstream's structured response declared it ran, for the
+    /// attempt that is currently open.
     ///
-    /// Must be called at the point the upstream `model` field is still intact —
-    /// immediately before `resp.model = candidate.exposed_id`, which replaces it with
-    /// the client-facing id. That rewrite is correct for the wire: a client that asks
-    /// for a Zroutery model id should not learn which relay served it. The cost is
-    /// that the declared value would otherwise be gone, leaving `served_model` able to
-    /// claim a backend identity the provider never stated.
+    /// The capture is the always-compiled one: the declaration lands on the
+    /// attempt fact and the activity record on every build, because the client
+    /// entry (`requested_model`), the configured plan
+    /// (`ExecutionSnapshot::upstream_model`) and the upstream's own claim are
+    /// three different facts and losing the third is how a relay pool's
+    /// routing policy starts masquerading as a model identity.
     ///
-    /// Copying it here changes nothing the client observes. A provider that declares
-    /// nothing is recorded as having declared nothing, and is never back-filled from
-    /// the requested model — see [`crate::ml::execution_identity`].
-    #[cfg(feature = "ml")]
+    /// Buffered callers should prefer [`Self::note_declared_response`], which
+    /// reads the classified declaration the decoders parked on the response's
+    /// internal passthrough key and is therefore immune to the order in which
+    /// `resp.model` is rewritten to the exposed id. This method takes the raw
+    /// value directly, for the stream opening frame (the only place a stream's
+    /// model exists before the parser events) and for the staged Codex path.
+    ///
+    /// Semantics, per attempt:
+    ///
+    /// * A provider that declares nothing is recorded as having declared
+    ///   nothing — never back-filled from the requested or configured model.
+    /// * `auto` — and any `<namespace>/auto` spelling — stays a placeholder
+    ///   (`AutoOnly`), not a model name.
+    /// * A disagreement between two frames of one attempt is kept as a
+    ///   conflict with every distinct value; the last writer does not win.
+    /// * The `ml` execution identity is fed from the same capture and is
+    ///   never more confident than it, so there is one source of truth.
     pub(super) fn note_declared_model(&mut self, declared: Option<&str>) {
-        if declared.is_some_and(|value| !value.trim().is_empty()) {
-            self.execution_identity = self
-                .execution_identity
-                .clone()
-                .with_declared_model(declared);
-            return;
+        self.declaration.observe_model(declared);
+        #[cfg(feature = "ml")]
+        self.sync_ml_declared_model();
+    }
+
+    /// Merge a complete declaration into the open attempt.
+    ///
+    /// This is the whole-fidelity entry point: both axes, including a
+    /// conflict, arrive exactly as the caller classified them — nothing is
+    /// collapsed to a first value or a primary, and nothing is back-filled.
+    /// The SystemOne decision reply and any other caller that has already
+    /// parsed a full [`UpstreamModelDeclaration`] wires this; the stream
+    /// parsers reach the same merge through [`StreamEvent::UpstreamDeclaration`].
+    ///
+    /// Must be called before `finalize`, which is the terminal transition
+    /// that persists the attempt.
+    pub(super) fn note_declaration(&mut self, declaration: &UpstreamModelDeclaration) {
+        self.declaration.merge(declaration);
+        #[cfg(feature = "ml")]
+        self.sync_ml_declared_model();
+    }
+
+    /// Record the declaration a decoded response carried.
+    ///
+    /// Reads the internal passthrough key the buffered decoders and the
+    /// stream collector write, so the capture does not depend on `resp.model`
+    /// still holding the raw value — the rewrite to the client-facing exposed
+    /// id may have happened already. Must be called before `finalize`, which
+    /// is the terminal transition that persists the attempt.
+    ///
+    /// Wiring point for the buffered attempt loop: it replaces the
+    /// feature-gated `note_declared_model(resp.model)` call, and because it
+    /// reads the passthrough key it stays correct even after
+    /// `resp.model = candidate.exposed_id`. A response that carries no
+    /// internal key — Zroutery's own synthetic answers, whose model field is
+    /// configuration, not a declaration — records nothing, exactly as it
+    /// should.
+    pub(super) fn note_declared_response(&mut self, resp: &ChatResponse) {
+        if let Some(declaration) = crate::ir::declaration_from_passthrough(resp) {
+            self.note_declaration(&declaration);
         }
-        // Only downgrade to "not declared" if nothing better was already recorded, so
-        // a rectified retry cannot erase a real observation from the first attempt.
-        if !self
-            .execution_identity
-            .provider_declared_model
-            .is_observed()
-        {
-            self.execution_identity = self.execution_identity.clone().with_declared_model(None);
+    }
+
+    /// Feed the ML execution identity from the non-ML declaration.
+    ///
+    /// One source of truth, and the ML trace may never be more confident than
+    /// the capture it is fed from:
+    ///
+    /// * A single specific name is observed — the first one, sticky, so a
+    ///   later identical observation cannot rewrite it.
+    /// * A conflict overrides even an earlier observation with an explicit
+    ///   uncertain absence. Handing ML the first value of a contradictory
+    ///   attempt would be a fabricated accurate label, which is exactly the
+    ///   failure this capture exists to prevent; the base record keeps the
+    ///   whole conflict either way.
+    /// * A placeholder is not a model name: it is recorded as the empty-value
+    ///   absence [`crate::ml::UnavailableReason::EmptyValue`] documents (the
+    ///   value exists but is not a usable name).
+    /// * A missing field stays "the provider declared nothing".
+    #[cfg(feature = "ml")]
+    fn sync_ml_declared_model(&mut self) {
+        match &self.declaration.model {
+            DeclaredIdentity::Declared(_) => {
+                if self
+                    .execution_identity
+                    .provider_declared_model
+                    .is_observed()
+                {
+                    return;
+                }
+                if let Some(value) = self.declaration.model.value() {
+                    self.execution_identity = self
+                        .execution_identity
+                        .clone()
+                        .with_declared_model(Some(value));
+                }
+            }
+            DeclaredIdentity::Conflicting(_) => {
+                self.execution_identity.provider_declared_model =
+                    crate::ml::IdentityEvidence::unavailable(
+                        crate::ml::UnavailableReason::EmptyValue,
+                    );
+            }
+            DeclaredIdentity::AutoOnly(_) => {
+                self.execution_identity.provider_declared_model =
+                    crate::ml::IdentityEvidence::unavailable(
+                        crate::ml::UnavailableReason::EmptyValue,
+                    );
+            }
+            DeclaredIdentity::Missing => {
+                if self
+                    .execution_identity
+                    .provider_declared_model
+                    .is_observed()
+                {
+                    return;
+                }
+                self.execution_identity = self.execution_identity.clone().with_declared_model(None);
+            }
         }
     }
 
@@ -790,6 +937,29 @@ impl RequestLifecycle {
         self.begin_accounting_attempt(candidate, false, false)
     }
 
+    /// Revalidate after asynchronous preparation and every retry wait. A refused
+    /// local precondition is evidence of preparation, never a paid upstream send.
+    pub(super) fn begin_send(
+        &mut self,
+        candidate: &Candidate,
+        rectified: bool,
+    ) -> crate::error::Result<()> {
+        let checked =
+            super::credentials::validate_execution(&self.state, candidate).and_then(|()| {
+                super::credentials::validate_budget_price(
+                    &self.state,
+                    candidate,
+                    self.kind.is_main(),
+                )
+            });
+        if let Err(error) = checked {
+            self.begin_accounting_attempt(candidate, rectified, false)?;
+            self.failed_attempt(Instant::now(), &error);
+            return Err(error);
+        }
+        self.begin_attempt(candidate, rectified)
+    }
+
     fn begin_accounting_attempt(
         &mut self,
         candidate: &Candidate,
@@ -799,6 +969,19 @@ impl RequestLifecycle {
         // Before opening a retry, any known failed usage must already be durable.
         self.state.accounting_ready()?;
         self.last_candidate = Some(candidate.clone());
+        // The declaration is per attempt: a failover to another candidate (or
+        // a rectified retry of the same one) must not inherit what a previous
+        // send's response declared. An attempt against a decision endpoint
+        // also loses the stream capture: its frames are Zroutery's own
+        // synthesis carrying the configured model, not an upstream claim.
+        self.declaration = UpstreamModelDeclaration::default();
+        self.transport_observation = None;
+        #[cfg(feature = "ml")]
+        {
+            self.execution_identity.provider_declared_model =
+                crate::ml::IdentityEvidence::unavailable(crate::ml::UnavailableReason::EmptyValue);
+        }
+        self.synthetic_stream = candidate.provider.kind.is_decision();
         self.record
             .inference_credential(candidate.credential.as_ref());
         tracing::debug!(model = candidate.model_id(), provider = %candidate.provider.id,
@@ -845,8 +1028,42 @@ impl RequestLifecycle {
     /// Capture usage before validating the returned task. A malformed classifier
     /// answer can still be billed; failover must not discard its known charge.
     pub(super) fn observed_attempt_usage(&mut self, usage: Usage) {
-        if let Some(fact) = self.accounting_attempts.last_mut() {
+        if let Some(observation) = self.transport_observation.clone() {
+            observation.observe_decoded(&Default::default(), usage);
+            self.observe_transport(&observation);
+            return;
+        }
+        if let Some(fact) = self
+            .accounting_attempts
+            .last_mut()
+            .filter(|fact| fact.state == AttemptState::InFlight)
+        {
             fact.observe_usage(usage);
+        }
+    }
+
+    pub(super) fn observe_transport(&mut self, observation: &crate::ir::AttemptObservation) {
+        let observed = observation.snapshot();
+        self.note_declaration(&observed.declaration);
+        if let Some(fact) = self.accounting_attempts.last_mut() {
+            fact.observe_response(&observed);
+        }
+    }
+
+    pub(super) fn bind_transport(&mut self, observation: &crate::ir::AttemptObservation) {
+        self.transport_observation = Some(observation.clone());
+    }
+
+    fn capture_transport(&mut self) {
+        if !self
+            .accounting_attempts
+            .last()
+            .is_some_and(|fact| fact.state == AttemptState::InFlight)
+        {
+            return;
+        }
+        if let Some(observation) = self.transport_observation.clone() {
+            self.observe_transport(&observation);
         }
     }
 
@@ -868,6 +1085,14 @@ impl RequestLifecycle {
             // The same quote that is charged goes into the Outcome/ML sample.
             attempt.cost = fact.cost.as_ref().map(|cost| cost.amount);
         }
+    }
+
+    /// Response headers report the same known charge as the durable attempt.
+    /// An absent usage reading cannot acquire a zero cost from a wire default.
+    pub(super) fn last_attempt_cost(&self) -> Option<&Cost> {
+        self.accounting_attempts
+            .last()
+            .and_then(|fact| fact.cost.as_ref())
     }
 
     /// The attempt that has no verdict yet, if one is open.
@@ -906,9 +1131,16 @@ impl RequestLifecycle {
     /// is set here rather than at the request level.
     pub(super) fn failed_attempt(&mut self, since: Instant, error: &Error) {
         let Some(index) = self.open_attempt() else {
-            tracing::warn!(error = %error, "a failed attempt had no open attempt to settle");
+            // A final pre-send validation can already have settled its local
+            // preparation failure before the outer attempt loop receives it.
             return;
         };
+        self.capture_transport();
+        if let Error::InterruptedStream { usage } = error {
+            if self.transport_observation.is_none() {
+                self.observed_attempt_usage(*usage);
+            }
+        }
         self.attempt_failure_accounted = true;
         let failure = error.classified();
         let Some(attempt) = self.attempts.get_mut(index) else {
@@ -920,10 +1152,11 @@ impl RequestLifecycle {
         attempt.failure_message = Some(failure.message);
         attempt.http_status = failure.status;
         if let Some(fact) = self.accounting_attempts.get_mut(index) {
-            if let Error::InterruptedStream { usage } = error {
-                fact.observe_usage(*usage);
-            }
             fact.failure_class = Some(failure.class);
+            // A failed send keeps whatever its response declared before it
+            // failed — usually nothing, which is recorded as exactly that
+            // rather than left as "this build could not look".
+            fact.declared = Some(self.declaration.clone());
             fact.finish(AttemptState::Failed);
             // The caller may still classify/fail over; a persistence error
             // makes the next before-send gate fail locally, not replay this call.
@@ -994,10 +1227,25 @@ impl RequestLifecycle {
     pub(super) fn finalize(
         &mut self,
         terminal: TerminalKind,
-        settlement: Settlement,
+        mut settlement: Settlement,
     ) -> crate::error::Result<()> {
         if self.terminal {
             return self.state.accounting_ready();
+        }
+        self.capture_transport();
+        if let Some(observation) = self.transport_observation.clone().filter(|_| {
+            self.accounting_attempts
+                .last()
+                .is_some_and(|fact| fact.state == AttemptState::InFlight)
+        }) {
+            if terminal.is_served() {
+                observation.observe_decoded(&Default::default(), settlement.usage);
+            }
+            self.observe_transport(&observation);
+            settlement.usage = observation
+                .snapshot()
+                .accounting_usage()
+                .unwrap_or_default();
         }
         self.terminal = true;
 
@@ -1044,7 +1292,9 @@ impl RequestLifecycle {
                         || settlement.provider_id == fact.execution.provider_id
                 );
                 debug_assert!(settlement.tier.is_none() || settlement.tier == fact.execution.tier);
-                fact.observe_usage(settlement.usage);
+                if self.transport_observation.is_none() {
+                    fact.observe_usage(settlement.usage);
+                }
                 let state = match terminal {
                     TerminalKind::Served => AttemptState::Served,
                     TerminalKind::Failed { .. } => AttemptState::Failed,
@@ -1053,6 +1303,11 @@ impl RequestLifecycle {
                     TerminalKind::ClientDisconnected { emitted: false } => AttemptState::Cancelled,
                 };
                 fact.failure_class = terminal.classified().map(|failure| failure.class);
+                // The terminal attempt keeps what its response declared, on
+                // every build. Captured before this point, it is an observation
+                // that completes the attempt — not part of the pre-send
+                // execution the snapshot froze.
+                fact.declared = Some(self.declaration.clone());
                 fact.finish(state);
             }
         }
@@ -1069,9 +1324,14 @@ impl RequestLifecycle {
 
         // 4. The activity record, once.
         let latency_ms = self.elapsed_ms();
+        let recorded_usage = self
+            .accounting_attempts
+            .last()
+            .map(|attempt| attempt.accounted_usage().unwrap_or_default())
+            .unwrap_or(settlement.usage);
         let record = self
             .record
-            .usage(settlement.usage)
+            .usage(recorded_usage)
             .priced_with(settlement.pricing.as_ref());
         if terminal.is_served() {
             record.ok();
@@ -1084,6 +1344,14 @@ impl RequestLifecycle {
         // the outcome and accounting journal; skipped probes create no fact.
         record.attempts = self.accounting_attempts.len().min(u32::MAX as usize) as u32;
         record.cost = cost.clone();
+        // The record carries the terminal attempt's own declaration; the
+        // settlement fact keeps every earlier attempt's beside it. Read from
+        // the settled fact rather than the running field, so the record and
+        // the persisted attempts cannot disagree about what was captured.
+        record.upstream_declared = self
+            .accounting_attempts
+            .last()
+            .and_then(|attempt| attempt.declared.clone());
         let persistence = if self.state.accounting_status().durable {
             PersistenceState::Durable
         } else {
@@ -1212,5 +1480,24 @@ impl RequestLifecycle {
             }
         }
         builder.build()
+    }
+}
+
+impl Drop for RequestLifecycle {
+    fn drop(&mut self) {
+        if self.terminal {
+            return;
+        }
+        if let Some(candidate) = &self.last_candidate {
+            self.state
+                .router
+                .release_half_open_permit(candidate.model_id());
+        }
+        // A handler or handshake can be cancelled before the SSE body owns its
+        // guard. Retain metadata already received and settle that attempt once.
+        let _ = self.finalize(
+            TerminalKind::ClientDisconnected { emitted: false },
+            Settlement::default(),
+        );
     }
 }

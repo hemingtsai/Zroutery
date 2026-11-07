@@ -1372,6 +1372,14 @@ fn the_pipeline_has_no_second_failure_classifier() {
             "response.rs",
             include_str!("../src/server/pipeline/response.rs"),
         ),
+        (
+            "credentials.rs",
+            include_str!("../src/server/pipeline/credentials.rs"),
+        ),
+        (
+            "auxiliary.rs",
+            include_str!("../src/server/pipeline/auxiliary.rs"),
+        ),
     ];
     let source = &PIPELINE_SOURCES
         .iter()
@@ -1393,7 +1401,7 @@ fn the_pipeline_has_no_second_failure_classifier() {
     }
     // The canonical entry point and the router adapters are what it does use.
     assert!(source.contains(".classified()"));
-    assert!(source.contains("record_classified_attempt("));
+    assert!(source.contains("record_candidate_failure("));
     assert!(source.contains("should_fallback_candidate("));
     assert!(
         !source.contains("Some(class)"),

@@ -793,6 +793,42 @@ async fn invalid_inference_key_tries_the_same_accounts_next_key() {
 }
 
 #[tokio::test]
+async fn inference_keys_are_sent_in_priority_order_not_id_or_declaration_order() {
+    let (addr, mock) = start_mock().await;
+    let (mut cfg, mut keys) = account_keys_cfg(addr);
+    let account = &mut cfg.providers[0].accounts[0];
+    account.inference_keys[0].priority = 20;
+    account.inference_keys[1].priority = 0;
+    Arc::get_mut(&mut keys)
+        .unwrap()
+        .insert("key-a1", "sk-invalid-inference");
+    Arc::get_mut(&mut keys)
+        .unwrap()
+        .insert("key-a2", "sk-healthy-priority-first");
+
+    let harness = Harness::from_state(Arc::new(AppState::new(cfg, keys)), mock).await;
+    let response = harness
+        .post("/v1/chat/completions")
+        .json(&json!({
+            "model": "standard-class",
+            "messages": [{"role": "user", "content": "local fixture"}]
+        }))
+        .send()
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), 200);
+    assert_eq!(
+        harness.mock.keys(),
+        ["Bearer sk-healthy-priority-first"],
+        "priority 0 must be sent before priority 20 even though its key id sorts later"
+    );
+    let record = &harness.state.stats().recent(1)[0];
+    assert_eq!(record.inference_key_id.as_deref(), Some("sibling"));
+    harness.shutdown().await;
+}
+
+#[tokio::test]
 async fn disabled_inference_pool_never_borrows_the_provider_or_panel_key() {
     let (addr, mock) = start_mock().await;
     let (mut cfg, keys) = account_keys_cfg(addr);

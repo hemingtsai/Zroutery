@@ -96,6 +96,9 @@ async fn fixture(
         });
         secrets.insert("first-ref", "fixture-limited");
         secrets.insert("second-ref", "fixture-healthy");
+        // A replacement reference for the rekey regression: the same key id,
+        // a secret that answers normally.
+        secrets.insert("first-ref-v2", "fixture-healthy");
         config.models.push(ModelEntry::for_upstream(
             "p",
             "healthy",
@@ -289,4 +292,40 @@ async fn an_explicit_key_cooldown_is_429_not_an_empty_model_503() {
             task.abort();
         }
     }
+}
+
+#[tokio::test]
+async fn rekeying_a_cooling_key_forgets_its_429_window_and_authentication_gate() {
+    let (state, gateway, mock, task) = fixture("chat", true).await;
+    // The first request proves the pool: `first` answers 429 and `second`
+    // serves it, leaving both credential gates on `first`.
+    let first = ask(&gateway, "standard-class", false).await;
+    assert_eq!(first.status(), 200);
+    let _ = first.text().await.unwrap();
+    assert!(state.router().is_key_gated("p", "account", "first"));
+
+    // Rekey the cooling key and leave it as the only member of the pool, so a
+    // surviving window would answer 429 locally instead of reaching upstream.
+    let mut config = (*state.config()).clone();
+    config.providers[0].accounts[0].inference_keys.truncate(1);
+    config.providers[0].accounts[0].inference_keys[0].key_ref = "first-ref-v2".into();
+    state.set_config(config);
+    assert!(!state.router().is_key_gated("p", "account", "first"));
+
+    let sent = mock.0.lock().unwrap().len();
+    let response = ask(&gateway, "standard-class", false).await;
+    assert_eq!(
+        response.status(),
+        200,
+        "a surviving key window would answer 429 locally"
+    );
+    let _ = response.text().await.unwrap();
+    let (call_count, last_key) = {
+        let calls = mock.0.lock().unwrap();
+        (calls.len(), calls.last().unwrap().1.clone())
+    };
+    assert_eq!(call_count, sent + 1, "the new secret reached the upstream");
+    assert_eq!(last_key, "Bearer fixture-healthy");
+    gateway.stop().await;
+    task.abort();
 }

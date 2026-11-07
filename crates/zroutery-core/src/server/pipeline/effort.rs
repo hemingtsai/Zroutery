@@ -20,23 +20,14 @@ pub(super) fn permitted(req: &ChatRequest, candidate: &Candidate) -> bool {
     let Some(reasoning) = &req.reasoning else {
         return true;
     };
-    let source = candidate
-        .entry
-        .reasoning_capability
-        .as_ref()
-        .filter(|source| {
-            source.schema_version == crate::ir::REASONING_SCHEMA_VERSION
-                && source.provider_id == candidate.provider.id
-                && source.upstream_model == candidate.entry.upstream_model
-                && source.dialect == candidate.provider.dialect()
-        });
+    let source = candidate.entry.reasoning_evidence(&candidate.provider);
     match reasoning {
         ReasoningRequest::NativeEffort { value } => {
-            let levels = source
-                .map(|source| source.effort_levels.as_slice())
-                .unwrap_or(&candidate.entry.effort_levels);
+            let levels = candidate.entry.effective_effort_levels(&candidate.provider);
             if levels.is_empty() {
-                return same_protocol_direct(req, candidate);
+                return source.is_none()
+                    && candidate.entry.effort_levels.is_empty()
+                    && same_protocol_direct(req, candidate);
             }
             if !levels.iter().any(|level| level == value) {
                 return false;

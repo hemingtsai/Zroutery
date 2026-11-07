@@ -372,19 +372,28 @@ pub(super) fn sse_body(
                     };
                     for observation in observations {
                         match observation {
-                            #[cfg_attr(not(feature = "ml"), allow(unused_variables))]
                             StreamEvent::Start { model, usage, .. } => {
-                                // `model` is read only by the `ml` identity capture; the
-                                // usage accounting below is needed on every build.
-                                // Capture the upstream's declared model before the
-                                // encoder rewrites it to the client-facing `exposed_id`
-                                // (the encoder was built with that id at
-                                // `stream_encoder`). Streaming declares the model in its
-                                // opening frame, so this is the only place it exists —
-                                // unlike the buffered path, there is no later field to
-                                // recover it from.
-                                #[cfg(feature = "ml")]
-                                st.lifecycle.note_declared_model(Some(model.as_str()));
+                                // Capture the upstream's declared model before
+                                // the encoder rewrites it to the client-facing
+                                // `exposed_id` (the encoder was built with that
+                                // id at `stream_encoder`). Streaming declares
+                                // the model in its opening frame, so this is
+                                // the only place it exists — unlike the
+                                // buffered path, there is no later field to
+                                // recover it from. The capture is per attempt
+                                // and non-ML: an absent name stays absent, a
+                                // placeholder stays a placeholder, and two
+                                // frames that disagree are recorded as a
+                                // conflict instead of a last-write win.
+                                //
+                                // An attempt against a decision endpoint is
+                                // exempt: its frames are Zroutery's own
+                                // synthesis speaking a verdict back, and the
+                                // `model` they carry is the configured plan
+                                // model, not anything the upstream declared.
+                                if !st.lifecycle.synthetic_upstream() {
+                                    st.lifecycle.note_declared_model(Some(model.as_str()));
+                                }
                                 st.usage = *usage;
                             }
                             StreamEvent::ThinkingDelta { .. } => {
@@ -401,6 +410,18 @@ pub(super) fn sse_body(
                                 }
                             }
                             StreamEvent::Stop { usage, .. } => st.usage = *usage,
+                            // A frame's structured identity fields, beyond the
+                            // opening frame's model: version members, terminal
+                            // Responses frames, revised values. Merged per
+                            // attempt, so a stream that contradicts itself is a
+                            // conflict and not a last-write win — and a
+                            // synthetic decision frame never becomes a
+                            // declaration at all.
+                            StreamEvent::UpstreamDeclaration { declaration }
+                                if !st.lifecycle.synthetic_upstream() =>
+                            {
+                                st.lifecycle.note_declaration(declaration);
+                            }
                             _ => {}
                         }
                     }

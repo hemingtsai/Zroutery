@@ -86,6 +86,7 @@ pub(super) fn policy<'a>(
 
 /// Plan a tier request with an explicit routing policy and preserve the router's
 /// canonical eligibility and escalation trace.
+#[allow(clippy::too_many_arguments)]
 pub(super) fn plan(
     app: &crate::server::AppState,
     registry: &Registry,
@@ -93,8 +94,9 @@ pub(super) fn plan(
     req: &ChatRequest,
     policy: &RoutingPolicy,
     task: &TaskProfile,
+    explicit: bool,
 ) -> Result<(Vec<Candidate>, RouteDecision)> {
-    let (plan, decision) = app.router().plan_with_policy(
+    let (plan, decision) = app.router().plan_with_policy_order(
         registry,
         resolution,
         &req.required_capabilities,
@@ -102,6 +104,7 @@ pub(super) fn plan(
         &policy.preference,
         &policy.fallback,
         Some(task),
+        explicit,
     )?;
     validate_plan(req, &plan)?;
     log_escalation(req, resolution, &plan);
@@ -124,9 +127,22 @@ pub(super) fn plan_without_policy(
     transport.id.clear();
     transport.name = "Responses-native transport".into();
     transport.preference.preferred_tier = None;
+    transport.preference.cost_weight = 0.0;
     transport.fallback = PolicyFallback::Reject;
     let transport = policy(req, registry, &transport);
-    plan(app, registry, resolution, req, &transport, task)
+    let (plan, decision) = app.router().plan_with_policy_order(
+        registry,
+        resolution,
+        &req.required_capabilities,
+        &transport.requirements,
+        &transport.preference,
+        &transport.fallback,
+        Some(task),
+        false,
+    )?;
+    validate_plan(req, &plan)?;
+    log_escalation(req, resolution, &plan);
+    Ok((plan, decision))
 }
 
 pub(super) fn tier_has_native_candidate(registry: &Registry, tier: ModelTier) -> bool {

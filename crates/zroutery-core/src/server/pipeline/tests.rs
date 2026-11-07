@@ -795,3 +795,215 @@ fn explicit_credentials_order_is_stable_and_does_not_change_models() {
         1
     );
 }
+
+#[test]
+fn the_selected_credential_binds_its_own_rate() {
+    use super::credentials::expand_inference_keys;
+    use crate::billing::{EffectiveRate, Pricing, RateSource, RATE_SCHEMA_VERSION};
+    use crate::config::{AccountBinding, BindingVerification};
+    use crate::config::{AccountConfig, InferenceKeyConfig};
+    use crate::ir::Dialect;
+
+    let binding = AccountBinding {
+        verification: BindingVerification::Verified,
+        ..AccountBinding::fresh()
+    };
+    let binding_version = binding.version();
+    let binding_version_expected = binding_version.clone();
+    let account = AccountConfig {
+        account_id: "a".into(),
+        key_ref: "personal".into(),
+        enabled: true,
+        binding: Some(binding),
+        inference_keys: vec![
+            InferenceKeyConfig {
+                id: "z".into(),
+                key_ref: "inference-z".into(),
+                ..InferenceKeyConfig::default()
+            },
+            InferenceKeyConfig {
+                id: "a".into(),
+                key_ref: "inference-a".into(),
+                ..InferenceKeyConfig::default()
+            },
+        ],
+        effective_rates: vec![
+            EffectiveRate {
+                schema_version: RATE_SCHEMA_VERSION,
+                id: "account-rate".into(),
+                upstream_model: "model".into(),
+                dialect: Dialect::OpenAI,
+                binding_version: binding_version.clone(),
+                inference_key_id: None,
+                group: Some("vip".into()),
+                source: RateSource::VerifiedEffective,
+                observed_at: 100,
+                expires_at: None,
+                evidence: "panel /api/pricing for the account's group".into(),
+                pricing: Pricing::new("CNY", 1.0, 4.0),
+            },
+            EffectiveRate {
+                schema_version: RATE_SCHEMA_VERSION,
+                id: "key-z-rate".into(),
+                upstream_model: "model".into(),
+                dialect: Dialect::OpenAI,
+                binding_version,
+                inference_key_id: Some("z".into()),
+                group: Some("custom".into()),
+                source: RateSource::ManualOverride,
+                observed_at: 200,
+                expires_at: None,
+                evidence: "operator set this key's own tariff".into(),
+                pricing: Pricing::new("CNY", 0.5, 2.0),
+            },
+        ],
+        ..Default::default()
+    };
+    let mut candidate = test_candidate("p", "model");
+    candidate.entry.pricing = Some(Pricing::new("USD", 3.0, 15.0));
+    candidate.provider.accounts = vec![account];
+    let mut config = AppConfig::default();
+    config.providers.push(candidate.provider.clone());
+    let state = AppState::new(config, Arc::new(crate::config::MemorySecretStore::new()));
+
+    let expanded = expand_inference_keys(&state, vec![candidate], 2).unwrap();
+    let quote_of = |key_id: &str| -> &crate::billing::RateQuote {
+        expanded
+            .iter()
+            .find(|attempt| attempt.credential.as_ref().unwrap().key_id == key_id)
+            .expect("both keys expanded")
+            .rate_quote
+            .as_ref()
+            .expect("the plan-time estimate survived the expansion")
+    };
+
+    let a = quote_of("a");
+    assert_eq!(a.rate_id.as_deref(), Some("account-rate"));
+    assert_eq!(a.source, RateSource::VerifiedEffective);
+    assert!(
+        a.estimated,
+        "missing cache rates remain estimated even when base rates were verified"
+    );
+    assert_eq!(a.group.as_deref(), Some("vip"));
+    assert_eq!(a.pricing.currency, "CNY");
+    assert_eq!(
+        a.binding_version.as_deref(),
+        Some(binding_version_expected.as_str())
+    );
+
+    let z = quote_of("z");
+    assert_eq!(
+        z.rate_id.as_deref(),
+        Some("key-z-rate"),
+        "the key's own manual override outranks the account-level rate for that key"
+    );
+    assert_eq!(z.source, RateSource::ManualOverride);
+    assert_eq!(z.pricing.input_per_mtok, 0.5);
+    assert_eq!(z.group.as_deref(), Some("custom"));
+}
+
+#[test]
+fn a_rate_bound_to_another_key_does_not_transfer() {
+    use super::credentials::expand_inference_keys;
+    use crate::billing::{EffectiveRate, Pricing, RateSource, RATE_SCHEMA_VERSION};
+    use crate::config::{AccountBinding, AccountConfig, InferenceKeyConfig};
+    use crate::ir::Dialect;
+
+    let binding = AccountBinding::fresh();
+    let account = AccountConfig {
+        account_id: "a".into(),
+        enabled: true,
+        binding: Some(binding),
+        inference_keys: vec![InferenceKeyConfig {
+            id: "z".into(),
+            key_ref: "inference-z".into(),
+            ..InferenceKeyConfig::default()
+        }],
+        effective_rates: vec![EffectiveRate {
+            schema_version: RATE_SCHEMA_VERSION,
+            id: "other-key".into(),
+            upstream_model: "model".into(),
+            dialect: Dialect::OpenAI,
+            binding_version: "unused:0:0".into(),
+            inference_key_id: Some("x".into()),
+            group: None,
+            source: RateSource::ManualOverride,
+            observed_at: 1,
+            expires_at: None,
+            evidence: "bound to key x, not to the key being sent".into(),
+            pricing: Pricing::new("CNY", 0.1, 0.2),
+        }],
+        ..Default::default()
+    };
+    let mut candidate = test_candidate("p", "model");
+    candidate.entry.pricing = Some(Pricing::new("USD", 3.0, 15.0));
+    candidate.provider.accounts = vec![account];
+    let mut config = AppConfig::default();
+    config.providers.push(candidate.provider.clone());
+    let state = AppState::new(config, Arc::new(crate::config::MemorySecretStore::new()));
+
+    let expanded = expand_inference_keys(&state, vec![candidate], 2).unwrap();
+    let quote = expanded[0].rate_quote.as_ref().unwrap();
+    assert_eq!(
+        quote.source,
+        RateSource::ManualFallback,
+        "the key being sent has no rate of its own, so the shared model price stands"
+    );
+    assert_eq!(quote.pricing.currency, "USD");
+}
+
+#[test]
+fn dropping_before_body_handoff_keeps_transport_evidence_and_settles_once() {
+    let root = tempfile::tempdir().unwrap();
+    let store = Arc::new(
+        crate::runtime_store::RuntimeStore::open(&root.path().join("runtime.db")).unwrap(),
+    );
+    let state = Arc::new(AppState::new(
+        AppConfig::default(),
+        Arc::new(crate::config::MemorySecretStore::new()),
+    ));
+    state
+        .attach_accounting(
+            store.clone(),
+            &crate::budget::Ledger::new(),
+            "cancellation fixture",
+        )
+        .unwrap();
+    let mut candidate = test_candidate("p", "cancelled");
+    candidate.entry.pricing = Some(crate::billing::Pricing::new("USD", 2.0, 4.0));
+    let mut lifecycle = lifecycle_with_attempt(&state, &candidate);
+    let observation = crate::ir::AttemptObservation::default();
+    observation.observe(
+        &crate::ir::declaration_from_wire(&serde_json::json!({"model": "observed-before-cancel"})),
+        Some(crate::ir::Usage {
+            input_tokens: 10,
+            output_tokens: 2,
+            ..Default::default()
+        }),
+    );
+    lifecycle.bind_transport(&observation);
+    drop(lifecycle);
+
+    let record = store.usage().unwrap().pop().unwrap();
+    let attempts = store.usage_attempts(&record.id).unwrap();
+    assert_eq!(attempts.len(), 1);
+    assert_eq!(
+        attempts[0].state,
+        crate::accounting::AttemptState::Cancelled
+    );
+    assert_eq!(
+        attempts[0].declared.as_ref().unwrap().observed_model(),
+        Some("observed-before-cancel")
+    );
+    assert_eq!(attempts[0].usage.unwrap().input_tokens, 10);
+    assert!(attempts[0].cost.as_ref().unwrap().amount > 0.0);
+    assert!(store.unresolved_attempts().unwrap().is_empty());
+    assert_eq!(state.outcomes().recent(10).len(), 1);
+    let ledger = state.ledger();
+    state.retry_accounting().unwrap();
+    assert_eq!(ledger, state.ledger());
+    assert_eq!(store.usage().unwrap().len(), 1);
+    let reopened =
+        crate::runtime_store::RuntimeStore::open(&root.path().join("runtime.db")).unwrap();
+    assert_eq!(reopened.usage_attempts(&record.id).unwrap(), attempts);
+}

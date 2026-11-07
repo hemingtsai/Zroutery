@@ -23,6 +23,17 @@ fn parse(raw: &str) -> Vec<StreamEvent> {
     events
 }
 
+/// The declaration event the parser publishes for a chunk that names `model`.
+///
+/// Every chunk carries the member, so the first chunk's Start and its
+/// declaration observation describe the same name; only the first observation
+/// produces an event.
+fn declared(model: &str) -> StreamEvent {
+    StreamEvent::UpstreamDeclaration {
+        declaration: crate::ir::UpstreamModelDeclaration::from_wire_fields(Some(model), None),
+    }
+}
+
 fn chunk(delta: Value) -> String {
     format!(
         "data: {}\n\n",
@@ -339,22 +350,23 @@ fn parses_text_stream_with_usage_trailer() {
             usage: Usage::default()
         }
     );
+    assert_eq!(events[1], declared("deepseek-v4-pro"));
     assert_eq!(
-        events[1],
+        events[2],
         StreamEvent::TextDelta {
             index: 0,
             text: "Hel".into()
         }
     );
     assert_eq!(
-        events[2],
+        events[3],
         StreamEvent::TextDelta {
             index: 0,
             text: "lo".into()
         }
     );
-    assert_eq!(events[3], StreamEvent::BlockStop { index: 0 });
-    match &events[4] {
+    assert_eq!(events[4], StreamEvent::BlockStop { index: 0 });
+    match &events[5] {
         StreamEvent::Stop {
             stop_reason, usage, ..
         } => {
@@ -364,7 +376,7 @@ fn parses_text_stream_with_usage_trailer() {
         }
         other => panic!("unexpected {other:?}"),
     }
-    assert_eq!(events.len(), 5, "no duplicate stop after [DONE]");
+    assert_eq!(events.len(), 6, "no duplicate stop after [DONE]");
 }
 
 #[test]
@@ -376,16 +388,19 @@ fn reasoning_then_text_opens_two_blocks() {
         "data: [DONE]\n\n"
     );
     let events = parse(&raw);
+    // The opening frame still opens the message; the declaration observation
+    // rides right behind it.
+    assert_eq!(events[1], declared("deepseek-v4-pro"));
     assert_eq!(
-        events[1],
+        events[2],
         StreamEvent::ThinkingDelta {
             index: 0,
             text: "думаю".into()
         }
     );
-    assert_eq!(events[2], StreamEvent::BlockStop { index: 0 });
+    assert_eq!(events[3], StreamEvent::BlockStop { index: 0 });
     assert_eq!(
-        events[3],
+        events[4],
         StreamEvent::TextDelta {
             index: 1,
             text: "answer".into()
@@ -411,8 +426,9 @@ fn parses_incremental_tool_calls() {
         "data: [DONE]\n\n"
     );
     let events = parse(&raw);
+    assert_eq!(events[1], declared("deepseek-v4-pro"));
     assert_eq!(
-        events[1],
+        events[2],
         StreamEvent::ToolUseStart {
             index: 0,
             id: "call_1".into(),
@@ -420,21 +436,21 @@ fn parses_incremental_tool_calls() {
         }
     );
     assert_eq!(
-        events[2],
+        events[3],
         StreamEvent::ToolUseDelta {
             index: 0,
             partial_json: "{\"ci".into()
         }
     );
     assert_eq!(
-        events[3],
+        events[4],
         StreamEvent::ToolUseDelta {
             index: 0,
             partial_json: "ty\":1}".into()
         }
     );
     assert_eq!(
-        events[4],
+        events[5],
         StreamEvent::ToolUseStart {
             index: 1,
             id: "call_2".into(),
@@ -442,16 +458,16 @@ fn parses_incremental_tool_calls() {
         }
     );
     assert_eq!(
-        events[5],
+        events[6],
         StreamEvent::ToolUseDelta {
             index: 1,
             partial_json: "{}".into()
         }
     );
     // Both calls stay open until the stream ends, then stop in order.
-    assert_eq!(events[6], StreamEvent::BlockStop { index: 0 });
-    assert_eq!(events[7], StreamEvent::BlockStop { index: 1 });
-    assert!(matches!(events[8], StreamEvent::Stop { .. }));
+    assert_eq!(events[7], StreamEvent::BlockStop { index: 0 });
+    assert_eq!(events[8], StreamEvent::BlockStop { index: 1 });
+    assert!(matches!(events[9], StreamEvent::Stop { .. }));
     assert_legal_lifecycle(&events);
 }
 
@@ -600,13 +616,13 @@ fn truncated_stream_closes_blocks_without_claiming_completion() {
     events.extend(parser.finish());
 
     assert_eq!(
-        events[1],
+        events[2],
         StreamEvent::TextDelta {
             index: 0,
             text: "partial".into()
         }
     );
-    assert_eq!(events[2], StreamEvent::BlockStop { index: 0 });
+    assert_eq!(events[3], StreamEvent::BlockStop { index: 0 });
     assert!(
         !events
             .iter()
@@ -732,10 +748,14 @@ fn null_stream_content_is_not_an_error() {
     let role_only = parse(&chunk(json!({"role": "assistant", "content": null})));
     assert_eq!(
         role_only.len(),
-        1,
-        "a role-only delta opens the message and carries no text: {role_only:?}"
+        2,
+        "a role-only delta opens the message, carries no text, and one declaration: {role_only:?}"
     );
     assert!(matches!(role_only[0], StreamEvent::Start { .. }));
+    assert!(
+        matches!(role_only[1], StreamEvent::UpstreamDeclaration { .. }),
+        "the chunk's model member is still an observation: {role_only:?}"
+    );
     assert!(
         !role_only
             .iter()
@@ -1132,6 +1152,55 @@ fn parallel_responses_calls_are_one_assistant_round_before_their_results() {
     assert_eq!(messages[1]["reasoning_content"], "plan");
     assert_eq!(messages[2]["tool_call_id"], "b");
     assert_eq!(messages[3]["tool_call_id"], "a");
+}
+
+#[test]
+fn an_abandoned_tool_round_is_closed_with_an_explicit_not_executed_result() {
+    // The shape a client sends after cancelling a tool: the assistant's round
+    // has no results before the next user turn. The strict validator refuses
+    // it, so the send boundary closes it instead of blocking the turn.
+    let mut body = json!({"messages":[
+        {"role":"user","content":"inspect"},
+        {"role":"assistant","tool_calls":[{"id":"a"},{"id":"b"}]},
+        {"role":"user","content":"never mind"}
+    ]});
+    assert!(super::validate_tool_history(&body).is_err());
+    assert_eq!(super::close_abandoned_tool_rounds(&mut body), 2);
+    super::validate_tool_history(&body).unwrap();
+    let messages = body["messages"].as_array().unwrap();
+    assert_eq!(messages.len(), 5);
+    assert_eq!(messages[2]["role"], "tool");
+    assert_eq!(messages[2]["tool_call_id"], "a");
+    assert_eq!(messages[3]["tool_call_id"], "b");
+    assert!(messages[2]["content"]
+        .as_str()
+        .unwrap()
+        .contains("not executed"));
+    assert_eq!(messages[4]["content"], "never mind");
+
+    // A complete round is untouched: the repair must not invent results for
+    // calls that were answered.
+    let mut complete = json!({"messages":[
+        {"role":"assistant","tool_calls":[{"id":"a"}]},
+        {"role":"tool","tool_call_id":"a","content":"real output"},
+        {"role":"user","content":"next"}
+    ]});
+    assert_eq!(super::close_abandoned_tool_rounds(&mut complete), 0);
+    assert_eq!(complete["messages"].as_array().unwrap().len(), 3);
+    assert_eq!(complete["messages"][1]["content"], "real output");
+}
+
+#[test]
+fn an_orphan_result_still_fails_closed_after_the_repair() {
+    // A result without a call cannot be explained by an interrupted round, so
+    // it stays a refusal rather than being papered over.
+    let mut body = json!({"messages":[
+        {"role":"tool","tool_call_id":"ghost","content":"private-result"}
+    ]});
+    assert_eq!(super::close_abandoned_tool_rounds(&mut body), 0);
+    let error = super::validate_tool_history(&body).unwrap_err().to_string();
+    assert!(!error.contains("private-"));
+    assert!(error.contains("tool-call history"));
 }
 
 #[test]

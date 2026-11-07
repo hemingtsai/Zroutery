@@ -51,6 +51,7 @@ use crate::registry::Resolution;
 use crate::router::Candidate;
 mod sse;
 
+mod auxiliary;
 mod budget;
 mod client;
 pub(super) mod codex_auto;
@@ -271,6 +272,7 @@ pub(super) async fn handle_chat(
                                         .map(|plan| (plan, None)),
                                     Resolution::Tier(_) => match &matched_policy {
                                         Some(policy) => {
+                                            let explicit = matches!(policy, Cow::Borrowed(_));
                                             tracing::debug!(
                                                 policy_id = %policy.id,
                                                 "using policy-aware routing"
@@ -284,6 +286,7 @@ pub(super) async fn handle_chat(
                                                 &req,
                                                 &policy,
                                                 &task_profile,
+                                                explicit,
                                             )
                                             .map(
                                                 |(plan, mut decision)| {
@@ -758,8 +761,18 @@ async fn shape_for_candidate(
     state: &AppState,
     candidate: &Candidate,
     req: &ChatRequest,
-) -> ChatRequest {
+    kind: RequestKind,
+) -> Result<ChatRequest> {
+    // An unavailable main execution cannot justify a paid media preflight.
+    state.accounting_ready()?;
+    credentials::validate_execution(state, candidate)?;
+    credentials::validate_budget_price(state, candidate, kind.is_main())?;
     let mut shaped = req.clone();
+    // The classifier's transcript is the decision state. Generative media or
+    // reasoning repairs would change the question or start an auxiliary call.
+    if candidate.provider.kind.is_decision() {
+        return Ok(shaped);
+    }
     let config = state.config();
     let rectifier = &config.routing.rectifier;
     let media_fallback = rectifier.enabled && rectifier.media_fallback;
@@ -781,6 +794,7 @@ async fn shape_for_candidate(
         let needs_vision = crate::media::collect::collect(&shaped);
         if !needs_vision.is_empty() {
             apply_vision_fallback(state, &mut shaped, "preflight").await;
+            state.accounting_ready()?;
         }
     }
     if media_fallback {
@@ -841,9 +855,10 @@ async fn shape_for_candidate(
             shaped.reasoning = None;
             shaped.thinking = None;
         }
-        if let (Some(reasoning), Some(source)) =
-            (&req.reasoning, &candidate.entry.reasoning_capability)
-        {
+        if let (Some(reasoning), Some(source)) = (
+            &req.reasoning,
+            candidate.entry.reasoning_evidence(&candidate.provider),
+        ) {
             if let Some(budget) = reasoning
                 .effort()
                 .and_then(|effort| source.effort_budgets.get(effort))
@@ -855,7 +870,7 @@ async fn shape_for_candidate(
             }
         }
     }
-    shaped
+    Ok(shaped)
 }
 
 /// Prepare one attempt: resolve the key and encode the upstream body.
@@ -869,6 +884,13 @@ fn prepare(
     req: &ChatRequest,
     mode: crate::upstream::EncodeMode,
 ) -> Result<(Option<String>, Value)> {
+    state.accounting_ready()?;
+    credentials::validate_execution(state, candidate)?;
+    credentials::validate_budget_price(
+        state,
+        candidate,
+        mode == crate::upstream::EncodeMode::Normal,
+    )?;
     if !effort::permitted(req, candidate) {
         return Err(Error::NoCandidate(
             "the final candidate does not support the requested reasoning control".into(),
@@ -897,7 +919,19 @@ fn prepare(
         candidate.entry.max_output_tokens,
         mode,
     )?;
+    let mut body = body;
     if candidate.provider.dialect() == Dialect::OpenAI {
+        // A cancelled or resumed tool round is the client's history, not a
+        // reason to block the turn: close it with an explicit "not executed"
+        // result before the strict pairing check, which still refuses orphan
+        // results and duplicate ids.
+        let closed = openai::close_abandoned_tool_rounds(&mut body);
+        if closed > 0 {
+            tracing::debug!(
+                closed,
+                "closed tool rounds the client left unanswered with an explicit not-executed result"
+            );
+        }
         openai::validate_tool_history(&body)?;
     }
     Ok((key, body))
@@ -984,7 +1018,38 @@ async fn apply_vision_fallback_inner(state: &AppState, req: &mut ChatRequest, re
         return;
     }
     let target = target.unwrap();
-    let key = state.api_key(&target.provider).ok().flatten();
+    let candidate = Candidate {
+        exposed_id: target.entry.exposed_id(),
+        entry: target.entry.clone(),
+        provider: target.provider.clone(),
+        degraded: false,
+        credential: None,
+        rate_quote: None,
+    };
+    let selected = state
+        .router
+        .execution_options(&config, &candidate)
+        .into_iter()
+        .next();
+    let Some(candidate) = selected.filter(|candidate| {
+        credentials::validate_execution(state, candidate).is_ok()
+            && credentials::validate_budget_price(state, candidate, true).is_ok()
+    }) else {
+        for (slot, _) in &images {
+            crate::media::transform::replace(
+                req,
+                slot,
+                &crate::media::transform::Replacement::Placeholder(
+                    config.vision.placeholder.clone(),
+                ),
+            );
+        }
+        return;
+    };
+    let target = crate::media::vision::VisionTarget {
+        entry: candidate.entry.clone(),
+        provider: candidate.provider.clone(),
+    };
 
     let mut described = 0;
     let mut placeholders = 0;
@@ -1031,16 +1096,82 @@ async fn apply_vision_fallback_inner(state: &AppState, req: &mut ChatRequest, re
             continue;
         }
 
-        let started = std::time::Instant::now();
-        let outcome = crate::media::vision::describe(
-            &state.upstream,
+        let body = crate::media::vision::encode_description(
             &target,
-            key.as_deref(),
             source,
             req.client_identity.as_deref(),
             &req.client_headers,
-        )
-        .await;
+        );
+        let Ok(body) = body else {
+            crate::media::transform::replace(
+                req,
+                slot,
+                &crate::media::transform::Replacement::Placeholder(
+                    config.vision.placeholder.clone(),
+                ),
+            );
+            placeholders += 1;
+            continue;
+        };
+        let mut identity = client_for(req, &candidate.provider);
+        let key = match state.api_key(&candidate.provider) {
+            Ok(key) => key,
+            Err(_) => {
+                crate::media::transform::replace(
+                    req,
+                    slot,
+                    &crate::media::transform::Replacement::Placeholder(
+                        config.vision.placeholder.clone(),
+                    ),
+                );
+                placeholders += 1;
+                continue;
+            }
+        };
+        let key = match console_key(state, &candidate, key, &mut identity).await {
+            Ok(key) => key,
+            Err(_) => {
+                crate::media::transform::replace(
+                    req,
+                    slot,
+                    &crate::media::transform::Replacement::Placeholder(
+                        config.vision.placeholder.clone(),
+                    ),
+                );
+                placeholders += 1;
+                continue;
+            }
+        };
+        if credentials::validate_execution(state, &candidate).is_err()
+            || credentials::validate_budget_price(state, &candidate, true).is_err()
+            || !state.router.credential_available(&candidate)
+        {
+            crate::media::transform::replace(
+                req,
+                slot,
+                &crate::media::transform::Replacement::Placeholder(
+                    config.vision.placeholder.clone(),
+                ),
+            );
+            placeholders += 1;
+            continue;
+        }
+        let mut attempt = match auxiliary::AuxiliaryAttempt::begin(
+            state,
+            &candidate,
+            identity.observation.clone(),
+        ) {
+            Ok(attempt) => attempt,
+            Err(_) => break,
+        };
+        let started = std::time::Instant::now();
+        let outcome = state
+            .upstream
+            .send_with_identity(&target.provider, key.as_deref(), &body, &identity)
+            .await;
+        if attempt.finish(&outcome).is_err() {
+            break;
+        }
         let latency_ms = started.elapsed().as_millis() as f64;
         let model_id = target.entry.exposed_id();
         let replacement = match outcome {
@@ -1063,14 +1194,8 @@ async fn apply_vision_fallback_inner(state: &AppState, req: &mut ChatRequest, re
                     true,
                     None,
                 );
-                // Charge the auxiliary call immediately, against the
-                // provider that answered and the tier it is billed under,
-                // so a later failure in this loop cannot lose spend that
-                // was already incurred.
-                if let Some(pricing) = target.entry.pricing.as_ref() {
-                    let cost = pricing.cost_of(&resp.usage);
-                    state.charge_auxiliary(&target.provider.id, target.entry.tier, &cost);
-                }
+                // The auxiliary attempt already committed its own exact quote
+                // and charge. The main request must not charge it again.
                 crate::media::transform::Replacement::Description(
                     crate::media::vision::description_text(&resp),
                 )
@@ -1080,9 +1205,9 @@ async fn apply_vision_fallback_inner(state: &AppState, req: &mut ChatRequest, re
                 // An auxiliary failure is still an observed failure of the
                 // model that was asked, reported through the same canonical
                 // adapter as any other attempt.
-                state.router.record_classified_attempt(
-                    &model_id,
-                    &target.provider.id,
+                state.router.note_candidate_retry_after(&candidate, &e);
+                state.router.record_candidate_failure(
+                    &candidate,
                     &e.classified(),
                     &state.config().routing,
                 );
@@ -1152,13 +1277,17 @@ async fn buffered_upstream_once(
     // model answered, and the client sees exactly what a language model's
     // verdict would have looked like.
     if candidate.provider.kind.is_decision() {
-        let decision = state
+        let reply = state
             .upstream
-            .send_decision(&candidate.provider, key, body)
+            .send_decision_with_identity(&candidate.provider, key, body, client)
             .await?;
         let threshold = candidate.provider.decision.threshold;
-        let verdict = crate::classifier::verdict_from_decision(Some(decision), threshold);
+        let verdict = crate::classifier::verdict_from_decision(Some(reply.decision), threshold);
         let mut response = decision_response(kind, verdict, &candidate.entry.upstream_model);
+        response.usage = reply.usage.unwrap_or_default();
+        // Store structured evidence only. The synthetic response model above is
+        // a configured name, not something the decision endpoint declared.
+        crate::ir::capture_declaration_in_passthrough(&mut response.passthrough, &reply.declared);
         response.passthrough.insert(
             "zroutery.internal.decision_verdict".into(),
             serde_json::to_value(verdict)
@@ -1214,9 +1343,14 @@ async fn buffered_upstream(
         candidate.provider.timeout_secs,
     ));
     let mut retries = 0;
+    let mut rectified = false;
     loop {
         let attempt = Instant::now();
+        lifecycle.begin_send(candidate, rectified)?;
+        client.observation = Default::default();
+        lifecycle.bind_transport(&client.observation);
         let result = buffered_upstream_once(state, candidate, key, &body, &client, kind).await;
+        lifecycle.observe_transport(&client.observation);
         match result {
             Ok(response) => return Ok(response),
             Err(error) => {
@@ -1229,7 +1363,7 @@ async fn buffered_upstream(
                     lifecycle.failed_attempt(attempt, &error);
                     state.accounting_ready()?;
                     lifecycle.attempted(candidate);
-                    lifecycle.begin_attempt(candidate, true)?;
+                    rectified = true;
                     retries += 1;
                     tracing::info!(
                         model = candidate.model_id(),
@@ -1246,7 +1380,7 @@ async fn buffered_upstream(
                 state.accounting_ready()?;
                 tokio::time::sleep(delay).await;
                 lifecycle.attempted(candidate);
-                lifecycle.begin_attempt(candidate, false)?;
+                rectified = false;
                 retries += 1;
             }
         }
@@ -1266,20 +1400,26 @@ async fn stream_upstream(
     req: &ChatRequest,
 ) -> Result<crate::upstream::EventStream> {
     if candidate.provider.kind.is_decision() {
-        let decision = state
+        lifecycle.begin_send(candidate, false)?;
+        lifecycle.bind_transport(&client.observation);
+        let reply = state
             .upstream
-            .send_decision(&candidate.provider, key, body)
+            .send_decision_with_identity(&candidate.provider, key, body, client)
             .await?;
         let verdict = crate::classifier::verdict_from_decision(
-            Some(decision),
+            Some(reply.decision),
             candidate.provider.decision.threshold,
         );
-        let response = decision_response(kind, verdict, &candidate.entry.upstream_model);
+        let mut response = decision_response(kind, verdict, &candidate.entry.upstream_model);
+        response.usage = reply.usage.unwrap_or_default();
+        lifecycle.note_declaration(&reply.declared);
         let text = crate::classifier::decision_text_for_request(req, kind, verdict);
         let events = vec![
             crate::ir::StreamEvent::Start {
                 id: response.id,
-                model: response.model,
+                // The client encoder uses its stable exposed ID. An empty
+                // internal model cannot fabricate a declaration from config.
+                model: String::new(),
                 usage: response.usage,
             },
             crate::ir::StreamEvent::TextDelta { index: 0, text },
@@ -1304,8 +1444,12 @@ async fn stream_upstream(
         candidate.provider.timeout_secs,
     ));
     let mut retries = 0;
+    let mut rectified = false;
     loop {
         let attempt = Instant::now();
+        lifecycle.begin_send(candidate, rectified)?;
+        client.observation = Default::default();
+        lifecycle.bind_transport(&client.observation);
         let result = state
             .upstream
             .stream_with_identity_policy(
@@ -1317,6 +1461,7 @@ async fn stream_upstream(
                 true,
             )
             .await;
+        lifecycle.observe_transport(&client.observation);
         match result {
             Ok(events) => return Ok(events),
             Err(error) => {
@@ -1329,7 +1474,7 @@ async fn stream_upstream(
                     lifecycle.failed_attempt(attempt, &error);
                     state.accounting_ready()?;
                     lifecycle.attempted(candidate);
-                    lifecycle.begin_attempt(candidate, true)?;
+                    rectified = true;
                     retries += 1;
                     tracing::info!(
                         model = candidate.model_id(),
@@ -1346,7 +1491,7 @@ async fn stream_upstream(
                 state.accounting_ready()?;
                 tokio::time::sleep(delay).await;
                 lifecycle.attempted(candidate);
-                lifecycle.begin_attempt(candidate, false)?;
+                rectified = false;
                 retries += 1;
             }
         }
@@ -1470,7 +1615,19 @@ async fn buffered_chat(
         // Preflight: shape the request for this candidate without touching
         // the shared copy, so a failed attempt does not leak its transform
         // into the next one.
-        let mut req = shape_for_candidate(&state, candidate, &req).await;
+        let mut req = match shape_for_candidate(&state, candidate, &req, kind).await {
+            Ok(shaped) => shaped,
+            Err(error) => {
+                if let Err(persistence) = lifecycle.begin_preparation(candidate) {
+                    let _ = lifecycle
+                        .finalize(TerminalKind::failed(&persistence), Settlement::default());
+                    return error_response(dialect, &persistence);
+                }
+                lifecycle.failed_attempt(attempt_start, &error);
+                last_error = error;
+                continue;
+            }
+        };
 
         let (key, body) = match prepare(&state, candidate, &req, mode) {
             Ok(v) => v,
@@ -1479,6 +1636,7 @@ async fn buffered_chat(
                 // the attempt evidence records the same canonical failure the
                 // router adapter accounts for.
                 if let Err(error) = lifecycle.begin_preparation(candidate) {
+                    let _ = lifecycle.finalize(TerminalKind::failed(&error), Settlement::default());
                     return error_response(dialect, &error);
                 }
                 lifecycle.failed_attempt(attempt_start, &e);
@@ -1496,25 +1654,14 @@ async fn buffered_chat(
             }
         };
 
-        // Enforce the half-open single-probe rule at the point of send.
-        if !state.router.allow_candidate_request(candidate) {
-            tracing::debug!(
-                model = candidate.model_id(),
-                "half-open probe already in flight; skipping candidate"
-            );
-            // No attempt is opened: nothing was sent and nothing failed, so
-            // there is no attempt evidence to record.
-            continue;
-        }
-
-        if let Err(error) = lifecycle.begin_attempt(candidate, false) {
-            state.router.release_half_open_permit(candidate.model_id());
-            return error_response(dialect, &error);
-        }
         let mut client = client_for(&req, &candidate.provider);
         let key = match console_key(&state, candidate, key, &mut client).await {
             Ok(key) => key,
             Err(e) => {
+                if let Err(error) = lifecycle.begin_preparation(candidate) {
+                    let _ = lifecycle.finalize(TerminalKind::failed(&error), Settlement::default());
+                    return error_response(dialect, &error);
+                }
                 lifecycle.failed_attempt(attempt_start, &e);
                 state.router.record_candidate_failure(
                     candidate,
@@ -1525,6 +1672,11 @@ async fn buffered_chat(
                 continue;
             }
         };
+        // OAuth preparation may await. Claim the half-open slot only when the
+        // send is ready; its final validation opens the accounting attempt.
+        if !state.router.allow_candidate_request(candidate) {
+            continue;
+        }
         match buffered_upstream(
             &state,
             candidate,
@@ -1539,6 +1691,7 @@ async fn buffered_chat(
         {
             Ok(mut resp) => {
                 lifecycle.observed_attempt_usage(resp.usage);
+                lifecycle.note_declared_response(&resp);
                 if candidate.provider.kind.is_decision() {
                     if let Some(verdict) = resp
                         .passthrough
@@ -1617,11 +1770,6 @@ async fn buffered_chat(
                 );
                 lifecycle.served_attempt(attempt_start);
                 lifecycle.note_response_id(&resp.id);
-                let cost = candidate
-                    .entry
-                    .pricing
-                    .as_ref()
-                    .map(|p| p.cost_of(&resp.usage));
                 // Capture the upstream's own declaration before anything that can
                 // consume it. Two things happen to it, and the order matters:
                 //
@@ -1632,8 +1780,6 @@ async fn buffered_chat(
                 //   only because its terminal transition happens later, when the body
                 //   ends, so the two paths disagreed.
                 // * `resp.model = exposed_id` below discards the value outright.
-                #[cfg(feature = "ml")]
-                lifecycle.note_declared_model(Some(resp.model.as_str()));
                 // Judge the task while both the request's demands and the response's
                 // content are still in hand. Only the verdict is kept — the response
                 // body is never persisted — so this is the one place a task check can
@@ -1646,7 +1792,7 @@ async fn buffered_chat(
                     TerminalKind::Served,
                     Settlement {
                         usage: resp.usage,
-                        pricing: candidate.entry.pricing.clone(),
+                        pricing: candidate.settled_pricing().cloned(),
                         provider_id: candidate.provider.id.clone(),
                         tier: candidate.entry.tier,
                     },
@@ -1698,7 +1844,7 @@ async fn buffered_chat(
                 }
                 let mut response = Json(wire).into_response();
                 inject_routing_headers(response.headers_mut(), candidate, kind);
-                inject_cost_header(response.headers_mut(), cost.as_ref());
+                inject_cost_header(response.headers_mut(), lifecycle.last_attempt_cost());
                 req.reply_headers.apply(response.headers_mut());
                 return response;
             }
@@ -1724,6 +1870,7 @@ async fn buffered_chat(
                 {
                     Ok(Some(mut resp)) => {
                         lifecycle.observed_attempt_usage(resp.usage);
+                        lifecycle.note_declared_response(&resp);
                         // The repaired retry is not a fresh probe: give the
                         // half-open permit back without recording health.
                         state.router.release_half_open_permit(candidate.model_id());
@@ -1749,20 +1896,13 @@ async fn buffered_chat(
                         }
                         lifecycle.served_attempt(repair_start);
                         lifecycle.note_response_id(&resp.id);
-                        let cost = candidate
-                            .entry
-                            .pricing
-                            .as_ref()
-                            .map(|p| p.cost_of(&resp.usage));
                         // Before `finalize`, which is the terminal transition that
                         // persists the trace. See the buffered path for why.
-                        #[cfg(feature = "ml")]
-                        lifecycle.note_declared_model(Some(resp.model.as_str()));
                         let committed = lifecycle.finalize(
                             TerminalKind::Served,
                             Settlement {
                                 usage: resp.usage,
-                                pricing: candidate.entry.pricing.clone(),
+                                pricing: candidate.settled_pricing().cloned(),
                                 provider_id: candidate.provider.id.clone(),
                                 tier: candidate.entry.tier,
                             },
@@ -1797,7 +1937,7 @@ async fn buffered_chat(
                         }
                         let mut response = Json(wire).into_response();
                         inject_routing_headers(response.headers_mut(), candidate, kind);
-                        inject_cost_header(response.headers_mut(), cost.as_ref());
+                        inject_cost_header(response.headers_mut(), lifecycle.last_attempt_cost());
                         req.reply_headers.apply(response.headers_mut());
                         return response;
                     }
@@ -1939,12 +2079,25 @@ async fn stream_chat(
         // Preflight: shape the request for this candidate without touching
         // the shared copy, so a failed attempt does not leak its transform
         // into the next one.
-        let mut req = shape_for_candidate(&state, candidate, &req).await;
+        let mut req = match shape_for_candidate(&state, candidate, &req, kind).await {
+            Ok(shaped) => shaped,
+            Err(error) => {
+                if let Err(persistence) = lifecycle.begin_preparation(candidate) {
+                    let _ = lifecycle
+                        .finalize(TerminalKind::failed(&persistence), Settlement::default());
+                    return error_response(dialect, &persistence);
+                }
+                lifecycle.failed_attempt(attempt_start, &error);
+                last_error = error;
+                continue;
+            }
+        };
 
         let (key, body) = match prepare(&state, candidate, &req, mode) {
             Ok(v) => v,
             Err(e) => {
                 if let Err(error) = lifecycle.begin_preparation(candidate) {
+                    let _ = lifecycle.finalize(TerminalKind::failed(&error), Settlement::default());
                     return error_response(dialect, &error);
                 }
                 lifecycle.failed_attempt(attempt_start, &e);
@@ -1962,27 +2115,14 @@ async fn stream_chat(
             }
         };
 
-        // Enforce the half-open single-probe rule at the point of send.
-        if !state.router.allow_candidate_request(candidate) {
-            tracing::debug!(
-                model = candidate.model_id(),
-                "half-open probe already in flight; skipping candidate"
-            );
-            // Nothing was sent and nothing failed: no attempt evidence.
-            continue;
-        }
-
-        // Only the handshake can be retried; once bytes are flowing the client
-        // has already seen part of the answer. The attempt stays open: its
-        // verdict is the stream's terminal state, not the handshake.
-        if let Err(error) = lifecycle.begin_attempt(candidate, false) {
-            state.router.release_half_open_permit(candidate.model_id());
-            return error_response(dialect, &error);
-        }
         let mut client = client_for(&req, &candidate.provider);
         let key = match console_key(&state, candidate, key, &mut client).await {
             Ok(key) => key,
             Err(e) => {
+                if let Err(error) = lifecycle.begin_preparation(candidate) {
+                    let _ = lifecycle.finalize(TerminalKind::failed(&error), Settlement::default());
+                    return error_response(dialect, &error);
+                }
                 lifecycle.failed_attempt(attempt_start, &e);
                 state.router.record_candidate_failure(
                     candidate,
@@ -1993,6 +2133,11 @@ async fn stream_chat(
                 continue;
             }
         };
+        if !state.router.allow_candidate_request(candidate) {
+            continue;
+        }
+        // Only a handshake can be retried. Its send opens the attempt after
+        // the final check; the SSE body settles it once bytes are flowing.
         match stream_upstream(
             &state,
             candidate,
@@ -2148,7 +2293,8 @@ async fn stream_chat(
 /// Resolution order:
 /// 1. Client profile match (first matching profile's `policy_id`)
 /// 2. Policy matchers (first policy whose matchers all pass)
-/// 3. Default policy (by `default_policy` id, or the built-in default)
+/// 3. Explicit default policy by id; the implicit fallback retains traces and
+///    escalation while the configured tier/global strategy owns its order.
 fn resolve_policy<'a>(
     config: &'a policy::PolicyConfig,
     client_ctx: &ClientContext,
@@ -2205,7 +2351,6 @@ fn resolve_policy<'a>(
         }
     }
 
-    // Built-in default when nothing is configured.
     Some(Cow::Owned(policy::default_policy()))
 }
 /// Record a request that ended before any candidate was tried.
