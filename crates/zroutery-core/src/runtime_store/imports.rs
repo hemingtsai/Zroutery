@@ -593,6 +593,10 @@ impl RuntimeStore {
             clauses.push("cost_currency = ?".into());
             values.push(currency.clone().into());
         }
+        if let Some(data_source) = query.data_source.as_ref().filter(|s| !s.is_empty()) {
+            clauses.push("json_extract(record, '$.data_source') = ?".into());
+            values.push(data_source.clone().into());
+        }
         if let Some(from) = &query.from {
             clauses.push("at >= ?".into());
             values.push(usage_timestamp(from).into());
@@ -693,6 +697,10 @@ impl RuntimeStore {
         if let Some(currency) = export.currency.as_ref().filter(|s| !s.is_empty()) {
             clauses.push("cost_currency = ?".into());
             values.push(currency.clone().into());
+        }
+        if let Some(data_source) = export.data_source.as_ref().filter(|s| !s.is_empty()) {
+            clauses.push("json_extract(record, '$.data_source') = ?".into());
+            values.push(data_source.clone().into());
         }
         if let Some(from) = &export.from {
             clauses.push("at >= ?".into());
@@ -1841,6 +1849,24 @@ mod tests {
         let page = store.query_imported_history(&query).unwrap();
         assert_eq!(page.total, 1);
         assert_eq!(page.records[0].entity_id, "cny");
+    }
+
+    #[test]
+    fn query_imported_history_filters_by_data_source() {
+        let (_dir, store) = store();
+        let mut proxy = fact("proxy", 1.0);
+        proxy.data_source = "proxy".into();
+        let mut codex = fact("codex", 1.0);
+        codex.data_source = "codex_session".into();
+        store.commit_import(&[proxy, codex]).unwrap();
+        let query = crate::history_import::ImportedHistoryQuery {
+            data_source: Some("codex_session".into()),
+            ..Default::default()
+        };
+        let page = store.query_imported_history(&query).unwrap();
+        assert_eq!(page.total, 1);
+        assert_eq!(page.records[0].entity_id, "codex");
+        assert_eq!(page.records[0].data_source, "codex_session");
     }
 
     #[test]

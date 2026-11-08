@@ -488,6 +488,8 @@ pub struct ImportedHistoryQuery {
     pub priced: Option<bool>,
     /// Known-cost currency filter (e.g. `USD`). Matches `imported_fact.cost_currency`.
     pub currency: Option<String>,
+    /// Source-specific provenance label (e.g. `proxy`, `session_log`, `codex_session`, `opencode_session`).
+    pub data_source: Option<String>,
     pub from: Option<DateTime<Utc>>,
     pub until: Option<DateTime<Utc>>,
 }
