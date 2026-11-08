@@ -56,6 +56,10 @@ pub struct Discovery {
     /// `ZROUTERY_CC_SWITCH_DIR`, when the operator pointed the provider import
     /// at a specific installation.
     cc_switch: Option<PathBuf>,
+    /// Codex home (`CODEX_HOME`, default `~/.codex`).
+    codex_home: Option<PathBuf>,
+    /// Codex sqlite home override (`CODEX_SQLITE_HOME`).
+    codex_sqlite_home: Option<PathBuf>,
 }
 
 /// The name a person recognises for an adapter family.
@@ -79,10 +83,14 @@ impl Discovery {
                 .filter(|value| !value.is_empty())
                 .map(PathBuf::from)
         };
+        let home = dir("USERPROFILE").or_else(|| dir("HOME"));
+        let codex_home = dir("CODEX_HOME").or_else(|| home.as_ref().map(|h| h.join(".codex")));
         Self {
-            home: dir("USERPROFILE").or_else(|| dir("HOME")),
+            home,
             appdata: dir("APPDATA"),
             cc_switch: dir("ZROUTERY_CC_SWITCH_DIR"),
+            codex_home,
+            codex_sqlite_home: dir("CODEX_SQLITE_HOME"),
         }
     }
 
@@ -110,6 +118,25 @@ impl Discovery {
         }
         if let Some(appdata) = &self.appdata {
             push_database(&mut found, &appdata.join("com.ccswitch.desktop"));
+        }
+        let mut codex_roots = Vec::new();
+        if let Some(dir) = &self.codex_home {
+            codex_roots.push(dir.clone());
+        }
+        if let Some(dir) = &self.codex_sqlite_home {
+            if !codex_roots.iter().any(|p| same_path(p, dir)) {
+                codex_roots.push(dir.clone());
+            }
+        }
+        for root in codex_roots {
+            let state = root.join("state_5.sqlite");
+            if state.is_file() && !found.iter().any(|(_, p)| same_path(p, &state)) {
+                found.push(("codex", state));
+            }
+            let sessions = root.join("sessions");
+            if has_transcript(&sessions) && !found.iter().any(|(_, p)| same_path(p, &sessions)) {
+                found.push(("codex", sessions));
+            }
         }
         found
     }
@@ -274,6 +301,8 @@ mod tests {
             home: Some(home.to_path_buf()),
             appdata: None,
             cc_switch: None,
+            codex_home: None,
+            codex_sqlite_home: None,
         }
     }
 
@@ -290,6 +319,30 @@ mod tests {
         assert!(offers[0].path.ends_with("cc-switch.db"));
         assert!(offers[1].path.ends_with("projects"));
         assert!(!offers[0].recent && !offers[1].recent);
+        std::fs::remove_dir_all(home).ok();
+    }
+
+    #[test]
+    fn codex_state_and_sessions_are_discovered_from_codex_home() {
+        let home = root();
+        let codex = home.join(".codex");
+        touch(&codex.join("state_5.sqlite"));
+        touch(&codex.join("sessions/2026/rollout-1.jsonl"));
+        let discovery = Discovery {
+            home: Some(home.clone()),
+            appdata: None,
+            cc_switch: None,
+            codex_home: Some(codex),
+            codex_sqlite_home: None,
+        };
+        let offers = offers(&discovery, &[]);
+        let found: Vec<(&str, &str)> = offers
+            .iter()
+            .map(|offer| (offer.source.as_str(), offer.label.as_str()))
+            .collect();
+        assert!(found.contains(&("codex", "Codex")), "{found:?}");
+        assert!(offers.iter().any(|o| o.path.ends_with("state_5.sqlite")));
+        assert!(offers.iter().any(|o| o.path.ends_with("sessions")));
         std::fs::remove_dir_all(home).ok();
     }
 
@@ -313,6 +366,8 @@ mod tests {
             home: Some(home.clone()),
             appdata: Some(appdata),
             cc_switch: None,
+            codex_home: None,
+            codex_sqlite_home: None,
         };
         assert_eq!(
             offers(&discovery, &[]).len(),
