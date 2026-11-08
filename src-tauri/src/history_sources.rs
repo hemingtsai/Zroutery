@@ -63,6 +63,7 @@ pub fn label(source: &str) -> &'static str {
     match source {
         "ccswitch" => "CC Switch",
         "claudecode" => "Claude Code",
+        "codex" => "Codex",
         "opencode" => "OpenCode",
         _ => "another tool",
     }
