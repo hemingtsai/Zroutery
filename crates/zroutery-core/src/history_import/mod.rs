@@ -26,6 +26,7 @@ use crate::runtime_store::RuntimeStore;
 
 pub mod ccswitch;
 pub mod claudecode;
+pub mod codex;
 pub mod opencode;
 
 /// The stop signal an import honours between chunks.
@@ -98,6 +99,7 @@ impl std::fmt::Debug for ImportCancel {
 pub enum Source {
     CcSwitch(ccswitch::CcSwitchSource),
     ClaudeCode(claudecode::ClaudeCodeSource),
+    Codex(codex::CodexSource),
     OpenCode(opencode::OpenCodeSource),
 }
 
@@ -114,11 +116,17 @@ impl Source {
         cancel.check()?;
         let instance = instance.into();
         if path.is_dir() {
+            if codex::CodexSource::recognizes_dir(path, cancel)? {
+                return codex::CodexSource::open_dir(path, instance, cancel).map(Self::Codex);
+            }
             return claudecode::ClaudeCodeSource::open_with_cancel(path, instance, cancel)
                 .map(Self::ClaudeCode);
         }
         if opencode::OpenCodeSource::recognizes(path)? {
             return opencode::OpenCodeSource::open(path, instance).map(Self::OpenCode);
+        }
+        if codex::CodexSource::recognizes_sqlite(path)? {
+            return codex::CodexSource::open_sqlite(path, instance).map(Self::Codex);
         }
         ccswitch::CcSwitchSource::open(path, instance).map(Self::CcSwitch)
     }
@@ -129,6 +137,7 @@ impl Source {
         match self {
             Self::CcSwitch(_) => ccswitch::SOURCE,
             Self::ClaudeCode(_) => claudecode::SOURCE,
+            Self::Codex(_) => codex::SOURCE,
             Self::OpenCode(_) => opencode::SOURCE,
         }
     }
@@ -137,6 +146,7 @@ impl Source {
         match self {
             Self::CcSwitch(source) => source.preview(range, samples),
             Self::ClaudeCode(source) => source.preview(range, samples),
+            Self::Codex(source) => source.preview(range, samples),
             Self::OpenCode(source) => source.preview(range, samples),
         }
     }
@@ -151,6 +161,7 @@ impl Source {
         match self {
             Self::CcSwitch(source) => source.import(store, range, chunk, cancel),
             Self::ClaudeCode(source) => source.import(store, range, chunk, cancel),
+            Self::Codex(source) => source.import(store, range, chunk, cancel),
             Self::OpenCode(source) => source.import(store, range, chunk, cancel),
         }
     }
@@ -167,6 +178,7 @@ impl Source {
         match self {
             Self::CcSwitch(source) => source.stage(store, range, run_id, cancel),
             Self::ClaudeCode(source) => source.stage(store, range, run_id, cancel),
+            Self::Codex(source) => source.stage(store, range, run_id, cancel),
             Self::OpenCode(source) => source.stage(store, range, run_id, cancel),
         }
     }
