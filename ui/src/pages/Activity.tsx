@@ -1892,6 +1892,13 @@ export default function Activity({
                     <Button kind="primary" onClick={() => void loadImportedBrowse({ page: 1 })} disabled={browseLoading}>
                       {t("activity.import_browse_apply")}
                     </Button>
+                    <Button
+                      kind="ghost"
+                      onClick={() => void loadImportedBrowse({ ...browseFilters, duplicate: "suspected", page: 1 })}
+                      disabled={browseLoading}
+                    >
+                      {t("activity.import_filter_duplicate_yes")}
+                    </Button>
                     <Button kind="ghost" onClick={() => void exportFilteredImported()} disabled={browseLoading}>
                       {t("activity.import_browse_export")}
                     </Button>
@@ -1943,7 +1950,7 @@ export default function Activity({
                                     <td title={r.entity_id}>{r.instance}</td>
                                     <td>{r.client ?? "—"}</td>
                                     <td title={[r.provider_id, r.pricing_model, r.request_model].filter(Boolean).join(" · ") || undefined}>{r.model ?? "—"}</td>
-                                    <td title={dupTitle}>{r.duplicate === "suspected" ? (r.duplicate_of ? "⚠" : t("activity.import_filter_duplicate_yes")) : "—"}</td>
+                                    <td title={dupTitle}>{r.duplicate === "suspected" ? (r.duplicate_of ? `⚠ ${r.duplicate_of}` : t("activity.import_filter_duplicate_yes")) : "—"}</td>
                                     <td title={r.error ?? undefined}>{r.priced ? (r.cost ? `${r.cost.amount} ${r.cost.currency}` : "✓") : t("activity.import_filter_priced_no")}</td>
                                   </tr>
                                 );
