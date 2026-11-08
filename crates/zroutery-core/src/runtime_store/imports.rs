@@ -589,6 +589,10 @@ impl RuntimeStore {
             clauses.push("priced = ?".into());
             values.push(if priced { 1i64 } else { 0i64 }.into());
         }
+        if let Some(currency) = query.currency.as_ref().filter(|s| !s.is_empty()) {
+            clauses.push("cost_currency = ?".into());
+            values.push(currency.clone().into());
+        }
         if let Some(from) = &query.from {
             clauses.push("at >= ?".into());
             values.push(usage_timestamp(from).into());
@@ -685,6 +689,10 @@ impl RuntimeStore {
         if let Some(priced) = export.priced {
             clauses.push("priced = ?".into());
             values.push(if priced { 1i64 } else { 0i64 }.into());
+        }
+        if let Some(currency) = export.currency.as_ref().filter(|s| !s.is_empty()) {
+            clauses.push("cost_currency = ?".into());
+            values.push(currency.clone().into());
         }
         if let Some(from) = &export.from {
             clauses.push("at >= ?".into());
@@ -1813,6 +1821,26 @@ mod tests {
             .query_imported_history(&query)
             .unwrap_err()
             .contains("changed"));
+    }
+
+    #[test]
+    fn query_imported_history_filters_by_currency() {
+        let (_dir, store) = store();
+        let usd = fact("usd", 1.0);
+        let mut cny = fact("cny", 2.0);
+        cny.cost = Some(Cost {
+            currency: "CNY".into(),
+            amount: 12.0,
+        });
+        cny.reported_cost = cny.cost.clone();
+        store.commit_import(&[usd, cny]).unwrap();
+        let query = crate::history_import::ImportedHistoryQuery {
+            currency: Some("CNY".into()),
+            ..Default::default()
+        };
+        let page = store.query_imported_history(&query).unwrap();
+        assert_eq!(page.total, 1);
+        assert_eq!(page.records[0].entity_id, "cny");
     }
 
     #[test]

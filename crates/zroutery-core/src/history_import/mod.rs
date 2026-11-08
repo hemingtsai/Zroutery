@@ -474,6 +474,8 @@ pub struct ImportedHistoryQuery {
     pub duplicate: Option<Duplicate>,
     /// Completeness proxy: `Some(true)` for priced facts, `Some(false)` for unpriced.
     pub priced: Option<bool>,
+    /// Known-cost currency filter (e.g. `USD`). Matches `imported_fact.cost_currency`.
+    pub currency: Option<String>,
     pub from: Option<DateTime<Utc>>,
     pub until: Option<DateTime<Utc>>,
 }
