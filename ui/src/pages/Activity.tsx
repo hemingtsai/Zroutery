@@ -687,7 +687,12 @@ export default function Activity({
     }
   };
 
-  const clearFilteredImported = () =>
+  const clearFilteredImported = () => {
+    const hasScope = Boolean(browseFilters.source || browseFilters.instance || browseFilters.client);
+    if (!hasScope) {
+      setBrowseError(t("activity.import_browse_scope_hint"));
+      return;
+    }
     setConfirm({
       title: t("activity.import_browse_clear_scope"),
       body: t("activity.import_browse_clear_scope_body"),
@@ -710,6 +715,7 @@ export default function Activity({
         }
       })(),
     });
+  };
 
   const importedRows =
     imported === null ? 0 : imported.totals.requests + imported.totals.suspected_requests;
@@ -1889,7 +1895,7 @@ export default function Activity({
                     <Button kind="ghost" onClick={() => void exportFilteredImported()} disabled={browseLoading}>
                       {t("activity.import_browse_export")}
                     </Button>
-                    <Button kind="ghost" onClick={() => clearFilteredImported()} disabled={browseLoading}>
+                    <Button kind="ghost" onClick={() => clearFilteredImported()} disabled={browseLoading || !(browseFilters.source || browseFilters.instance || browseFilters.client)}>
                       {t("activity.import_browse_clear_scope")}
                     </Button>
                     {importedRows > 0 && (
@@ -1917,25 +1923,31 @@ export default function Activity({
                           <table className="log-table" style={{ width: "100%", fontSize: "12px" }}>
                             <thead>
                               <tr>
+                                <th>{t("activity.import_filter_from")}</th>
                                 <th>{t("activity.import_filter_source")}</th>
+                                <th>{t("activity.import_filter_instance")}</th>
                                 <th>{t("activity.import_filter_client")}</th>
                                 <th>{t("activity.import_filter_model")}</th>
-                                <th>{t("activity.import_filter_granularity")}</th>
                                 <th>{t("activity.import_filter_duplicate")}</th>
                                 <th>{t("activity.import_filter_priced")}</th>
                               </tr>
                             </thead>
                             <tbody>
-                              {browsePage.records.map((r) => (
-                                <tr key={`${r.source}|${r.instance}|${r.entity_id}`}>
-                                  <td title={`${r.instance}\n${r.entity_id}`}>{r.source}</td>
-                                  <td>{r.client ?? "—"}</td>
-                                  <td title={r.provider_id ?? undefined}>{r.model ?? "—"}</td>
-                                  <td>{r.granularity === "day" ? t("activity.import_filter_aggregate") : t("activity.import_filter_request")}</td>
-                                  <td>{r.duplicate === "suspected" ? t("activity.import_filter_duplicate_yes") : "—"}</td>
-                                  <td>{r.priced ? (r.cost ? `${r.cost.amount} ${r.cost.currency}` : "✓") : t("activity.import_filter_priced_no")}</td>
-                                </tr>
-                              ))}
+                              {browsePage.records.map((r) => {
+                                const when = r.at ? new Date(r.at).toLocaleString([], { dateStyle: "short", timeStyle: "short", hour12: false }) : r.day;
+                                const dupTitle = r.duplicate === "suspected" && r.duplicate_of ? `${t("activity.import_filter_duplicate_yes")}\n${r.duplicate_of}` : undefined;
+                                return (
+                                  <tr key={`${r.source}|${r.instance}|${r.entity_id}`}>
+                                    <td title={r.at || r.day}>{when}</td>
+                                    <td title={r.data_source || r.source}>{r.source}</td>
+                                    <td title={r.entity_id}>{r.instance}</td>
+                                    <td>{r.client ?? "—"}</td>
+                                    <td title={[r.provider_id, r.pricing_model, r.request_model].filter(Boolean).join(" · ") || undefined}>{r.model ?? "—"}</td>
+                                    <td title={dupTitle}>{r.duplicate === "suspected" ? (r.duplicate_of ? "⚠" : t("activity.import_filter_duplicate_yes")) : "—"}</td>
+                                    <td title={r.error ?? undefined}>{r.priced ? (r.cost ? `${r.cost.amount} ${r.cost.currency}` : "✓") : t("activity.import_filter_priced_no")}</td>
+                                  </tr>
+                                );
+                              })}
                             </tbody>
                           </table>
                         </div>
