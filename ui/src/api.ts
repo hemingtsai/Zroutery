@@ -849,6 +849,7 @@ export interface ImportedHistoryQuery {
   duplicate?: ImportedDuplicate | null;
   priced?: boolean | null;
   currency?: string | null;
+  data_source?: string | null;
   from?: string | null;
   until?: string | null;
 }

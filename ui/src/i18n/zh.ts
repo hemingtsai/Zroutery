@@ -951,6 +951,7 @@ export const zh: Dict = {
   "activity.import_tab_manage": "浏览",
   "activity.import_browse_hint": "筛选、分页浏览、导出或清除导入事实。这些记录与本机自身用量分开存储。",
   "activity.import_filter_source": "来源",
+  "activity.import_filter_data_source": "数据来源",
   "activity.import_filter_instance": "实例",
   "activity.import_filter_client": "客户端",
   "activity.import_filter_provider": "服务商",

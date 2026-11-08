@@ -1110,6 +1110,7 @@ export const en = {
   "activity.import_tab_manage": "Browse",
   "activity.import_browse_hint": "Filter, page through, export, or clear imported facts. These records are separate from this device's own usage.",
   "activity.import_filter_source": "Source",
+  "activity.import_filter_data_source": "Data source",
   "activity.import_filter_instance": "Instance",
   "activity.import_filter_client": "Client",
   "activity.import_filter_provider": "Provider",

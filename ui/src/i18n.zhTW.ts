@@ -957,6 +957,7 @@ export const zhTW: Dict = {
   "activity.import_tab_manage": "瀏覽",
   "activity.import_browse_hint": "篩選、分頁瀏覽、匯出或清除匯入事實。這些記錄與本機自身用量分開儲存。",
   "activity.import_filter_source": "來源",
+  "activity.import_filter_data_source": "資料來源",
   "activity.import_filter_instance": "實例",
   "activity.import_filter_client": "用戶端",
   "activity.import_filter_provider": "供應商",

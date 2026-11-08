@@ -1860,6 +1860,15 @@ export default function Activity({
                     <label className="field"><span>{t("activity.import_filter_currency")}</span>
                       <input className="text-input" value={browseFilters.currency ?? ""} onChange={(e) => setBrowseFilters((q) => ({ ...q, currency: e.target.value || undefined, page: 1 }))} />
                     </label>
+                    <label className="field"><span>{t("activity.import_filter_data_source")}</span>
+                      <input className="text-input" list="import-data-source-hints" placeholder="proxy / session_log / codex_session / opencode_session" value={browseFilters.data_source ?? ""} onChange={(e) => setBrowseFilters((q) => ({ ...q, data_source: e.target.value || undefined, page: 1 }))} />
+                      <datalist id="import-data-source-hints">
+                        <option value="proxy" />
+                        <option value="session_log" />
+                        <option value="codex_session" />
+                        <option value="opencode_session" />
+                      </datalist>
+                    </label>
                     <label className="field"><span>{t("activity.import_filter_from")}</span>
                       <input className="text-input" type="date" value={typeof browseFilters.from === "string" && !browseFilters.from.includes("T") ? browseFilters.from : ""} onChange={(e) => setBrowseFilters((q) => ({ ...q, from: e.target.value || undefined, page: 1 }))} />
                     </label>
