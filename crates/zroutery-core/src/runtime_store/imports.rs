@@ -9,12 +9,12 @@
 use std::collections::BTreeMap;
 
 use chrono::{DateTime, NaiveDate, Utc};
-use rusqlite::{params, OptionalExtension, TransactionBehavior};
+use rusqlite::{params, params_from_iter, types::Value, OptionalExtension, TransactionBehavior};
 
 use crate::billing::{Cost, CostTotals};
 use crate::history_import::{
-    Duplicate, Granularity, ImportCancel, ImportOutcome, ImportPreview, ImportRange, ImportTotals,
-    ImportedFact,
+    Duplicate, Granularity, ImportCancel, ImportClearScope, ImportOutcome, ImportPreview,
+    ImportRange, ImportTotals, ImportedFact,
 };
 use crate::stats::UsageDay;
 
@@ -548,34 +548,260 @@ impl RuntimeStore {
         Ok(days.into_values().collect())
     }
 
+    pub fn query_imported_history(
+        &self,
+        query: &crate::history_import::ImportedHistoryQuery,
+    ) -> Result<crate::history_import::ImportedHistoryPage, String> {
+        query.validate()?;
+        let mut db = crate::sync::lock(&self.db);
+        let tx = db.transaction().map_err(|error| error.to_string())?;
+        let revision: i64 = tx
+            .query_row(
+                "SELECT revision FROM imported_revision WHERE id = 1",
+                [],
+                |row| row.get(0),
+            )
+            .map_err(|error| error.to_string())?;
+        query.check_revision(revision)?;
+        let mut clauses = Vec::new();
+        let mut values: Vec<Value> = Vec::new();
+        for (column, value) in [
+            ("source", query.source.as_ref()),
+            ("instance", query.instance.as_ref()),
+            ("client", query.client.as_ref()),
+            ("provider_id", query.provider_id.as_ref()),
+            ("model", query.model.as_ref()),
+        ] {
+            if let Some(value) = value {
+                clauses.push(format!("{column} = ?"));
+                values.push(value.clone().into());
+            }
+        }
+        if let Some(granularity) = query.granularity {
+            clauses.push("granularity = ?".into());
+            values.push(granularity_name(granularity).to_string().into());
+        }
+        if let Some(duplicate) = query.duplicate {
+            clauses.push("duplicate = ?".into());
+            values.push(duplicate_name(duplicate).to_string().into());
+        }
+        if let Some(priced) = query.priced {
+            clauses.push("priced = ?".into());
+            values.push(if priced { 1i64 } else { 0i64 }.into());
+        }
+        if let Some(from) = &query.from {
+            clauses.push("at >= ?".into());
+            values.push(usage_timestamp(from).into());
+        }
+        if let Some(until) = &query.until {
+            clauses.push("at < ?".into());
+            values.push(usage_timestamp(until).into());
+        }
+        let condition = if clauses.is_empty() {
+            String::new()
+        } else {
+            format!(" WHERE {}", clauses.join(" AND "))
+        };
+        let total: i64 = tx
+            .query_row(
+                &format!("SELECT COUNT(*) FROM imported_fact{condition}"),
+                params_from_iter(&values),
+                |row| row.get(0),
+            )
+            .map_err(|error| error.to_string())?;
+        let total = u64::try_from(total).map_err(|_| "invalid negative imported count")?;
+        let (page, page_size, offset) = query.pagination(total);
+        values.push(i64::from(page_size).into());
+        values.push(
+            i64::try_from(offset)
+                .map_err(|_| "imported history page offset exceeds SQLite's range")?
+                .into(),
+        );
+        let mut statement = tx
+            .prepare(&format!(
+                "SELECT record FROM imported_fact{condition}
+                 ORDER BY at DESC, source, instance, entity_id DESC LIMIT ? OFFSET ?"
+            ))
+            .map_err(|error| error.to_string())?;
+        let rows = statement
+            .query_map(params_from_iter(&values), |row| row.get::<_, String>(0))
+            .map_err(|error| error.to_string())?;
+        let records = rows
+            .map(|row| {
+                let json = row.map_err(|error| error.to_string())?;
+                serde_json::from_str(&json).map_err(|error| error.to_string())
+            })
+            .collect::<Result<_, _>>()?;
+        Ok(crate::history_import::ImportedHistoryPage {
+            records,
+            page,
+            page_size,
+            total,
+            revision,
+        })
+    }
+
+    /// Return imported facts matching `query` without pagination, for export.
+    pub fn export_imported_facts(
+        &self,
+        query: &crate::history_import::ImportedHistoryQuery,
+    ) -> Result<(i64, Vec<ImportedFact>), String> {
+        let mut export = query.clone();
+        export.page = 1;
+        export.page_size = u32::MAX;
+        export.expected_revision = None;
+        export.validate()?;
+        let mut db = crate::sync::lock(&self.db);
+        let tx = db.transaction().map_err(|error| error.to_string())?;
+        let revision: i64 = tx
+            .query_row(
+                "SELECT revision FROM imported_revision WHERE id = 1",
+                [],
+                |row| row.get(0),
+            )
+            .map_err(|error| error.to_string())?;
+        let mut clauses = Vec::new();
+        let mut values: Vec<Value> = Vec::new();
+        for (column, value) in [
+            ("source", export.source.as_ref()),
+            ("instance", export.instance.as_ref()),
+            ("client", export.client.as_ref()),
+            ("provider_id", export.provider_id.as_ref()),
+            ("model", export.model.as_ref()),
+        ] {
+            if let Some(value) = value {
+                clauses.push(format!("{column} = ?"));
+                values.push(value.clone().into());
+            }
+        }
+        if let Some(granularity) = export.granularity {
+            clauses.push("granularity = ?".into());
+            values.push(granularity_name(granularity).to_string().into());
+        }
+        if let Some(duplicate) = export.duplicate {
+            clauses.push("duplicate = ?".into());
+            values.push(duplicate_name(duplicate).to_string().into());
+        }
+        if let Some(priced) = export.priced {
+            clauses.push("priced = ?".into());
+            values.push(if priced { 1i64 } else { 0i64 }.into());
+        }
+        if let Some(from) = &export.from {
+            clauses.push("at >= ?".into());
+            values.push(usage_timestamp(from).into());
+        }
+        if let Some(until) = &export.until {
+            clauses.push("at < ?".into());
+            values.push(usage_timestamp(until).into());
+        }
+        let condition = if clauses.is_empty() {
+            String::new()
+        } else {
+            format!(" WHERE {}", clauses.join(" AND "))
+        };
+        let mut statement = tx
+            .prepare(&format!(
+                "SELECT record FROM imported_fact{condition}
+                 ORDER BY at, source, instance, entity_id"
+            ))
+            .map_err(|error| error.to_string())?;
+        let rows = statement
+            .query_map(params_from_iter(&values), |row| row.get::<_, String>(0))
+            .map_err(|error| error.to_string())?;
+        let records = rows
+            .map(|row| {
+                let json = row.map_err(|error| error.to_string())?;
+                serde_json::from_str(&json).map_err(|error| error.to_string())
+            })
+            .collect::<Result<_, _>>()?;
+        Ok((revision, records))
+    }
+
     /// Remove imported facts, optionally only one source family's. A clear is
     /// a history change, so it also retires any staging run that source still
     /// had: facts staged for a cleared source must not be publishable after
     /// the clear, as if it had not happened.
     pub fn clear_imported(&self, source: Option<&str>) -> Result<usize, String> {
+        self.clear_imported_scoped(&ImportClearScope {
+            source: source.map(str::to_string),
+            ..ImportClearScope::default()
+        })
+    }
+
+    /// Remove imported facts matching `scope`. Local usage, spend, wallet and
+    /// health are never affected. Staging runs are discarded only when the scope
+    /// can be expressed as source/instance (client-only scopes cannot safely
+    /// invalidate staged content by run metadata alone).
+    pub fn clear_imported_scoped(&self, scope: &ImportClearScope) -> Result<usize, String> {
+        let mut clauses = Vec::new();
+        let mut values: Vec<Value> = Vec::new();
+        let mut idx = 1usize;
+        if let Some(source) = scope.source.as_ref().filter(|s| !s.is_empty()) {
+            clauses.push(format!("source = ?{idx}"));
+            values.push(source.clone().into());
+            idx += 1;
+        }
+        if let Some(instance) = scope.instance.as_ref().filter(|s| !s.is_empty()) {
+            clauses.push(format!("instance = ?{idx}"));
+            values.push(instance.clone().into());
+            idx += 1;
+        }
+        if let Some(client) = scope.client.as_ref().filter(|s| !s.is_empty()) {
+            clauses.push(format!("client = ?{idx}"));
+            values.push(client.clone().into());
+        }
+        let condition = if clauses.is_empty() {
+            String::new()
+        } else {
+            format!(" WHERE {}", clauses.join(" AND "))
+        };
         let mut db = crate::sync::lock(&self.db);
         let tx = db
             .transaction_with_behavior(TransactionBehavior::Immediate)
             .map_err(|error| error.to_string())?;
         let removed = tx
             .execute(
-                "DELETE FROM imported_fact WHERE ?1 IS NULL OR source = ?1",
-                params![source],
+                &format!("DELETE FROM imported_fact{condition}"),
+                params_from_iter(&values),
             )
             .map_err(|error| error.to_string())?;
-        tx.execute(
-            "DELETE FROM import_stage WHERE run_id IN
-               (SELECT id FROM import_run WHERE state IN ('staging', 'ready')
-                AND (?1 IS NULL OR source = ?1))",
-            params![source],
-        )
-        .map_err(|error| error.to_string())?;
-        tx.execute(
-            "UPDATE import_run SET state = 'discarded', cursor = NULL, staged = 0, updated_at = ?2
-             WHERE state IN ('staging', 'ready') AND (?1 IS NULL OR source = ?1)",
-            params![source, Utc::now().to_rfc3339()],
-        )
-        .map_err(|error| error.to_string())?;
+        // Only discard staging runs when scope is source/instance-addressable.
+        // A client-only clear does not prove which staged run records belong to
+        // that client, so staged runs are left untouched.
+        if scope.client.as_ref().is_none_or(|s| s.is_empty()) {
+            let mut run_clauses = vec!["state IN ('staging', 'ready')".to_string()];
+            let mut run_values: Vec<Value> = Vec::new();
+            let mut ridx = 1usize;
+            if let Some(source) = scope.source.as_ref().filter(|s| !s.is_empty()) {
+                run_clauses.push(format!("source = ?{ridx}"));
+                run_values.push(source.clone().into());
+                ridx += 1;
+            }
+            if let Some(instance) = scope.instance.as_ref().filter(|s| !s.is_empty()) {
+                run_clauses.push(format!("instance = ?{ridx}"));
+                run_values.push(instance.clone().into());
+                ridx += 1;
+            }
+            let run_condition = format!(" WHERE {}", run_clauses.join(" AND "));
+            tx.execute(
+                &format!(
+                    "DELETE FROM import_stage WHERE run_id IN (SELECT id FROM import_run{run_condition})"
+                ),
+                params_from_iter(run_values.clone()),
+            )
+            .map_err(|error| error.to_string())?;
+            let mut update_values = run_values;
+            let ts_idx = ridx;
+            update_values.push(Utc::now().to_rfc3339().into());
+            tx.execute(
+                &format!(
+                    "UPDATE import_run SET state = 'discarded', cursor = NULL, staged = 0, updated_at = ?{ts_idx}
+                     {run_condition}"
+                ),
+                params_from_iter(update_values),
+            )
+            .map_err(|error| error.to_string())?;
+        }
         tx.commit().map_err(|error| error.to_string())?;
         Ok(removed)
     }
@@ -1519,5 +1745,143 @@ mod tests {
         assert!(super::super::schema::migrate_to(&mut db, 5)
             .unwrap_err()
             .contains("newer"));
+    }
+
+    #[test]
+    fn query_imported_history_filters_pages_and_respects_revision() {
+        let (_dir, store) = store();
+        let mut a = fact("a", 1.0);
+        a.source = "ccswitch".into();
+        a.instance = "laptop".into();
+        a.client = Some("claude".into());
+        a.provider_id = Some("p1".into());
+        a.model = Some("m1".into());
+        a.at = "2026-10-31T00:00:00Z".parse().unwrap();
+        a.day = "2026-10-31".into();
+        let mut b = fact("b", 2.0);
+        b.source = "ccswitch".into();
+        b.instance = "laptop".into();
+        b.client = Some("codex".into());
+        b.provider_id = Some("p2".into());
+        b.model = Some("m2".into());
+        b.at = "2026-10-31T00:00:01Z".parse().unwrap();
+        b.day = "2026-10-31".into();
+        let mut c = fact("c", 3.0);
+        c.source = "claudecode".into();
+        c.instance = "home".into();
+        c.client = Some("claude".into());
+        c.at = "2026-11-01T00:00:00Z".parse().unwrap();
+        c.day = "2026-11-01".into();
+        store
+            .commit_import(&[a.clone(), b.clone(), c.clone()])
+            .unwrap();
+
+        let mut query = crate::history_import::ImportedHistoryQuery {
+            page: 1,
+            page_size: 1,
+            client: Some("claude".into()),
+            ..Default::default()
+        };
+        let page = store.query_imported_history(&query).unwrap();
+        assert_eq!(page.total, 2);
+        assert_eq!(page.records.len(), 1);
+        assert_eq!(page.records[0].entity_id, "c");
+        query.expected_revision = Some(page.revision);
+        query.page = 2;
+        let page2 = store.query_imported_history(&query).unwrap();
+        assert_eq!(page2.records[0].entity_id, "a");
+
+        let by_source = crate::history_import::ImportedHistoryQuery {
+            source: Some("ccswitch".into()),
+            ..Default::default()
+        };
+        assert_eq!(store.query_imported_history(&by_source).unwrap().total, 2);
+        let by_provider = crate::history_import::ImportedHistoryQuery {
+            provider_id: Some("p1".into()),
+            ..Default::default()
+        };
+        assert_eq!(store.query_imported_history(&by_provider).unwrap().total, 1);
+        let priced = crate::history_import::ImportedHistoryQuery {
+            priced: Some(true),
+            ..Default::default()
+        };
+        assert_eq!(store.query_imported_history(&priced).unwrap().total, 3);
+
+        // Revision conflict after a clear.
+        store.clear_imported(None).unwrap();
+        assert!(store
+            .query_imported_history(&query)
+            .unwrap_err()
+            .contains("changed"));
+    }
+
+    #[test]
+    fn export_imported_facts_returns_filtered_records_in_stable_order() {
+        let (_dir, store) = store();
+        let mut a = fact("a", 1.0);
+        a.at = "2026-10-31T00:00:01Z".parse().unwrap();
+        a.day = "2026-10-31".into();
+        let mut b = fact("b", 1.0);
+        b.source = "other".into();
+        b.at = "2026-10-31T00:00:00Z".parse().unwrap();
+        b.day = "2026-10-31".into();
+        store.commit_import(&[a, b]).unwrap();
+        let query = crate::history_import::ImportedHistoryQuery {
+            source: Some("ccswitch".into()),
+            ..Default::default()
+        };
+        let (revision, records) = store.export_imported_facts(&query).unwrap();
+        assert!(revision >= 1);
+        assert_eq!(records.len(), 1);
+        assert_eq!(records[0].entity_id, "a");
+    }
+
+    #[test]
+    fn clear_imported_scoped_respects_source_instance_client() {
+        let (_dir, store) = store();
+        let mut a = fact("a", 1.0);
+        a.source = "ccswitch".into();
+        a.instance = "laptop".into();
+        a.client = Some("claude".into());
+        let mut b = fact("b", 1.0);
+        b.source = "ccswitch".into();
+        b.instance = "desktop".into();
+        b.client = Some("codex".into());
+        let mut c = fact("c", 1.0);
+        c.source = "claudecode".into();
+        c.instance = "laptop".into();
+        c.client = Some("claude".into());
+        store.commit_import(&[a, b, c]).unwrap();
+
+        // Client-only clear removes matching facts but, by design, does not discard
+        // source/instance-addressable staging runs.
+        let removed = store
+            .clear_imported_scoped(&crate::history_import::ImportClearScope {
+                client: Some("claude".into()),
+                ..Default::default()
+            })
+            .unwrap();
+        assert_eq!(removed, 2);
+        assert_eq!(store.imported_totals(None, None).unwrap().requests, 1);
+
+        // Source+instance scope.
+        let dir2 = tempfile::tempdir().unwrap();
+        let store2 = RuntimeStore::open(&dir2.path().join("runtime.db")).unwrap();
+        let mut x = fact("x", 1.0);
+        x.source = "ccswitch".into();
+        x.instance = "laptop".into();
+        let mut y = fact("y", 1.0);
+        y.source = "ccswitch".into();
+        y.instance = "desktop".into();
+        store2.commit_import(&[x, y]).unwrap();
+        let removed = store2
+            .clear_imported_scoped(&crate::history_import::ImportClearScope {
+                source: Some("ccswitch".into()),
+                instance: Some("laptop".into()),
+                ..Default::default()
+            })
+            .unwrap();
+        assert_eq!(removed, 1);
+        assert_eq!(store2.imported_totals(None, None).unwrap().requests, 1);
     }
 }

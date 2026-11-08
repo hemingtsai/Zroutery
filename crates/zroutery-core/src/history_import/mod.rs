@@ -458,6 +458,75 @@ pub struct ImportTotals {
     pub cost: crate::billing::CostTotals,
 }
 
+/// A bounded, indexed read over imported facts, consistent with one revision.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct ImportedHistoryQuery {
+    pub page: u32,
+    pub page_size: u32,
+    pub expected_revision: Option<i64>,
+    pub source: Option<String>,
+    pub instance: Option<String>,
+    pub client: Option<String>,
+    pub provider_id: Option<String>,
+    pub model: Option<String>,
+    pub granularity: Option<Granularity>,
+    pub duplicate: Option<Duplicate>,
+    /// Completeness proxy: `Some(true)` for priced facts, `Some(false)` for unpriced.
+    pub priced: Option<bool>,
+    pub from: Option<DateTime<Utc>>,
+    pub until: Option<DateTime<Utc>>,
+}
+
+impl ImportedHistoryQuery {
+    pub fn validate(&self) -> Result<(), String> {
+        ImportRange::new(self.from, self.until)?;
+        if self.expected_revision.is_some_and(|revision| revision < 0) {
+            return Err("expected revision cannot be negative".into());
+        }
+        Ok(())
+    }
+
+    pub fn check_revision(&self, revision: i64) -> Result<(), String> {
+        if self
+            .expected_revision
+            .is_some_and(|expected| expected != revision)
+        {
+            return Err("imported history changed; refresh from the first page".into());
+        }
+        Ok(())
+    }
+
+    pub fn pagination(&self, total: u64) -> (u32, u32, u64) {
+        let size = self.page_size.clamp(1, 200);
+        if total == 0 {
+            return (1, size, 0);
+        }
+        let last = total.div_ceil(u64::from(size)).max(1);
+        let page = u64::from(self.page.max(1)).min(last) as u32;
+        (page, size, u64::from(page - 1) * u64::from(size))
+    }
+}
+
+/// One page of imported facts, read at the reported revision.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct ImportedHistoryPage {
+    pub records: Vec<ImportedFact>,
+    pub page: u32,
+    pub page_size: u32,
+    pub total: u64,
+    pub revision: i64,
+}
+
+/// Scope for clearing imported history. Local usage/spend/wallet/health are never affected.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct ImportClearScope {
+    pub source: Option<String>,
+    pub instance: Option<String>,
+    pub client: Option<String>,
+}
+
 /// Stage one chunk of an import run, with the cancel check and the cursor
 /// bookkeeping both adapters share.
 ///
