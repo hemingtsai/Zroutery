@@ -1121,3 +1121,29 @@ real NewAPI billing/identity/effort evidence, native client menu acceptance,
 Codex history positives, M3 OAuth/subscriptions, M5 small production and M6
 installation/signing; the inference-key crash-recovery journal and
 rekey-cooldown invalidation noted above. Nothing is committed or pushed.
+
+## 2026-11-08 — plan/status reconciliation (source review, non-gate)
+
+- Reconciled the canonical OpenChamber plan's stale M1 contract-gap claims
+  against source: `billing::resolve_rate` has production call sites in
+  `crates/zroutery-core/src/router/execution.rs` and
+  `crates/zroutery-core/src/router/selection.rs`; `src-tauri/src/state/takeover.rs`
+  `gateway_target` publishes the member effort **intersection** (with tests);
+  `crates/zroutery-core/src/models_dev.rs` cross-provider lookup merges
+  capabilities conservatively and does not advertise effort levels for
+  cross-provider matches. The plan text was corrected to describe current
+  behavior and keep remaining M1/M2 exits explicit (real
+  P-ACCOUNT/P-PRICE/P-EFFORT evidence, three-client menu→request evidence,
+  import multi-currency/query/paging/export/clear/atomic batch gaps). No
+  milestone checkbox changed (M0 only remains checked).
+- Verified untracked follow-up test
+  `crates/zroutery-core/tests/rekey_invalidation_test.rs` on the current tree:
+  `cargo +1.99.1 test -p zroutery-core --test rekey_invalidation_test --all-features --locked`
+  → 3 passed, 0 failed. The rekey credential-gate invalidation hook it
+  exercises is present in `server/config_state.rs` (`rekeyed_inference_keys`,
+  `invalidate_key_cooldowns`) and router APIs. The test file was left
+  untracked/not staged (provenance/worktree ownership not claimed here).
+- Isolated ZR→Zen sidecar connectivity check was run earlier in temp
+  directories/processes and fully cleaned up; no running ZR (40620:8787) or
+  user runtime config was modified. Those artifacts are out of repo and not
+  evidence for the plan.
