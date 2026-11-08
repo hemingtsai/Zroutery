@@ -833,6 +833,77 @@ export interface ImportedUsageView {
   first_day?: string | null;
 }
 
+export type ImportedGranularity = "request" | "day";
+export type ImportedDuplicate = "none" | "suspected";
+
+export interface ImportedHistoryQuery {
+  page?: number;
+  page_size?: number;
+  expected_revision?: number | null;
+  source?: string | null;
+  instance?: string | null;
+  client?: string | null;
+  provider_id?: string | null;
+  model?: string | null;
+  granularity?: ImportedGranularity | null;
+  duplicate?: ImportedDuplicate | null;
+  priced?: boolean | null;
+  from?: string | null;
+  until?: string | null;
+}
+
+export interface ImportedHistoryFact {
+  source: string;
+  instance: string;
+  entity_id: string;
+  revision: string;
+  granularity: ImportedGranularity;
+  at: string;
+  day: string;
+  client: string | null;
+  provider_id: string | null;
+  model: string | null;
+  request_model: string | null;
+  pricing_model: string | null;
+  tokens: Usage;
+  input_semantics: string | null;
+  cost: { currency: string; amount: number } | null;
+  reported_cost: { currency: string; amount: number } | null;
+  priced: boolean;
+  latency_ms: number | null;
+  ttft_ms: number | null;
+  status: number | null;
+  ok: boolean | null;
+  streaming: boolean;
+  requests: number;
+  failures: number;
+  data_source: string;
+  duplicate: ImportedDuplicate;
+  duplicate_of: string | null;
+  multiplier: number | null;
+  error: string | null;
+}
+
+export interface ImportedHistoryPage {
+  records: ImportedHistoryFact[];
+  page: number;
+  page_size: number;
+  total: number;
+  revision: number;
+}
+
+export interface ImportClearScope {
+  source?: string | null;
+  instance?: string | null;
+  client?: string | null;
+}
+
+export interface ImportedHistoryArchive {
+  schema_version: number;
+  revision: number;
+  records: ImportedHistoryFact[];
+}
+
 /**
  * A bounded query over durable usage history.
  *
@@ -2055,10 +2126,22 @@ export const api = {
     invoke<UsageImportPreview[]>("pending_usage_history_imports"),
   /** Imported history inside the same `days` window the local card uses. */
   importedUsage: (days: number) => invoke<ImportedUsageView>("get_imported_usage", { days }),
+  /** Query imported history facts with filters and stable revision pagination. */
+  queryImportedHistory: (query: ImportedHistoryQuery = {}) =>
+    invoke<ImportedHistoryPage>("query_imported_history", { query }),
   /**
    * Clear imported history only. Local usage, spend, wallet and health stay.
    */
   clearImportedUsage: () => invoke<number>("clear_imported_usage"),
+  /** Clear imported history matching `scope`. Local usage/spend/wallet/health stay. */
+  clearImportedUsageScoped: (scope: ImportClearScope = {}) =>
+    invoke<number>("clear_imported_usage_scoped", { scope }),
+  /** Export imported history as a portable JSON archive string. */
+  exportImportedHistory: (query?: ImportedHistoryQuery | null) =>
+    invoke<string>("export_imported_history", { query: query ?? null }),
+  /** Export imported history to a user-selected file. Returns the path or null if cancelled. */
+  exportImportedHistoryFile: (query?: ImportedHistoryQuery | null) =>
+    invoke<string | null>("export_imported_history_file", { query: query ?? null }),
   usageHistory: (query: UsageHistoryQuery = {}) =>
     invoke<UsageHistoryPage>("query_usage_history", { query }),
   usageAttempts: (request_id: string) =>
