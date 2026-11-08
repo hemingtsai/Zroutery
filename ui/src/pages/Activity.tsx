@@ -25,6 +25,9 @@ import {
   type UsageImportPreview,
   type UsageHistorySourceOffer,
   type ImportedUsageView,
+  type ImportedHistoryQuery,
+  type ImportedHistoryPage,
+  type ImportClearScope,
   type UsageSourcesView,
   type AppConfig,
 } from "../api";
@@ -268,6 +271,7 @@ export default function Activity({
    * `report` is what the accepted commit actually did.
    */
   const [imported, setImported] = useState<ImportedUsageView | null>(null);
+  const [importTab, setImportTab] = useState<"wizard" | "manage">("wizard");
   const [importSource, setImportSource] = useState<{
     path: string;
     preview: UsageImportPreview;
@@ -293,6 +297,10 @@ export default function Activity({
    * where to look; reading is still the preview's job.
    */
   const [importOffers, setImportOffers] = useState<UsageHistorySourceOffer[]>([]);
+  const [browseFilters, setBrowseFilters] = useState<ImportedHistoryQuery>({ page: 1, page_size: 50 });
+  const [browsePage, setBrowsePage] = useState<ImportedHistoryPage | null>(null);
+  const [browseLoading, setBrowseLoading] = useState(false);
+  const [browseError, setBrowseError] = useState<string | null>(null);
   /*
    * The file the last successful native export was written to, kept so the
    * path survives its toast: the full string rides on the hint line's title,
@@ -468,11 +476,47 @@ export default function Activity({
     setImportError(null);
     setImportReport(null);
     setImportSource(null);
+    setImportTab("wizard");
     setHistory("imported");
     void loadImportOffers();
     void api.pendingUsageHistoryImports().then(setPendingImports).catch((error) => {
       setImportError(String(error));
     });
+  };
+
+  const loadImportedBrowse = async (overrides: Partial<ImportedHistoryQuery> = {}) => {
+    const query: ImportedHistoryQuery = { ...browseFilters, ...overrides };
+    setBrowseFilters(query);
+    setBrowseLoading(true);
+    setBrowseError(null);
+    try {
+      const normalized: ImportedHistoryQuery = { ...query, page: query.page ?? 1, page_size: query.page_size ?? 50 };
+      const fromDate = typeof normalized.from === "string" && normalized.from && !normalized.from.includes("T")
+        ? new Date(`${normalized.from}T00:00:00`).toISOString()
+        : normalized.from ?? undefined;
+      const untilDate = typeof normalized.until === "string" && normalized.until && !normalized.until.includes("T")
+        ? (() => { const d = new Date(`${normalized.until}T00:00:00`); d.setDate(d.getDate() + 1); return d.toISOString(); })()
+        : normalized.until ?? undefined;
+      const page = await api.queryImportedHistory({
+        ...normalized,
+        from: fromDate,
+        until: untilDate,
+        expected_revision: browsePage?.revision ?? undefined,
+      });
+      setBrowsePage(page);
+    } catch (error) {
+      setBrowseError(String(error));
+    } finally {
+      setBrowseLoading(false);
+    }
+  };
+
+  const openImportedManage = () => {
+    setImportError(null);
+    setBrowseError(null);
+    setImportTab("manage");
+    setHistory("imported");
+    void loadImportedBrowse({ page: 1 });
   };
 
   const previewImport = async (path: string) => {
@@ -620,6 +664,51 @@ export default function Activity({
       confirmLabel: t("activity.import_clear"),
       danger: true,
       onConfirm: () => void clearImportedNow(),
+    });
+
+  const browseExportQuery = (): ImportedHistoryQuery => {
+    const q = { ...browseFilters };
+    delete q.page;
+    delete q.page_size;
+    delete q.expected_revision;
+    return q;
+  };
+
+  const exportFilteredImported = async () => {
+    setBrowseError(null);
+    try {
+      const path = await api.exportImportedHistoryFile(browseExportQuery());
+      if (path) {
+        const count = browsePage?.total ?? 0;
+        notify("info", t("activity.import_browse_export_done", { n: num(count), path }));
+      }
+    } catch (error) {
+      setBrowseError(String(error));
+    }
+  };
+
+  const clearFilteredImported = () =>
+    setConfirm({
+      title: t("activity.import_browse_clear_scope"),
+      body: t("activity.import_browse_clear_scope_body"),
+      confirmLabel: t("activity.import_browse_clear_scope"),
+      danger: true,
+      onConfirm: () => void (async () => {
+        setBrowseError(null);
+        try {
+          const scope: ImportClearScope = {};
+          if (browseFilters.source) scope.source = browseFilters.source;
+          if (browseFilters.instance) scope.instance = browseFilters.instance;
+          if (browseFilters.client) scope.client = browseFilters.client;
+          const removed = await api.clearImportedUsageScoped(scope);
+          usageLoadedAt.current = 0;
+          setUsageRefresh((value) => value + 1);
+          notify("info", t("activity.import_browse_clear_scope_done", { n: num(removed) }));
+          await loadImportedBrowse({ page: 1 });
+        } catch (error) {
+          setBrowseError(String(error));
+        }
+      })(),
     });
 
   const importedRows =
@@ -1544,13 +1633,18 @@ export default function Activity({
             {t("activity.import_source")}
           </button>
           {imported !== null && importedRows > 0 && (
-            <span className="field-hint">
-              {t("activity.imported_totals", {
-                requests: num(imported.totals.requests),
-                unpriced: num(imported.totals.unpriced_requests),
-                suspected: num(imported.totals.suspected_requests),
-              })}
-            </span>
+            <>
+              <button type="button" className="linky" onClick={openImportedManage}>
+                {t("activity.import_manage")}
+              </button>
+              <span className="field-hint">
+                {t("activity.imported_totals", {
+                  requests: num(imported.totals.requests),
+                  unpriced: num(imported.totals.unpriced_requests),
+                  suspected: num(imported.totals.suspected_requests),
+                })}
+              </span>
+            </>
           )}
         </div>
       )}
@@ -1718,166 +1812,310 @@ export default function Activity({
         >
           {history === "imported" ? (
             <>
-              {importError && (
-                <p className="field-error" role="status">
-                  {t("activity.import_error", { error: importError })}
-                </p>
-              )}
-              <p className="field-hint">{t("activity.import_source_hint")}</p>
-              <ol className="import-steps" aria-label={t("activity.import_source_title")}>
-                {["activity.import_step_source", "activity.import_step_review", "activity.import_step_done"].map((key, index) => (
-                  <li key={key} aria-current={index === (importReport ? 2 : importSource ? 1 : 0) ? "step" : undefined}>
-                    <span>{index + 1}</span>{t(key as "activity.import_step_source")}
-                  </li>
-                ))}
-              </ol>
-              {importPhase && (
-                <div className="import-progress" role="status" aria-live="polite">
-                  <span>{t(importPhase === "reading" ? "activity.import_reading" : "activity.import_publishing")}</span>
-                  <Button kind="ghost" disabled={importCancelling} onClick={() => void cancelImport()}>{t("common.cancel")}</Button>
-                </div>
-              )}
-              {importSource ? (
-                <>
-                  <p className="field-hint">
-                    {t("activity.import_source_copy", {
-                      name: importSource.preview.instance,
-                      source:
-                         importSource.preview.source === "claudecode"
-                           ? "Claude Code"
-                           : importSource.preview.source === "opencode" ? "OpenCode" : "CC Switch",
-                    })}
-                  </p>
-                  {/*
-                   * The four counts that decide whether to accept: what would be
-                   * written, what the source itself could not price, and what it
-                   * cannot prove is distinct. Same `num` formatting as the KPI
-                   * row so a figure reads the same on both surfaces.
-                   */}
-                  <div className="import-metrics" role="group" aria-label={t("activity.import_source_title")}>
-                    <Kpi
-                      label={t("activity.import_preview_requests")}
-                      value={num(importSource.preview.requests)}
-                    />
-                    <Kpi
-                      label={t("activity.import_preview_aggregates")}
-                      value={num(importSource.preview.aggregates)}
-                    />
-                    <Kpi
-                      label={t("activity.import_preview_suspected")}
-                      value={num(importSource.preview.suspected)}
-                    />
-                    <Kpi
-                      label={t("activity.import_preview_unpriced")}
-                      value={num(importSource.preview.unpriced)}
-                    />
-                    <Kpi
-                      label={t("activity.import_preview_days")}
-                      value={num(importSource.preview.days.length)}
-                    />
-                  </div>
-                  <p className="field-hint">{t("activity.import_snapshot_ready")}</p>
-                  {importSource.preview.warnings.length > 0 && (
-                    <ul className="field-hint">
-                      {importSource.preview.warnings.map((warning) => (
-                        <li key={warning}>{warning}</li>
-                      ))}
-                    </ul>
-                  )}
-                  <div className="controls" style={{ marginTop: 12 }}>
-                    <Button kind="primary" onClick={() => void applyImport()} disabled={importBusy}>
-                      {t("activity.import_confirm", {
-                        n: num(importSource.preview.requests + importSource.preview.aggregates),
-                      })}
-                    </Button>
-                    <Button
-                      kind="ghost"
-                      onClick={() => void cancelImport()}
-                      disabled={importBusy}
-                    >
-                      {t("common.cancel")}
-                    </Button>
-                  </div>
-                </>
-              ) : (
-                importReport && (
-                  <p className="field-hint">
-                    {importReport.cancelled ? t("activity.import_cancelled") : t("activity.import_report", {
-                      inserted: num(importReport.inserted),
-                      updated: num(importReport.updated),
-                      unchanged: num(importReport.unchanged),
-                    })}
-                  </p>
-                )
-              )}
-              {!importSource && !importBusy && pendingImports.length > 0 && (
-                <section className="import-section">
-                  <h3>{t("activity.import_resume")}</h3>
-                  <div className="import-source-list">
-                    {pendingImports.map((preview) => (
-                      <button type="button" className="import-source-option" key={preview.run_id} onClick={() => {
-                        setImportReport(null);
-                        setImportSource({ path: "", preview });
-                      }}>
-                        <strong>{preview.instance}</strong>
-                        <span>{num(preview.requests + preview.aggregates)} · {preview.source}</span>
-                      </button>
-                    ))}
-                  </div>
-                </section>
-              )}
-              {!importSource && !importBusy && (
-                <div className="import-range">
-                  <label className="field"><span>{t("activity.import_instance")}</span>
-                    <input className="text-input" aria-label={t("activity.import_instance")} value={importInstance} onChange={(event) => setImportInstance(event.target.value)} placeholder={t("activity.import_instance_default")} />
-                  </label>
-                  <label className="field"><span>{t("activity.import_from")}</span>
-                    <input className="text-input" aria-label={t("activity.import_from")} type="date" value={importFrom} onChange={(event) => setImportFrom(event.target.value)} />
-                  </label>
-                  <label className="field"><span>{t("activity.import_until")}</span>
-                    <input className="text-input" aria-label={t("activity.import_until")} type="date" value={importUntil} onChange={(event) => setImportUntil(event.target.value)} />
-                  </label>
-                </div>
-              )}
-              {!importSource && !importBusy && importOffers.length > 0 && (
-                <>
-                  <p className="field-hint">{t("activity.import_found")}</p>
-                  <ul className="import-source-list">
-                    {importOffers.map((offer) => (
-                      <li key={offer.path}>
-                        <button
-                          type="button"
-                           className="import-source-option"
-                          onClick={() => void previewImport(offer.path)}
-                        >
-                          <strong>{offer.label}</strong>
-                          <span>{offer.recent ? `${t("activity.import_recent")} · ` : ""}{offer.path}</span>
-                        </button>
-                      </li>
-                    ))}
-                  </ul>
-                </>
-              )}
-              <div className="controls" style={{ marginTop: 12 }}>
-                {!importSource && !importBusy && (
-                  <>
-                    <Button onClick={() => void pickImportSource("file")}>
-                      {t("activity.import_pick_file")}
-                    </Button>
-                    <Button kind="ghost" onClick={() => void pickImportSource("folder")}>
-                      {t("activity.import_pick_folder")}
-                    </Button>
-                  </>
-                )}
-                {importedRows > 0 && !importBusy && (
-                  <Button kind="ghost" onClick={() => void clearImported()}>
-                    {t("activity.import_clear")}
-                  </Button>
-                )}
-                <Button kind="ghost" onClick={closeHistory}>
-                  {t("common.close")}
+              <div className="import-tabs" style={{ display: "flex", gap: 8, marginBottom: 8 }}>
+                <Button
+                  kind={importTab === "wizard" ? "primary" : "ghost"}
+                  onClick={() => setImportTab("wizard")}
+                >
+                  {t("activity.import_tab_import")}
+                </Button>
+                <Button
+                  kind={importTab === "manage" ? "primary" : "ghost"}
+                  onClick={() => {
+                    setImportTab("manage");
+                    void loadImportedBrowse({ page: 1 });
+                  }}
+                >
+                  {t("activity.import_tab_manage")}
                 </Button>
               </div>
+              {importTab === "manage" ? (
+                <>
+                  {browseError && (
+                    <p className="field-error" role="status">{browseError}</p>
+                  )}
+                  <p className="field-hint">{t("activity.import_browse_hint")}</p>
+                  <div className="import-range" style={{ gridTemplateColumns: "repeat(auto-fit, minmax(140px, 1fr))" }}>
+                    <label className="field"><span>{t("activity.import_filter_source")}</span>
+                      <input className="text-input" value={browseFilters.source ?? ""} onChange={(e) => setBrowseFilters((q) => ({ ...q, source: e.target.value || undefined, page: 1 }))} />
+                    </label>
+                    <label className="field"><span>{t("activity.import_filter_instance")}</span>
+                      <input className="text-input" value={browseFilters.instance ?? ""} onChange={(e) => setBrowseFilters((q) => ({ ...q, instance: e.target.value || undefined, page: 1 }))} />
+                    </label>
+                    <label className="field"><span>{t("activity.import_filter_client")}</span>
+                      <input className="text-input" value={browseFilters.client ?? ""} onChange={(e) => setBrowseFilters((q) => ({ ...q, client: e.target.value || undefined, page: 1 }))} />
+                    </label>
+                    <label className="field"><span>{t("activity.import_filter_provider")}</span>
+                      <input className="text-input" value={browseFilters.provider_id ?? ""} onChange={(e) => setBrowseFilters((q) => ({ ...q, provider_id: e.target.value || undefined, page: 1 }))} />
+                    </label>
+                    <label className="field"><span>{t("activity.import_filter_model")}</span>
+                      <input className="text-input" value={browseFilters.model ?? ""} onChange={(e) => setBrowseFilters((q) => ({ ...q, model: e.target.value || undefined, page: 1 }))} />
+                    </label>
+                    <label className="field"><span>{t("activity.import_filter_currency")}</span>
+                      <input className="text-input" value={browseFilters.currency ?? ""} onChange={(e) => setBrowseFilters((q) => ({ ...q, currency: e.target.value || undefined, page: 1 }))} />
+                    </label>
+                    <label className="field"><span>{t("activity.import_filter_from")}</span>
+                      <input className="text-input" type="date" value={typeof browseFilters.from === "string" && !browseFilters.from.includes("T") ? browseFilters.from : ""} onChange={(e) => setBrowseFilters((q) => ({ ...q, from: e.target.value || undefined, page: 1 }))} />
+                    </label>
+                    <label className="field"><span>{t("activity.import_filter_until")}</span>
+                      <input className="text-input" type="date" value={typeof browseFilters.until === "string" && !browseFilters.until.includes("T") ? browseFilters.until : ""} onChange={(e) => setBrowseFilters((q) => ({ ...q, until: e.target.value || undefined, page: 1 }))} />
+                    </label>
+                    <label className="field"><span>{t("activity.import_filter_granularity")}</span>
+                      <select className="text-input" value={browseFilters.granularity ?? ""} onChange={(e) => setBrowseFilters((q) => ({ ...q, granularity: (e.target.value || undefined) as ImportedHistoryQuery["granularity"], page: 1 }))}>
+                        <option value="">{t("activity.import_filter_all")}</option>
+                        <option value="request">{t("activity.import_filter_request")}</option>
+                        <option value="day">{t("activity.import_filter_aggregate")}</option>
+                      </select>
+                    </label>
+                    <label className="field"><span>{t("activity.import_filter_duplicate")}</span>
+                      <select className="text-input" value={browseFilters.duplicate ?? ""} onChange={(e) => setBrowseFilters((q) => ({ ...q, duplicate: (e.target.value || undefined) as ImportedHistoryQuery["duplicate"], page: 1 }))}>
+                        <option value="">{t("activity.import_filter_all")}</option>
+                        <option value="suspected">{t("activity.import_filter_duplicate_yes")}</option>
+                        <option value="none">{t("activity.import_filter_duplicate_no")}</option>
+                      </select>
+                    </label>
+                    <label className="field"><span>{t("activity.import_filter_priced")}</span>
+                      <select className="text-input" value={browseFilters.priced === true ? "yes" : browseFilters.priced === false ? "no" : ""} onChange={(e) => setBrowseFilters((q) => ({ ...q, priced: e.target.value === "yes" ? true : e.target.value === "no" ? false : undefined, page: 1 }))}>
+                        <option value="">{t("activity.import_filter_all")}</option>
+                        <option value="yes">{t("activity.import_filter_priced_yes")}</option>
+                        <option value="no">{t("activity.import_filter_priced_no")}</option>
+                      </select>
+                    </label>
+                  </div>
+                  <div className="controls" style={{ marginTop: 8, flexWrap: "wrap" }}>
+                    <Button kind="primary" onClick={() => void loadImportedBrowse({ page: 1 })} disabled={browseLoading}>
+                      {t("activity.import_browse_apply")}
+                    </Button>
+                    <Button kind="ghost" onClick={() => void exportFilteredImported()} disabled={browseLoading}>
+                      {t("activity.import_browse_export")}
+                    </Button>
+                    <Button kind="ghost" onClick={() => clearFilteredImported()} disabled={browseLoading}>
+                      {t("activity.import_browse_clear_scope")}
+                    </Button>
+                    {importedRows > 0 && (
+                      <Button kind="ghost" onClick={() => void clearImported()} disabled={browseLoading}>
+                        {t("activity.import_browse_clear_all")}
+                      </Button>
+                    )}
+                  </div>
+                  <p className="field-hint" style={{ marginTop: 4 }}>{t("activity.import_browse_scope_hint")}</p>
+                  {browseLoading ? (
+                    <p className="field-hint" role="status">{t("activity.import_browse_loading")}</p>
+                  ) : browsePage ? (
+                    <>
+                      <p className="field-hint">
+                        {t("activity.import_browse_count", {
+                          total: num(browsePage.total),
+                          page: num(browsePage.page),
+                          pages: num(Math.max(1, Math.ceil(browsePage.total / Math.max(1, browsePage.page_size)))),
+                        })}
+                      </p>
+                      {browsePage.records.length === 0 ? (
+                        <p className="field-hint">{t("activity.import_browse_empty")}</p>
+                      ) : (
+                        <div style={{ overflowX: "auto" }}>
+                          <table className="log-table" style={{ width: "100%", fontSize: "12px" }}>
+                            <thead>
+                              <tr>
+                                <th>{t("activity.import_filter_source")}</th>
+                                <th>{t("activity.import_filter_client")}</th>
+                                <th>{t("activity.import_filter_model")}</th>
+                                <th>{t("activity.import_filter_granularity")}</th>
+                                <th>{t("activity.import_filter_duplicate")}</th>
+                                <th>{t("activity.import_filter_priced")}</th>
+                              </tr>
+                            </thead>
+                            <tbody>
+                              {browsePage.records.map((r) => (
+                                <tr key={`${r.source}|${r.instance}|${r.entity_id}`}>
+                                  <td title={`${r.instance}\n${r.entity_id}`}>{r.source}</td>
+                                  <td>{r.client ?? "—"}</td>
+                                  <td title={r.provider_id ?? undefined}>{r.model ?? "—"}</td>
+                                  <td>{r.granularity === "day" ? t("activity.import_filter_aggregate") : t("activity.import_filter_request")}</td>
+                                  <td>{r.duplicate === "suspected" ? t("activity.import_filter_duplicate_yes") : "—"}</td>
+                                  <td>{r.priced ? (r.cost ? `${r.cost.amount} ${r.cost.currency}` : "✓") : t("activity.import_filter_priced_no")}</td>
+                                </tr>
+                              ))}
+                            </tbody>
+                          </table>
+                        </div>
+                      )}
+                      <div className="controls" style={{ marginTop: 8 }}>
+                        <Button kind="ghost" disabled={browseLoading || (browsePage.page <= 1)} onClick={() => void loadImportedBrowse({ page: (browsePage?.page ?? 1) - 1 })}>
+                          {t("activity.import_browse_prev")}
+                        </Button>
+                        <Button kind="ghost" disabled={browseLoading || (browsePage.page * browsePage.page_size >= browsePage.total)} onClick={() => void loadImportedBrowse({ page: (browsePage?.page ?? 1) + 1 })}>
+                          {t("activity.import_browse_next")}
+                        </Button>
+                        <Button kind="ghost" onClick={closeHistory}>{t("common.close")}</Button>
+                      </div>
+                    </>
+                  ) : null}
+                </>
+              ) : (
+                <>
+                  {importError && (
+                    <p className="field-error" role="status">
+                      {t("activity.import_error", { error: importError })}
+                    </p>
+                  )}
+                  <p className="field-hint">{t("activity.import_source_hint")}</p>
+                  <ol className="import-steps" aria-label={t("activity.import_source_title")}>
+                    {["activity.import_step_source", "activity.import_step_review", "activity.import_step_done"].map((key, index) => (
+                      <li key={key} aria-current={index === (importReport ? 2 : importSource ? 1 : 0) ? "step" : undefined}>
+                        <span>{index + 1}</span>{t(key as "activity.import_step_source")}
+                      </li>
+                    ))}
+                  </ol>
+                  {importPhase && (
+                    <div className="import-progress" role="status" aria-live="polite">
+                      <span>{t(importPhase === "reading" ? "activity.import_reading" : "activity.import_publishing")}</span>
+                      <Button kind="ghost" disabled={importCancelling} onClick={() => void cancelImport()}>{t("common.cancel")}</Button>
+                    </div>
+                  )}
+                  {importSource ? (
+                    <>
+                      <p className="field-hint">
+                        {t("activity.import_source_copy", {
+                          name: importSource.preview.instance,
+                          source:
+                             importSource.preview.source === "claudecode"
+                               ? "Claude Code"
+                               : importSource.preview.source === "opencode" ? "OpenCode" : "CC Switch",
+                        })}
+                      </p>
+                      {/*
+                       * The four counts that decide whether to accept: what would be
+                       * written, what the source itself could not price, and what it
+                       * cannot prove is distinct. Same `num` formatting as the KPI
+                       * row so a figure reads the same on both surfaces.
+                       */}
+                      <div className="import-metrics" role="group" aria-label={t("activity.import_source_title")}>
+                        <Kpi
+                          label={t("activity.import_preview_requests")}
+                          value={num(importSource.preview.requests)}
+                        />
+                        <Kpi
+                          label={t("activity.import_preview_aggregates")}
+                          value={num(importSource.preview.aggregates)}
+                        />
+                        <Kpi
+                          label={t("activity.import_preview_suspected")}
+                          value={num(importSource.preview.suspected)}
+                        />
+                        <Kpi
+                          label={t("activity.import_preview_unpriced")}
+                          value={num(importSource.preview.unpriced)}
+                        />
+                        <Kpi
+                          label={t("activity.import_preview_days")}
+                          value={num(importSource.preview.days.length)}
+                        />
+                      </div>
+                      <p className="field-hint">{t("activity.import_snapshot_ready")}</p>
+                      {importSource.preview.warnings.length > 0 && (
+                        <ul className="field-hint">
+                          {importSource.preview.warnings.map((warning) => (
+                            <li key={warning}>{warning}</li>
+                          ))}
+                        </ul>
+                      )}
+                      <div className="controls" style={{ marginTop: 12 }}>
+                        <Button kind="primary" onClick={() => void applyImport()} disabled={importBusy}>
+                          {t("activity.import_confirm", {
+                            n: num(importSource.preview.requests + importSource.preview.aggregates),
+                          })}
+                        </Button>
+                        <Button
+                          kind="ghost"
+                          onClick={() => void cancelImport()}
+                          disabled={importBusy}
+                        >
+                          {t("common.cancel")}
+                        </Button>
+                      </div>
+                    </>
+                  ) : (
+                    importReport && (
+                      <p className="field-hint">
+                        {importReport.cancelled ? t("activity.import_cancelled") : t("activity.import_report", {
+                          inserted: num(importReport.inserted),
+                          updated: num(importReport.updated),
+                          unchanged: num(importReport.unchanged),
+                        })}
+                      </p>
+                    )
+                  )}
+                  {!importSource && !importBusy && pendingImports.length > 0 && (
+                    <section className="import-section">
+                      <h3>{t("activity.import_resume")}</h3>
+                      <div className="import-source-list">
+                        {pendingImports.map((preview) => (
+                          <button type="button" className="import-source-option" key={preview.run_id} onClick={() => {
+                            setImportReport(null);
+                            setImportSource({ path: "", preview });
+                          }}>
+                            <strong>{preview.instance}</strong>
+                            <span>{num(preview.requests + preview.aggregates)} · {preview.source}</span>
+                          </button>
+                        ))}
+                      </div>
+                    </section>
+                  )}
+                  {!importSource && !importBusy && (
+                    <div className="import-range">
+                      <label className="field"><span>{t("activity.import_instance")}</span>
+                        <input className="text-input" aria-label={t("activity.import_instance")} value={importInstance} onChange={(event) => setImportInstance(event.target.value)} placeholder={t("activity.import_instance_default")} />
+                      </label>
+                      <label className="field"><span>{t("activity.import_from")}</span>
+                        <input className="text-input" aria-label={t("activity.import_from")} type="date" value={importFrom} onChange={(event) => setImportFrom(event.target.value)} />
+                      </label>
+                      <label className="field"><span>{t("activity.import_until")}</span>
+                        <input className="text-input" aria-label={t("activity.import_until")} type="date" value={importUntil} onChange={(event) => setImportUntil(event.target.value)} />
+                      </label>
+                    </div>
+                  )}
+                  {!importSource && !importBusy && importOffers.length > 0 && (
+                    <>
+                      <p className="field-hint">{t("activity.import_found")}</p>
+                      <ul className="import-source-list">
+                        {importOffers.map((offer) => (
+                          <li key={offer.path}>
+                            <button
+                              type="button"
+                               className="import-source-option"
+                              onClick={() => void previewImport(offer.path)}
+                            >
+                              <strong>{offer.label}</strong>
+                              <span>{offer.recent ? `${t("activity.import_recent")} · ` : ""}{offer.path}</span>
+                            </button>
+                          </li>
+                        ))}
+                      </ul>
+                    </>
+                  )}
+                  <div className="controls" style={{ marginTop: 12 }}>
+                    {!importSource && !importBusy && (
+                      <>
+                        <Button onClick={() => void pickImportSource("file")}>
+                          {t("activity.import_pick_file")}
+                        </Button>
+                        <Button kind="ghost" onClick={() => void pickImportSource("folder")}>
+                          {t("activity.import_pick_folder")}
+                        </Button>
+                      </>
+                    )}
+                    {importedRows > 0 && !importBusy && (
+                      <Button kind="ghost" onClick={() => void clearImported()}>
+                        {t("activity.import_clear")}
+                      </Button>
+                    )}
+                    <Button kind="ghost" onClick={closeHistory}>
+                      {t("common.close")}
+                    </Button>
+                  </div>
+                </>
+              )}
             </>
           ) : (
             <>

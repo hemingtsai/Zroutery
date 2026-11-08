@@ -57,7 +57,10 @@ DEFAULT_DIST = os.path.join(REPO, "ui", "dist")
 # 720,000 -> 726,000: batch A of the 2026-11-06 task-experience review (A1
 # add-provider save discipline, A2 input/IME/Esc contract, A3 save-feedback
 # scoping, A4 add-form landing, A5 price sub-row) costs ~5.1 kB of shipped JS.
-JS_TOTAL_MAX = 726_000
+# 726,000 -> 742,000: M2b imported history browse/manage (Activity drawer):
+# query/paging filters, fact table, filtered export, scoped/all clear controls,
+# and synced i18n. Measured at 733,590 B after this slice.
+JS_TOTAL_MAX = 742_000
 CSS_TOTAL_MAX = 180_000
 LARGEST_CHUNK_MAX = 320_000
 

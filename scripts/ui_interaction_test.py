@@ -509,6 +509,26 @@ HARNESS = """
         state.importedSuspected = 0;
         state.pendingImports = {};
         return 419;
+      case "clear_imported_usage_scoped":
+        state.commandLog.push({ cmd, args: clone(args) });
+        return 0;
+      case "query_imported_history": {
+        state.commandLog.push({ cmd, args: clone(args) });
+        const q = args.query || {};
+        return {
+          records: [],
+          page: q.page || 1,
+          page_size: q.page_size || 50,
+          total: 0,
+          revision: 0,
+        };
+      }
+      case "export_imported_history":
+        state.commandLog.push({ cmd, args: clone(args) });
+        return JSON.stringify({ schema_version: 1, revision: 0, records: [] });
+      case "export_imported_history_file":
+        state.commandLog.push({ cmd, args: clone(args) });
+        return "C:/fixture/exported-imported-history.json";
       case "takeover_status":
         return clone(state.takeover);
       case "client_setup_preview":
