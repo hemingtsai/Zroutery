@@ -489,6 +489,99 @@ pub async fn clear_imported_usage(desktop: State<'_, Arc<Desktop>>) -> Cmd<usize
     .map_err(|error| error.to_string())?
 }
 
+/// Remove imported facts matching `scope`. Local usage, spend, wallet and
+/// health are never affected.
+#[tauri::command]
+pub async fn clear_imported_usage_scoped(
+    desktop: State<'_, Arc<Desktop>>,
+    scope: zroutery_core::history_import::ImportClearScope,
+) -> Cmd<usize> {
+    let desktop = Arc::clone(desktop.inner());
+    tauri::async_runtime::spawn_blocking(move || {
+        let store = desktop
+            .runtime
+            .as_ref()
+            .ok_or("runtime storage is unavailable")?;
+        store.clear_imported_scoped(&scope)
+    })
+    .await
+    .map_err(|error| error.to_string())?
+}
+
+#[tauri::command]
+pub async fn query_imported_history(
+    desktop: State<'_, Arc<Desktop>>,
+    query: zroutery_core::history_import::ImportedHistoryQuery,
+) -> Cmd<zroutery_core::history_import::ImportedHistoryPage> {
+    let desktop = Arc::clone(desktop.inner());
+    tauri::async_runtime::spawn_blocking(move || {
+        let store = desktop
+            .runtime
+            .as_ref()
+            .ok_or("runtime storage is unavailable")?;
+        store.query_imported_history(&query)
+    })
+    .await
+    .map_err(|error| error.to_string())?
+}
+
+#[tauri::command]
+pub async fn export_imported_history(
+    desktop: State<'_, Arc<Desktop>>,
+    query: Option<zroutery_core::history_import::ImportedHistoryQuery>,
+) -> Cmd<String> {
+    let desktop = Arc::clone(desktop.inner());
+    let query = query.unwrap_or_default();
+    tauri::async_runtime::spawn_blocking(move || {
+        let store = desktop
+            .runtime
+            .as_ref()
+            .ok_or("runtime storage is unavailable")?;
+        serde_json::to_string_pretty(&crate::imported_usage_export::archive(store, &query)?)
+            .map_err(|error| error.to_string())
+    })
+    .await
+    .map_err(|error| error.to_string())?
+}
+
+#[tauri::command]
+pub async fn export_imported_history_file(
+    app: AppHandle,
+    window: tauri::WebviewWindow,
+    desktop: State<'_, Arc<Desktop>>,
+    query: Option<zroutery_core::history_import::ImportedHistoryQuery>,
+) -> Cmd<Option<String>> {
+    use tauri_plugin_dialog::DialogExt;
+    let (send, receive) = tokio::sync::oneshot::channel();
+    app.dialog()
+        .file()
+        .set_parent(&window)
+        .set_file_name(format!(
+            "zroutery-imported-history-{}.json",
+            chrono::Local::now().format("%Y%m%d-%H%M%S")
+        ))
+        .add_filter("JSON", &["json"])
+        .save_file(move |path| {
+            let _ = send.send(path);
+        });
+    let Some(path) = receive.await.map_err(|error| error.to_string())? else {
+        return Ok(None);
+    };
+    let path = path.into_path().map_err(|error| error.to_string())?;
+    let desktop = Arc::clone(desktop.inner());
+    let query = query.unwrap_or_default();
+    tauri::async_runtime::spawn_blocking(move || {
+        let store = desktop
+            .runtime
+            .as_ref()
+            .ok_or("runtime storage is unavailable")?;
+        crate::imported_usage_export::write_archive(store, &query, &path)?;
+        Ok(Some(path.display().to_string()))
+    })
+    .await
+    .map_err(|error| error.to_string())?
+}
+
 /// Recent tracing output for the Logs tab. The buffer is capped in memory, so
 /// this is a rolling window rather than the full process log.
 #[tauri::command]

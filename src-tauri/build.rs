@@ -55,6 +55,10 @@ const APP_COMMANDS: &[&str] = &[
     "pending_usage_history_imports",
     "get_imported_usage",
     "clear_imported_usage",
+    "clear_imported_usage_scoped",
+    "query_imported_history",
+    "export_imported_history",
+    "export_imported_history_file",
     "get_logs",
     // Learning stack; `#[cfg(feature = "ml")]` in `lib.rs`.
     "get_ml_status",

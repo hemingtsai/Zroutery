@@ -16,6 +16,7 @@ mod checkin_commands;
 mod commands;
 mod history_imports;
 mod history_sources;
+mod imported_usage_export;
 #[cfg(feature = "account")]
 mod inference_commands;
 mod logs;
@@ -113,6 +114,10 @@ pub fn run() {
             commands::pending_usage_history_imports,
             commands::get_imported_usage,
             commands::clear_imported_usage,
+            commands::clear_imported_usage_scoped,
+            commands::query_imported_history,
+            commands::export_imported_history,
+            commands::export_imported_history_file,
             commands::get_logs,
             #[cfg(feature = "ml")]
             commands::get_ml_status,
