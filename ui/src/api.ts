@@ -848,6 +848,7 @@ export interface ImportedHistoryQuery {
   granularity?: ImportedGranularity | null;
   duplicate?: ImportedDuplicate | null;
   priced?: boolean | null;
+  currency?: string | null;
   from?: string | null;
   until?: string | null;
 }
