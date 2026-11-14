@@ -15,6 +15,7 @@ as of `2026-11-14` · branch `dev` · verified code head `26d887f`
 | frontend tests | **pass** | `pnpm --dir ui test` | 86 passed |
 | command surface | **pass** | `python3 -B scripts/command_surface_test.py` | 90 interface commands, 254 registered |
 | documentation sources | **pass** | `python3 -B scripts/docs_sources.py --check` |  |
+| markdown structure | **pass** | `python3 -B scripts/markdown_check.py` | fenced blocks and tables well formed |
 | documentation check | **pass** | `python3 -B scripts/docs_check.py` | 45 active, 0 pending, 0 warnings |
 | documentation impact self-test | **pass** | `python3 -B scripts/docs_impact.py --base <base> --head HEAD` | the self-test passes; the range check is enforced in CI with --base/--head |
 | documentation parity | **pass** | `python3 -B scripts/docs_parity.py --check` | three READMEs have matching headings, fences, images and anchors |

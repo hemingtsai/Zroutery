@@ -170,6 +170,8 @@ jobs:
           python3 -B scripts/docs_check.py --self-test
           python3 -B scripts/docs_impact.py --self-test
           python3 -B scripts/docs_sources.py --check
+          python3 -B scripts/markdown_check.py --self-test
+          python3 -B scripts/markdown_check.py
           python3 -B scripts/docs_check.py
           python3 -B scripts/docs_parity.py --self-test
           python3 -B scripts/docs_parity.py --check

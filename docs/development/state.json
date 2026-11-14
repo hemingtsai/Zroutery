@@ -44,6 +44,12 @@
       "command": "python3 -B scripts/docs_sources.py --check"
     },
     {
+      "name": "markdown structure",
+      "status": "pass",
+      "command": "python3 -B scripts/markdown_check.py",
+      "detail": "fenced blocks and tables well formed"
+    },
+    {
       "name": "documentation check",
       "status": "pass",
       "command": "python3 -B scripts/docs_check.py",

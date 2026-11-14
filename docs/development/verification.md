@@ -66,6 +66,7 @@ Some Tier 2 rows block CI; others are local-only. The "When" column says which
 surface they cover; the "CI" column says whether the pipeline runs them.
 
 | Gate | Command | When | CI |
+|---|---|---|---|
 | overflow | `python3 -B scripts/ui_overflow_test.py` | UI structure or styles (`scripts/ui_overflow_test.py::main`) | blocking (reachability) |
 | layout | `python3 -B scripts/ui_layout_test.py` | UI controls or form structure (`scripts/ui_layout_test.py::main`) | local only |
 | interaction | `python3 -B scripts/ui_interaction_test.py` | keyboard, drawers, dialogs, mock IPC | local only |
@@ -127,6 +128,8 @@ Consequences, stated rather than discovered:
 
 ## Documentation gates
 
+- `markdown_check.py` enforces fenced-code closure and table structure without
+  a third-party parser.
 - `docs_sources.py --check` resolves every `path::symbol` and `path#Lx` anchor in
   active documents.
 - `docs_check.py` enforces manifest coverage, links, banners, size budgets and

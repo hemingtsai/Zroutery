@@ -40,13 +40,13 @@ Exactly one type per document. The type decides the required sections.
 | `normative` | rules and boundaries | scope, rules, canonical commands, change log, see also | unsourced facts, narrative |
 | `guide` | onboarding and runbook | audience, prerequisites, steps, verify, troubleshoot, pointers | restating normative rules |
 | `reference` | one subsystem | what it does, invariants, configuration, failure modes, not implemented, sources | plans and roadmaps |
-
-A cross-cutting layer such as `server` may be owned by
-`docs/development/architecture.md`; it is not forced into a `reference`.
 | `adr` | durable decision | status, context, decision, consequences, sources | implementation diary |
 | `record` | execution evidence | date, commit range, commands, results, what is not established | being cited as current fact |
 | `index` | navigation, generated | legend, reading paths, tables, health | hand-written metadata |
 | `historical` | archived document | an archive banner only | being edited to match new code |
+
+A cross-cutting layer such as `server` may be owned by
+`docs/development/architecture.md`; it is not forced into a `reference`.
 
 ## Metadata lives in one manifest
 
