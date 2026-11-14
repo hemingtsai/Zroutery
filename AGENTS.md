@@ -7,6 +7,18 @@ validated by `state.schema.json`. [current-state.md](docs/development/current-st
 is its rendered view. If this file and the state disagree, the state wins for
 facts; this file wins for permission and process.
 
+## How to use this documentation
+
+- Start with [state.json](docs/development/state.json) and
+  [current-state.md](docs/development/current-state.md); they are the current facts.
+- This file owns permission and process; [DOCUMENTATION.md](docs/DOCUMENTATION.md)
+  owns document rules; [verification.md](docs/development/verification.md) owns
+  gates; [INDEX.md](docs/INDEX.md) owns reading paths.
+- Before changing code, inspect citations with `python3 -B scripts/docs_sources.py
+  --index` and the affected set with `python3 -B scripts/docs_impact.py --base
+  <start> --head HEAD`.
+- Before committing, follow Definition of done below.
+
 ## Definition of done
 
 Before each commit run `docs_contracts.py`, `current_state.py --check` and

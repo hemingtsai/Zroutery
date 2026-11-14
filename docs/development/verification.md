@@ -144,7 +144,9 @@ Consequences, stated rather than discovered:
   `docs/archive/successors.json`.
 - `coverage_check.py` requires every top-level Core module (public or private) to be owned, covered
   elsewhere, or explicitly unowned with a reason.
-- `docs_check.py` requires an ADR header (`Status`, `Date`, `Supersedes`), the
+- `docs_check.py` validates `docs/docs.manifest.json` keys against
+  `docs/docs.manifest.schema.json`, and banner authority/owner/verified-date
+  against the manifest and ledger. It requires an ADR header (`Status`, `Date`, `Supersedes`), the
   `Context`/`Decision`/`Consequences`/`Sources` sections, and a resolvable
   `manifest.canonical[].home` anchor. `docs_contracts.py` also compares the
   executed step statuses with `state.json`; a state file that disagrees fails
@@ -172,14 +174,16 @@ Consequences, stated rather than discovered:
 - `docs_rules.py` checks that every `docs/rules.json` machine rule names an
   executed `docs_contracts.py` step, and that every gated step is registered.
 - `record_state.py` runs `docs_contracts.py --json` and writes the documentation
-  gate status, `ran_at` and commit into `state.json`; hand-filled doc statuses
-  are not the source. `documentation contracts (local)` is the state truth;
+  gate status, `ran_at` and commit into `state.json`; it also derives `head`
+  from the latest code commit and `as_of` from today. `state_check.py` rejects
+  a `head` with later code commits. Hand-filled doc statuses are not the source. `documentation contracts (local)` is the state truth;
   `documentation impact` is CI-only and is not recorded in `state.json`.
 - Commit messages are checked by the CI range; no local `commit-msg` hook is
   installed. `state_check.py` also validates that every gate `commit` exists and
   is an ancestor of HEAD, and that `ran_at` is an ISO timestamp.
-- `state_check.py` validates `state.json` against `state.schema.json` and checks
-  blocker dependencies and cycles.
+- `state_check.py` validates `state.json` against `state.schema.json`, including
+  blocker dependencies/cycles and structured flaky/quarantine owner+review
+  deadlines; an expired review date fails.
 - `docs_parity.py` checks that the three READMEs have matching headings, fences,
   images and source anchors; prose may differ, shape may not.
 - `docs_check.py` compares `docs/verified.json` source content hashes with

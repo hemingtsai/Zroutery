@@ -210,9 +210,9 @@
     "reviewed_by": "second-reader",
     "reviewed_at": "2026-11-14",
     "sample": [
-      "`AGENTS.md` keeps the permission/process",
       "[`docs/development/reference/documentation-rules.md`](development/reference/documentation-rules.md).",
-      "`Status` is `accepted`, `proposed`, or `superseded by ADR-XXXX`."
+      "`Status` is `accepted`, `proposed`, or `superseded by ADR-XXXX`.",
+      "`docs_check.py` fails when a Markdown file is in none of `docs`,"
     ]
   },
   "docs/development/verification.md": {
@@ -247,9 +247,9 @@
     "reviewed_by": "second-reader",
     "reviewed_at": "2026-11-14",
     "sample": [
+      "3-5 sentence `sample` per verified document; a reviewer equal to the last",
       "is an ancestor of HEAD, and that `ran_at` is an ISO timestamp.",
-      "An ADR `Date` must equal the file's first",
-      "gate status, `ran_at` and commit into `state.json`; hand-filled doc statuses"
+      "An ADR `Date` must equal the file's first"
     ]
   },
   "docs/development/reference/providers.md": {

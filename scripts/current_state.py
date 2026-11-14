@@ -40,8 +40,10 @@ def render(state: dict) -> str:
     ]
     for gate in state.get("gates", []):
         detail = gate.get("detail", "")
-        if gate.get("quarantine"):
-            detail = f"{detail} (quarantined)" if detail else "quarantined"
+        quarantine = gate.get("quarantine")
+        if quarantine:
+            note = f"quarantined by {quarantine.get('owner', '?')} until {quarantine.get('review_by', '?')}"
+            detail = f"{detail} ({note})" if detail else note
         lines.append(
             "| {name} | **{status}** | `{command}` | {detail} |".format(
                 name=gate.get("name", "?"),
@@ -59,12 +61,20 @@ def render(state: dict) -> str:
             status = blocker.get("status", "unknown")
             blocked_by = blocker.get("blocked_by") or []
             blocked = f"; blocked by {', '.join(blocked_by)}" if blocked_by else ""
-            lines.append(f"- {identifier} {summary}: {status.upper()}{blocked}")
+            owner = f"; owner {blocker['owner']}" if blocker.get("owner") else ""
+            ref = f"; ref {blocker['ref']}" if blocker.get("ref") else ""
+            lines.append(f"- {identifier} {summary}: {status.upper()}{blocked}{owner}{ref}")
     else:
         lines.append("None.")
     lines += ["", "## Known flaky", ""]
     flaky = state.get("flaky", [])
-    lines += [f"- {item}" for item in flaky] if flaky else ["None."]
+    if flaky:
+        lines += [
+            f"- {item.get('name', '?')}: {item.get('reason', '')} (owner {item.get('owner', '?')}, review by {item.get('review_by', '?')})"
+            for item in flaky
+        ]
+    else:
+        lines.append("None.")
     lines += ["", "## Last full green", ""]
     green = state.get("last_full_green")
     lines.append(f"`{green}`" if green else "Not recorded. A green unit-test run is not a full green: Tier 2 gates are listed in `verification.md`.")

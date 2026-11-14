@@ -33,10 +33,70 @@ ROOT_PREFIXES = ("crates/", "src-tauri/", "ui/", "scripts/", "docs/", "tests/")
 ROOT_FILES = ("Cargo.toml", "package.json", "README.md", "README.zh-CN.md", "README.zh-TW.md", "AGENTS.md", "CONTRIBUTING.md")
 SKIP_DIRS = {".git", "node_modules", "target", "dist"}
 BANNER_TYPES = {"normative", "reference"}
+BANNER_RE = re.compile(
+    r"^> Authority: ([^·]+?) · Owner: ([^·]+?) · Last verified: (\d{4}-\d{2}-\d{2}) · Verified by: (.+)$"
+)
+MANIFEST_TOP_KEYS = {"schema_version", "docs", "pending", "ignore", "triggers", "canonical"}
+MANIFEST_DOC_KEYS = {"path", "glob", "title", "type", "authority", "audience", "status", "owner", "summary", "max_lines", "generated", "triggers"}
+DOC_TYPES = {"entry", "fact", "normative", "guide", "reference", "adr", "record", "index", "historical"}
+AUTHORITIES = {"fact", "guide", "index", "normative", "reference"}
+OWNERS = {"backend", "frontend", "docs"}
 
 
 def load_manifest(root: Path) -> dict:
     return json.loads((root / MANIFEST).read_text(encoding="utf-8"))
+
+
+def manifest_errors(manifest: dict) -> list[str]:
+    errors: list[str] = []
+    for key in sorted(set(manifest) - MANIFEST_TOP_KEYS):
+        errors.append(f"{MANIFEST}: unknown key `{key}`")
+    if manifest.get("schema_version") != 1:
+        errors.append(f"{MANIFEST}: schema_version must be 1")
+    docs = manifest.get("docs")
+    if not isinstance(docs, list):
+        return errors + [f"{MANIFEST}: docs must be an array"]
+    seen = set()
+    for index, entry in enumerate(docs):
+        if not isinstance(entry, dict):
+            errors.append(f"{MANIFEST}: docs[{index}] must be an object")
+            continue
+        for key in sorted(set(entry) - MANIFEST_DOC_KEYS):
+            errors.append(f"{MANIFEST}: docs[{index}] has unknown key `{key}`")
+        if ("path" in entry) == ("glob" in entry):
+            errors.append(f"{MANIFEST}: docs[{index}] needs exactly one of path or glob")
+        path = entry.get("path") or entry.get("glob")
+        if path in seen:
+            errors.append(f"{MANIFEST}: duplicate document `{path}`")
+        seen.add(path)
+        for key in ("title", "summary"):
+            if not isinstance(entry.get(key), str) or not entry[key]:
+                errors.append(f"{MANIFEST}: docs[{index}] {key} must be a non-empty string")
+        if entry.get("type") not in DOC_TYPES:
+            errors.append(f"{MANIFEST}: docs[{index}] type is invalid")
+        if entry.get("authority") not in AUTHORITIES:
+            errors.append(f"{MANIFEST}: docs[{index}] authority is invalid")
+        if entry.get("owner") not in OWNERS:
+            errors.append(f"{MANIFEST}: docs[{index}] owner is invalid")
+        audience = entry.get("audience")
+        if not isinstance(audience, list) or not audience or any(item not in {"agent", "human", "user"} for item in audience):
+            errors.append(f"{MANIFEST}: docs[{index}] audience is invalid")
+        if "max_lines" in entry and (not isinstance(entry["max_lines"], int) or entry["max_lines"] < 1):
+            errors.append(f"{MANIFEST}: docs[{index}] max_lines must be a positive integer")
+    for key in ("pending", "ignore"):
+        if not isinstance(manifest.get(key), list) or any(not isinstance(item, str) for item in manifest[key]):
+            errors.append(f"{MANIFEST}: {key} must be an array of strings")
+    triggers = manifest.get("triggers")
+    if not isinstance(triggers, dict) or any(
+        not isinstance(value, list) or any(not isinstance(item, str) for item in value) for value in triggers.values()
+    ):
+        errors.append(f"{MANIFEST}: triggers must map patterns to string arrays")
+    canonical = manifest.get("canonical")
+    if not isinstance(canonical, list) or any(
+        not isinstance(item, dict) or set(item) != {"fact", "home"} for item in canonical
+    ):
+        errors.append(f"{MANIFEST}: canonical must be an array of {fact, home} objects")
+    return errors
 
 
 def expand(entries: list[dict], root: Path) -> list[dict]:
@@ -332,8 +392,22 @@ def check_active(root: Path, entry: dict, verified: dict, redirects: dict[str, s
     if limit and lines > limit:
         errors.append(f"{entry['path']}: {lines} lines exceeds the {limit}-line budget")
     type_ = entry.get("type", "reference")
-    if type_ in BANNER_TYPES and "> Authority:" not in "\n".join(text.splitlines()[:12]):
-        errors.append(f"{entry['path']}: missing the `> Authority:` banner")
+    if type_ in BANNER_TYPES:
+        banner = next((line for line in text.splitlines()[:12] if line.startswith("> Authority:")), "")
+        match = BANNER_RE.match(banner)
+        if not match:
+            errors.append(f"{entry['path']}: malformed or missing the `> Authority:` banner")
+        else:
+            authority, owner, verified_at, verifier = (part.strip() for part in match.groups())
+            if authority != entry.get("authority"):
+                errors.append(f"{entry['path']}: banner authority `{authority}` != manifest `{entry.get('authority')}`")
+            if owner != entry.get("owner"):
+                errors.append(f"{entry['path']}: banner owner `{owner}` != manifest `{entry.get('owner')}`")
+            record = verified.get(entry["path"], {})
+            if record.get("verified_at") and verified_at != record.get("verified_at"):
+                errors.append(f"{entry['path']}: banner verified date != verified.json verified_at")
+            if not verifier:
+                errors.append(f"{entry['path']}: banner needs a verifier")
     if entry.get("generated") and "generated by" not in "\n".join(text.splitlines()[:3]):
         errors.append(f"{entry['path']}: generated file lacks its generated-by header")
     errors.extend(check_links(root, path, text, redirects))
@@ -590,7 +664,10 @@ def self_test() -> int:
         if resolve_redirect("docs/old/x.json", {"docs/old/*": "docs/new/*"}) != "docs/new/x.json":
             print("docs-check self-test: prefix redirect did not resolve", file=sys.stderr)
             return 1
-        print("docs-check: self-test passed (rejects a broken link, archived link, over-budget file, ADR without Sources, ADR date drift, empty Sources, broken path::symbol and canonical anchor; resolves a prefix redirect)")
+        if not manifest_errors({"schema_version": 1, "docs": [], "pending": [], "ignore": [], "triggers": {}, "canonical": [], "extra": 1}):
+            print("docs-check self-test: manifest unknown key was NOT caught", file=sys.stderr)
+            return 1
+        print("docs-check: self-test passed (rejects a broken link, archived link, over-budget file, ADR without Sources, ADR date drift, empty Sources, broken path::symbol, broken manifest and canonical anchor; resolves a prefix redirect)")
         return 0
 
 
@@ -609,7 +686,7 @@ def main(argv: list[str] | None = None) -> int:
         (root / INDEX).write_text(render_index(root, manifest), encoding="utf-8")
         print(f"docs-check: wrote {INDEX}")
         return 0
-    errors: list[str] = []
+    errors: list[str] = manifest_errors(manifest)
     warnings: list[str] = []
     redirects: dict[str, str] = {}
     redirect_path = root / "docs" / "archive" / "redirects.json"

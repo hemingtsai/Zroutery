@@ -12,6 +12,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 STATE = Path("docs/development/state.json")
+CODE_PATHS = ("crates", "src-tauri", "ui", "Cargo.toml", "Cargo.lock", "package.json", "pnpm-lock.yaml")
 
 
 def expected_local(doc_results: list[dict]) -> str:
@@ -44,6 +45,14 @@ def main(argv: list[str] | None = None) -> int:
         return 1
 
     state = json.loads((ROOT / STATE).read_text(encoding="utf-8"))
+    head = subprocess.run(
+        ["git", "log", "-1", "--format=%h", "--", *CODE_PATHS], cwd=ROOT, text=True, capture_output=True
+    ).stdout.strip()
+    branch = subprocess.run(["git", "branch", "--show-current"], cwd=ROOT, text=True, capture_output=True).stdout.strip()
+    state["head"] = head or subprocess.run(["git", "rev-parse", "--short", "HEAD"], cwd=ROOT, text=True, capture_output=True).stdout.strip()
+    state["as_of"] = dt.date.today().isoformat()
+    if branch:
+        state["branch"] = branch
     gates = {gate["name"]: gate for gate in state["gates"]}
     doc_results = [item for item in report["results"] if item["gate"]]
     local = expected_local(doc_results)

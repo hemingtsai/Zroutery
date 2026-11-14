@@ -13,21 +13,20 @@ short on purpose: a rulebook that needs its own rulebook is not a rulebook.
 
 | Rank | Home | Answers |
 |---|---|---|
-| 1 | `AGENTS.md` | what an agent may do |
-| 2 | `docs/development/verification.md` | which toolchain and gates are authoritative |
-| 3 | `docs/development/architecture.md` | what the boundaries and invariants are |
-| 4 | `docs/development/WORKFLOW.md` | how a commit and its evidence are formed |
-| 5 | `docs/development/state.json` | what is true right now; the machine fact source |
-| 6 | `docs/development/current-state.md` | the render of `state.json`; never hand-edited |
-| 7 | `docs/development/reference/*` | how one subsystem behaves |
-| 8 | `README*.md`, `CONTRIBUTING.md`, `docs/development/runbook.md` | how to use and operate it |
-| 9 | `docs/archive/**` | what happened before; never current fact |
+| 1 | `docs/DOCUMENTATION.md` | what a document is and which rules bind it |
+| 2 | `AGENTS.md` | what an agent may do |
+| 3 | `docs/development/verification.md` | which toolchain and gates are authoritative |
+| 4 | `docs/development/architecture.md` | what the boundaries and invariants are |
+| 5 | `docs/development/WORKFLOW.md` | how a commit and its evidence are formed |
+| 6 | `docs/development/state.json` | what is true right now; the machine fact source |
+| 7 | `docs/development/current-state.md` | the render of `state.json`; never hand-edited |
+| 8 | `docs/development/reference/*` | how one subsystem behaves |
+| 9 | `README*.md`, `CONTRIBUTING.md`, `docs/development/runbook.md` | how to use and operate it |
+| 10 | `docs/INDEX.md` | generated navigation; never a fact |
+| 11 | `docs/archive/**` | what happened before; never current fact |
 
-A guide points; it does not own a fact. `state.json` wins for what is true now;
-a reference wins for how a subsystem behaves; a guide owns neither. Change the
-guide, not the higher-ranked document. `AGENTS.md` keeps the permission/process
-edge even though `state.json` is the fact source; the two answer different
-questions.
+A guide points; it does not own a fact. `state.json` wins for facts, a
+reference for behavior, and `AGENTS.md` for permission/process.
 
 ## Document types
 
@@ -74,8 +73,8 @@ compares it with the first commit's committer date (`%cs`). `Supersedes` is `non
 
 ## Metadata lives in one manifest
 
-Every document's metadata lives in `docs/docs.manifest.json`; the document body
-stays prose. `docs_check.py` fails when a Markdown file is in none of `docs`,
+Every document's metadata lives in `docs/docs.manifest.json`; keys follow
+`docs/docs.manifest.schema.json` and unknown keys fail. The document body stays prose. `docs_check.py` fails when a Markdown file is in none of `docs`,
 `pending` or `ignore`. `pending` is a visible migration state, not a permanent
 home; its count must fall to zero before the migration is complete.
 

@@ -2,7 +2,7 @@
 
 # Current state
 
-as of `2026-11-14` · branch `dev` · verified code head `26d887f`
+as of `2026-11-14` · branch `dev` · verified code head `ebe8b1e`
 
 ## Gates
 
@@ -15,26 +15,26 @@ as of `2026-11-14` · branch `dev` · verified code head `26d887f`
 | frontend build | **pass** | `pnpm --dir ui build` |  |
 | frontend tests | **pass** | `pnpm --dir ui test` | 86 passed |
 | command surface | **pass** | `python3 -B scripts/command_surface_test.py` | 90 interface commands, 254 registered |
-| documentation sources | **pass** | `python3 -B scripts/docs_sources.py --check` | docs-sources: 801 anchor(s) resolved in 36 active document(s) (e8ffb8c) |
-| markdown structure | **pass** | `python3 -B scripts/markdown_check.py` | markdown-check: fenced blocks and tables are well formed (e8ffb8c) |
-| documentation check | **pass** | `python3 -B scripts/docs_check.py` | docs-check: 47 active document(s), 0 pending, 0 warning(s), all checks passed (e8ffb8c) |
-| documentation parity | **pass** | `python3 -B scripts/docs_parity.py --check` | docs-parity: the three READMEs have matching headings, fences, images and source anchors (e8ffb8c) |
-| module coverage | **pass** | `python3 -B scripts/coverage_check.py` | coverage-check: 37 top-level modules (36 owned, 1 covered elsewhere, 0 unowned) (e8ffb8c) |
-| rendered state | **pass** | `python3 -B scripts/current_state.py --check` | current-state: clean (e8ffb8c) |
-| invariant evidence | **pass** | `python3 -B scripts/invariant_check.py` | invariant-check: 15 invariants, 13 with test anchors, 2 explicitly untested (e8ffb8c) |
-| state schema | **pass** | `python3 -B scripts/state_check.py` | state-check: 27 gates, 4 blockers; schema and blockers valid (e8ffb8c) |
+| documentation sources | **pass** | `python3 -B scripts/docs_sources.py --check` | docs-sources: 801 anchor(s) resolved in 36 active document(s) (7875f71) |
+| markdown structure | **pass** | `python3 -B scripts/markdown_check.py` | markdown-check: fenced blocks and tables are well formed (7875f71) |
+| documentation check | **pass** | `python3 -B scripts/docs_check.py` | docs-check: 47 active document(s), 0 pending, 0 warning(s), all checks passed (7875f71) |
+| documentation parity | **pass** | `python3 -B scripts/docs_parity.py --check` | docs-parity: the three READMEs have matching headings, fences, images and source anchors (7875f71) |
+| module coverage | **pass** | `python3 -B scripts/coverage_check.py` | coverage-check: 37 top-level modules (36 owned, 1 covered elsewhere, 0 unowned) (7875f71) |
+| rendered state | **pass** | `python3 -B scripts/current_state.py --check` | current-state: clean (7875f71) |
+| invariant evidence | **pass** | `python3 -B scripts/invariant_check.py` | invariant-check: 15 invariants, 13 with test anchors, 2 explicitly untested (7875f71) |
+| state schema | **pass** | `python3 -B scripts/state_check.py` | state-check: 27 gates, 4 blockers; schema and blockers valid (7875f71) |
 | whitespace | **pass** | `git diff --check` | no trailing whitespace damage |
 | orchestration docs (legacy) | **retired** | `scripts/orch_docs_test.py (not run)` | legacy node and evidence records are archived; validation retired |
 | UI budget | **pass** | `python3 -B scripts/ui_budget_test.py` | 734,994 B JS of 742,000 |
 | UI layout | **pass** | `python3 -B scripts/ui_layout_test.py` | 12 surfaces, 79 controls |
-| UI overflow | **unrun** | `python3 -B scripts/ui_overflow_test.py` | routing tab timeout; lazy page stuck on Helium 0.21.2 (quarantined) |
-| UI interaction | **unrun** | `python3 -B scripts/ui_interaction_test.py` | timed out after 900s on Helium 0.21.2; not a pass and not a product failure (quarantined) |
+| UI overflow | **unrun** | `python3 -B scripts/ui_overflow_test.py` | routing tab timeout; lazy page stuck on Helium 0.21.2 (quarantined by frontend until 2026-11-21) |
+| UI interaction | **unrun** | `python3 -B scripts/ui_interaction_test.py` | timed out after 900s on Helium 0.21.2; not a pass and not a product failure (quarantined by frontend until 2026-11-21) |
 | Rust advisories | **fail** | `cargo audit --file Cargo.lock` | 5 vulnerabilities, 18 warnings |
 | frontend advisories | **pass** | `pnpm audit --prod` |  |
-| freshness | **pass** | `python3 -B scripts/freshness_report.py --check` | freshness: 32 documents; every post-review source change is covered by a same-change document edit (e8ffb8c) |
-| rules registry | **pass** | `python3 -B scripts/docs_rules.py` | docs-rules: 17 rules; 16 machine, 13 executed gates covered (e8ffb8c) |
-| verified ledger | **pass** | `python3 -B scripts/docs_verified.py --check` | docs-verified: ledger covers 32 document(s) (e8ffb8c) |
-| review evidence | **pass** | `python3 -B scripts/docs_review.py --check` | docs-review: 32 document(s) have recorded review evidence (e8ffb8c) |
+| freshness | **pass** | `python3 -B scripts/freshness_report.py --check` | freshness: 32 documents; every post-review source change is covered by a same-change document edit (7875f71) |
+| rules registry | **pass** | `python3 -B scripts/docs_rules.py` | docs-rules: 17 rules; 16 machine, 13 executed gates covered (7875f71) |
+| verified ledger | **pass** | `python3 -B scripts/docs_verified.py --check` | docs-verified: ledger covers 32 document(s) (7875f71) |
+| review evidence | **pass** | `python3 -B scripts/docs_review.py --check` | docs-review: 32 document(s) have recorded review evidence (7875f71) |
 
 ## Blockers
 
@@ -45,7 +45,7 @@ as of `2026-11-14` · branch `dev` · verified code head `26d887f`
 
 ## Known flaky
 
-- ui_overflow_test.py and ui_interaction_test.py on Helium 0.21.2 (Chromium 157): runtime modulepreload links are not fetched after the initial parse, so lazy pages stay on the loading fallback. Quarantined 2026-11-14; owner frontend; review by 2026-11-21.
+- ui_overflow_test.py / ui_interaction_test.py: Helium 0.21.2 does not fetch modulepreload links after initial parse, so lazy pages stay on the loading fallback. (owner frontend, review by 2026-11-21)
 
 ## Last full green
 

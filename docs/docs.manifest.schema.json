@@ -1,0 +1,46 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/hemingtsai/Zroutery/docs/docs.manifest.schema.json",
+  "title": "Documentation manifest",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "docs", "pending", "ignore", "triggers", "canonical"],
+  "properties": {
+    "schema_version": {"const": 1, "description": "Manifest schema generation."},
+    "docs": {
+      "type": "array",
+      "description": "Active, pending and archived document metadata.",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["path", "title", "type", "authority", "audience", "status", "owner", "summary"],
+        "properties": {
+          "path": {"type": "string", "minLength": 1, "description": "Repository-relative document path."},
+          "glob": {"type": "string", "minLength": 1, "description": "Expanded archive glob; replaces path."},
+          "title": {"type": "string", "minLength": 1},
+          "type": {"enum": ["entry", "fact", "normative", "guide", "reference", "adr", "record", "index", "historical"]},
+          "authority": {"enum": ["fact", "guide", "index", "normative", "reference"]},
+          "audience": {"type": "array", "items": {"enum": ["agent", "human", "user"]}, "minItems": 1, "uniqueItems": true},
+          "status": {"enum": ["active", "pending", "archived"]},
+          "owner": {"enum": ["backend", "frontend", "docs"]},
+          "summary": {"type": "string", "minLength": 1},
+          "max_lines": {"type": "integer", "minimum": 1},
+          "generated": {"type": "boolean"},
+          "triggers": {"type": "array", "items": {"type": "string"}}
+        }
+      }
+    },
+    "pending": {"type": "array", "items": {"type": "string"}},
+    "ignore": {"type": "array", "items": {"type": "string"}},
+    "triggers": {"type": "object", "additionalProperties": {"type": "array", "items": {"type": "string"}}},
+    "canonical": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["fact", "home"],
+        "properties": {"fact": {"type": "string"}, "home": {"type": "string"}}
+      }
+    }
+  }
+}

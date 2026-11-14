@@ -18,13 +18,15 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 STATE = Path("docs/development/state.json")
+CODE_PATHS = ("crates", "src-tauri", "ui", "Cargo.toml", "Cargo.lock", "package.json", "pnpm-lock.yaml")
 SCHEMA = Path("docs/development/state.schema.json")
 DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 HEAD_RE = re.compile(r"^[0-9a-f]{7,40}$")
 STATUSES = {"pass", "fail", "unverified", "unrun", "retired"}
 BLOCKER_STATES = {"partial", "blocked", "ready", "done", "open"}
 GATE_KEYS = {"name", "status", "command", "detail", "quarantine", "ran_at", "commit"}
-BLOCKER_KEYS = {"id", "status", "summary", "blocked_by"}
+BLOCKER_KEYS = {"id", "status", "summary", "blocked_by", "owner", "ref", "review_by"}
+QUARANTINE_KEYS = {"owner", "review_by", "reason"}
 
 
 def git(root: Path, *args: str) -> subprocess.CompletedProcess:
@@ -79,6 +81,9 @@ def validate(state: dict, schema: dict, root: Path = ROOT, git_check: bool = Tru
             committed = git(root, "show", "-s", "--format=%cs", head).stdout.strip()
             if DATE_RE.match(as_of or "") and committed and as_of < committed:
                 errors.append(f"as_of {as_of} predates head commit date {committed}")
+            later = git(root, "rev-list", f"{head}..HEAD", "--", *CODE_PATHS).stdout.strip().splitlines()
+            if later:
+                errors.append(f"head {head} is not the latest code commit; {len(later)} later code commit(s)")
     if not isinstance(state.get("branch"), str) or not state["branch"]:
         errors.append("branch must be a non-empty string")
 
@@ -103,8 +108,19 @@ def validate(state: dict, schema: dict, root: Path = ROOT, git_check: bool = Tru
             errors.append(f"gates[{index}]: command is empty")
         if "detail" in gate and not isinstance(gate["detail"], str):
             errors.append(f"gates[{index}]: detail must be a string")
-        if "quarantine" in gate and not isinstance(gate["quarantine"], bool):
-            errors.append(f"gates[{index}]: quarantine must be a boolean")
+        if "quarantine" in gate:
+            quarantine = gate["quarantine"]
+            if not isinstance(quarantine, dict):
+                errors.append(f"gates[{index}]: quarantine must be an object")
+            else:
+                for key in sorted(set(quarantine) - QUARANTINE_KEYS):
+                    errors.append(f"gates[{index}]: quarantine has unknown key `{key}`")
+                for key in ("owner", "review_by", "reason"):
+                    if not isinstance(quarantine.get(key), str) or not quarantine[key]:
+                        errors.append(f"gates[{index}]: quarantine.{key} must be a non-empty string")
+                review_by = quarantine.get("review_by")
+                if isinstance(review_by, str) and DATE_RE.match(review_by) and dt.date.fromisoformat(review_by) < dt.date.today():
+                    errors.append(f"gates[{index}]: quarantine review_by {review_by} has expired")
         if "ran_at" in gate and not isinstance(gate["ran_at"], str):
             errors.append(f"gates[{index}]: ran_at must be a string")
         if "commit" in gate:
@@ -174,8 +190,22 @@ def validate(state: dict, schema: dict, root: Path = ROOT, git_check: bool = Tru
     for node in graph:
         visit(str(node))
 
-    if not isinstance(state.get("flaky"), list) or not all(isinstance(item, str) for item in state["flaky"]):
-        errors.append("flaky must be an array of strings")
+    flaky = state.get("flaky")
+    if not isinstance(flaky, list):
+        errors.append("flaky must be an array")
+    else:
+        for index, item in enumerate(flaky):
+            if not isinstance(item, dict):
+                errors.append(f"flaky[{index}] must be an object")
+                continue
+            for key in sorted(set(item) - {"name", "reason", "owner", "review_by"}):
+                errors.append(f"flaky[{index}]: unknown key `{key}`")
+            for key in ("name", "reason", "owner", "review_by"):
+                if not isinstance(item.get(key), str) or not item[key]:
+                    errors.append(f"flaky[{index}]: {key} must be a non-empty string")
+            value = item.get("review_by")
+            if isinstance(value, str) and DATE_RE.match(value) and dt.date.fromisoformat(value) < dt.date.today():
+                errors.append(f"flaky[{index}]: review_by {value} has expired")
     green = state.get("last_full_green")
     if green is not None and (not isinstance(green, str) or not DATE_RE.match(green)):
         errors.append("last_full_green must be null or YYYY-MM-DD")
