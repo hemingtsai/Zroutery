@@ -99,7 +99,7 @@ def main(argv: list[str] | None = None) -> int:
     # Range belongs to CI, not to the local snapshot; drop the old declaration.
     state["gates"] = [
         gate for gate in state["gates"]
-        if gate["name"] not in {"documentation contracts", "documentation impact (range)"}
+        if gate["name"] not in {"documentation contracts", "documentation impact (range)", "documentation impact self-test"}
     ]
 
     if args.dry_run:

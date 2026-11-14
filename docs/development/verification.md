@@ -148,7 +148,9 @@ Consequences, stated rather than discovered:
   `Context`/`Decision`/`Consequences`/`Sources` sections, and a resolvable
   `manifest.canonical[].home` anchor. `docs_contracts.py` also compares the
   executed step statuses with `state.json`; a state file that disagrees fails
-  with the `record_state.py --no-range` repair command. An ADR `Date` must equal the file's first
+  with the `record_state.py --no-range` repair command. A zero or empty CI base
+  prints a GitHub warning and leaves the range unverified instead of silently
+  claiming it. An ADR `Date` must equal the file's first
   commit date (`git log --diff-filter=A --format=%cs`); `## Sources` needs at
   least one existing path or `path::symbol`.
 - `invariant_check.py` requires every architecture invariant to name a test anchor

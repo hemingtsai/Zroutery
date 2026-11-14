@@ -9,10 +9,10 @@ facts; this file wins for permission and process.
 
 ## Definition of done
 
-Before each commit run `docs_contracts.py`, `current_state.py --check`,
-`record_state.py --check --no-range` and
+Before each commit run `docs_contracts.py`, `current_state.py --check` and
 `commit_contract_test.py --base origin/dev --head HEAD`. A red gate is fixed in
-the document or trigger; never weaken it or use `--no-verify`.
+the document or trigger; if the state differs, run `record_state.py --no-range`
+and commit it. Never weaken a gate or use `--no-verify`.
 
 ## Layout
 

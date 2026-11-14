@@ -12,7 +12,8 @@
     "test": "cargo test --workspace",
     "test:ui": "pnpm --dir ui test",
     "smoke": "cargo build -p zroutery-headless && python3 scripts/smoke_test.py",
-    "test:layout": "pnpm --dir ui build && python3 scripts/ui_layout_test.py --self-test && python3 scripts/ui_layout_test.py"
+    "test:layout": "pnpm --dir ui build && python3 scripts/ui_layout_test.py --self-test && python3 scripts/ui_layout_test.py",
+    "prepare": "git config core.hooksPath .githooks"
   },
   "devDependencies": {
     "@tauri-apps/cli": "^2.11.4"

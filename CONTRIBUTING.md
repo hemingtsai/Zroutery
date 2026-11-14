@@ -50,7 +50,7 @@ subject about the change, not the task prompt, roadmap or test transcript.
 
 ## Before you call it done
 
-- Tier 1 in [verification.md](docs/development/verification.md) is green; install the hook once with `git config core.hooksPath .githooks`.
+- Tier 1 in [verification.md](docs/development/verification.md) is green; `pnpm install` runs the `prepare` hook install, or run `git config core.hooksPath .githooks` once.
 - Affected documents changed in the same commit:
   `python3 -B scripts/docs_impact.py --base <start> --head HEAD`.
 - Every factual sentence you added cites a source you actually read

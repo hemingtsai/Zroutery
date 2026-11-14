@@ -106,7 +106,7 @@ gate you did not run. A development build is not an authorized deployment.
 
 ## Fact sources
 
-- Start commands: `package.json::scripts`.
+- Start commands: `package.json::scripts`; `prepare` installs the local hook.
 - Config directory: `src-tauri/src/platform.rs::default_config_dir`.
 - Gateway token generation: `src-tauri/src/store.rs::generate_token`.
 - Bundle targets and signing: `src-tauri/tauri.conf.json::bundle`.

@@ -145,7 +145,7 @@ MIT (see the `license` field in `Cargo.toml`).
 
 ## Fact sources
 
-- Rust minimum and Node/pnpm pins: `Cargo.toml::rust-version`, `package.json::packageManager`, `.github/workflows/ci.yml::setup-node`.
+- Rust minimum and Node/pnpm pins: `Cargo.toml::rust-version`, `package.json::packageManager`, `package.json::scripts`, `.github/workflows/ci.yml::setup-node`.
 - Default bind address, port and body limit: `crates/zroutery-core/src/config/server.rs::ServerConfig`.
 - HTTP routes: `crates/zroutery-core/src/server/handlers.rs::build_app`.
 - Bundle targets: `src-tauri/tauri.conf.json::bundle`.

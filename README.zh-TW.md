@@ -145,7 +145,7 @@ MIT（見 `Cargo.toml` 的 `license`）。
 
 ## 事實來源
 
-- Rust 最低版本與 Node/pnpm 固定版本：`Cargo.toml::rust-version`、`package.json::packageManager`、`.github/workflows/ci.yml::setup-node`。
+- Rust 最低版本與 Node/pnpm 固定版本：`Cargo.toml::rust-version`、`package.json::packageManager`、`package.json::scripts`、`.github/workflows/ci.yml::setup-node`。
 - 預設監聽位址、連接埠與請求本文上限：`crates/zroutery-core/src/config/server.rs::ServerConfig`。
 - HTTP 路由：`crates/zroutery-core/src/server/handlers.rs::build_app`。
 - 打包目標：`src-tauri/tauri.conf.json::bundle`。

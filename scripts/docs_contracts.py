@@ -92,6 +92,8 @@ def main(argv: list[str] | None = None) -> int:
     if base == "!":
         print(f"docs-contracts: {note}", file=sys.stderr)
         return 1
+    if args.base is not None and (args.base == "" or set(args.base.strip()) == {"0"}):
+        print(f"::warning title=docs-range::{note}; pass an explicit base to verify the range", flush=True)
     if base:
         if not args.json:
             print(f"==> docs_impact: {note}", flush=True)

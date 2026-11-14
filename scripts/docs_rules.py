@@ -128,6 +128,11 @@ def self_test() -> int:
         if validate(data, {"gate"}, root):
             print("docs-rules self-test: valid page/hook/CI rejected", file=sys.stderr)
             return 1
+        page.write_text("| ID | Rule | Enforced by | Type |\n|---|---|---|---|\n| DOC-01 | Drifted | gate | machine |\n", encoding="utf-8")
+        if not validate(data, {"gate"}, root):
+            print("docs-rules self-test: page text drift was NOT caught", file=sys.stderr)
+            return 1
+        page.write_text("| ID | Rule | Enforced by | Type |\n|---|---|---|---|\n| DOC-01 | Rule | gate | machine |\n", encoding="utf-8")
         hook.write_text("# empty hook\n", encoding="utf-8")
         if not files_errors(root):
             print("docs-rules self-test: empty hook was NOT caught", file=sys.stderr)

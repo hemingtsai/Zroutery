@@ -8,8 +8,8 @@
       "status": "pass",
       "command": "python3 -B scripts/docs_contracts.py",
       "detail": "all non-range documentation gates",
-      "ran_at": "2026-11-14T07:27:05+00:00",
-      "commit": "7f1b5c6"
+      "ran_at": "2026-11-14T07:30:20+00:00",
+      "commit": "648c9e0"
     },
     {
       "name": "fmt",
@@ -50,71 +50,65 @@
       "name": "documentation sources",
       "status": "pass",
       "command": "python3 -B scripts/docs_sources.py --check",
-      "detail": "docs-sources: 798 anchor(s) resolved in 36 active document(s) (7f1b5c6)",
-      "ran_at": "2026-11-14T07:27:05+00:00",
-      "commit": "7f1b5c6"
+      "detail": "docs-sources: 801 anchor(s) resolved in 36 active document(s) (648c9e0)",
+      "ran_at": "2026-11-14T07:30:20+00:00",
+      "commit": "648c9e0"
     },
     {
       "name": "markdown structure",
       "status": "pass",
       "command": "python3 -B scripts/markdown_check.py",
-      "detail": "markdown-check: fenced blocks and tables are well formed (7f1b5c6)",
-      "ran_at": "2026-11-14T07:27:05+00:00",
-      "commit": "7f1b5c6"
+      "detail": "markdown-check: fenced blocks and tables are well formed (648c9e0)",
+      "ran_at": "2026-11-14T07:30:20+00:00",
+      "commit": "648c9e0"
     },
     {
       "name": "documentation check",
       "status": "pass",
       "command": "python3 -B scripts/docs_check.py",
-      "detail": "docs-check: 47 active document(s), 0 pending, 0 warning(s), all checks passed (7f1b5c6)",
-      "ran_at": "2026-11-14T07:27:05+00:00",
-      "commit": "7f1b5c6"
-    },
-    {
-      "name": "documentation impact self-test",
-      "status": "pass",
-      "command": "python3 -B scripts/docs_impact.py --base <base> --head HEAD",
-      "detail": "the self-test passes; the range check is enforced in CI with --base/--head"
+      "detail": "docs-check: 47 active document(s), 0 pending, 0 warning(s), all checks passed (648c9e0)",
+      "ran_at": "2026-11-14T07:30:20+00:00",
+      "commit": "648c9e0"
     },
     {
       "name": "documentation parity",
       "status": "pass",
       "command": "python3 -B scripts/docs_parity.py --check",
-      "detail": "docs-parity: the three READMEs have matching headings, fences, images and source anchors (7f1b5c6)",
-      "ran_at": "2026-11-14T07:27:05+00:00",
-      "commit": "7f1b5c6"
+      "detail": "docs-parity: the three READMEs have matching headings, fences, images and source anchors (648c9e0)",
+      "ran_at": "2026-11-14T07:30:20+00:00",
+      "commit": "648c9e0"
     },
     {
       "name": "module coverage",
       "status": "pass",
       "command": "python3 -B scripts/coverage_check.py",
-      "detail": "coverage-check: 37 top-level modules (36 owned, 1 covered elsewhere, 0 unowned) (7f1b5c6)",
-      "ran_at": "2026-11-14T07:27:05+00:00",
-      "commit": "7f1b5c6"
+      "detail": "coverage-check: 37 top-level modules (36 owned, 1 covered elsewhere, 0 unowned) (648c9e0)",
+      "ran_at": "2026-11-14T07:30:20+00:00",
+      "commit": "648c9e0"
     },
     {
       "name": "rendered state",
       "status": "pass",
       "command": "python3 -B scripts/current_state.py --check",
-      "detail": "current-state: clean (7f1b5c6)",
-      "ran_at": "2026-11-14T07:27:05+00:00",
-      "commit": "7f1b5c6"
+      "detail": "current-state: clean (648c9e0)",
+      "ran_at": "2026-11-14T07:30:20+00:00",
+      "commit": "648c9e0"
     },
     {
       "name": "invariant evidence",
       "status": "pass",
       "command": "python3 -B scripts/invariant_check.py",
-      "detail": "invariant-check: 15 invariants, 13 with test anchors, 2 explicitly untested (7f1b5c6)",
-      "ran_at": "2026-11-14T07:27:05+00:00",
-      "commit": "7f1b5c6"
+      "detail": "invariant-check: 15 invariants, 13 with test anchors, 2 explicitly untested (648c9e0)",
+      "ran_at": "2026-11-14T07:30:20+00:00",
+      "commit": "648c9e0"
     },
     {
       "name": "state schema",
       "status": "pass",
       "command": "python3 -B scripts/state_check.py",
-      "detail": "state-check: 26 gates, 4 blockers; schema and blockers valid (7f1b5c6)",
-      "ran_at": "2026-11-14T07:27:05+00:00",
-      "commit": "7f1b5c6"
+      "detail": "state-check: 26 gates, 4 blockers; schema and blockers valid (648c9e0)",
+      "ran_at": "2026-11-14T07:30:20+00:00",
+      "commit": "648c9e0"
     },
     {
       "name": "whitespace",
@@ -169,17 +163,17 @@
       "name": "freshness",
       "command": "python3 -B scripts/freshness_report.py --check",
       "status": "pass",
-      "detail": "freshness: 33 documents; no source changed after its review commit (7f1b5c6)",
-      "ran_at": "2026-11-14T07:27:05+00:00",
-      "commit": "7f1b5c6"
+      "detail": "freshness: 33 documents; no source changed after its review commit (648c9e0)",
+      "ran_at": "2026-11-14T07:30:20+00:00",
+      "commit": "648c9e0"
     },
     {
       "name": "rules registry",
       "command": "python3 -B scripts/docs_rules.py",
       "status": "pass",
-      "detail": "docs-rules: 15 rules; 14 machine, 11 executed gates covered (7f1b5c6)",
-      "ran_at": "2026-11-14T07:27:05+00:00",
-      "commit": "7f1b5c6"
+      "detail": "docs-rules: 15 rules; 14 machine, 11 executed gates covered (648c9e0)",
+      "ran_at": "2026-11-14T07:30:20+00:00",
+      "commit": "648c9e0"
     }
   ],
   "blockers": [
