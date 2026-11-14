@@ -26,5 +26,6 @@
   "docs/development/opencode-zen.md": "docs/archive/records/opencode-zen.md",
   "docs/development/codex-auto-rectifier.md": "docs/archive/records/codex-auto-rectifier.md",
   "docs/development/routing-data-collection-guide.md": "docs/archive/records/routing-data-collection-guide.md",
-  "docs/development/skin-spec-md3-fluent.md": "docs/archive/records/skin-spec-md3-fluent.md"
+  "docs/development/skin-spec-md3-fluent.md": "docs/archive/records/skin-spec-md3-fluent.md",
+  "docs/development/node-status/*": "docs/archive/records/node-status/*"
 }

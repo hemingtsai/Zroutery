@@ -129,7 +129,8 @@ Consequences, stated rather than discovered:
   active documents.
 - `docs_check.py` enforces manifest coverage, links, banners, size budgets and
   generated-file freshness. A zero-pending migration renders as complete rather
-  than as an empty table.
+  than as an empty table. A path-like inline code span is resolved or
+  redirected, and every archived file must be reachable through `redirects.json`.
 - `docs_check.py` compares `docs/verified.json` source content hashes with
   the current tree. A moved source means the document must be re-read.
 - `docs_impact.py` fails when a changed source file is cited by a document that

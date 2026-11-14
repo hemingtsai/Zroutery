@@ -58,8 +58,9 @@ discussed in GitHub Issues, not here.
 
 - A moved document keeps its original content and gains no edits beyond this
   index entry. It is frozen.
-- Old paths resolve through [`redirects.json`](redirects.json); active documents
-  and archived records keep their original references.
+- Old file paths resolve through [`redirects.json`](redirects.json); the
+  `docs/development/node-status/*` directory resolves by prefix. Active
+  documents and archived records keep their original references.
 - The legacy node/evidence validator is retired with this migration. The JSON
   snapshots remain readable, but they are not maintained and no new records are
   added.

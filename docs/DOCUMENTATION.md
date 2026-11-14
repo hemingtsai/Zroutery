@@ -74,6 +74,8 @@ The default body limit is 32 MiB (`crates/zroutery-core/src/config/server.rs::Se
   an ADR.
 - `scripts/docs_sources.py --check` resolves every anchor. A document without a
   source anchor is not reference material; it is either a rule or it is deleted.
+- A repository path written as inline code is a reference too: `docs_check.py`
+  resolves it, or resolves it through the archive redirects.
 - `scripts/docs_check.py` compares the source content hashes recorded in
   `docs/verified.json` with the current files. A changed source means the
   document must be re-read and re-verified. Strict mode: CI blocks.
