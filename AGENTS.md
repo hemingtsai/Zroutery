@@ -2,21 +2,19 @@
 
 > Authority: normative · Owner: docs · Last verified: 2026-11-14 · Verified by: `scripts/docs_check.py`
 
-This is the only agent entry. Read
-[docs/development/state.json](docs/development/state.json) first: it is the
-machine truth about what is red and what is blocked, validated against
-`state.schema.json`. [docs/development/current-state.md](docs/development/current-state.md)
+Read [state.json](docs/development/state.json) first: it is the machine truth,
+validated by `state.schema.json`. [current-state.md](docs/development/current-state.md)
 is its rendered view. If this file and the state disagree, the state wins for
 facts; this file wins for permission and process.
 
-## Project layout
+## Layout
 
-- `crates/zroutery-core/`: protocol codecs, routing, accounts, accounting, storage and optional ML.
-- `src-tauri/`: desktop lifecycle, native integrations, credential storage and IPC commands.
-- `crates/zroutery-headless/`: headless gateway using the same Core and desktop state.
+- `crates/zroutery-core/`: protocol codecs, routing, accounts, accounting, storage, optional ML.
+- `src-tauri/`: lifecycle, native integrations, credential store, IPC commands.
+- `crates/zroutery-headless/`: the same Core and desktop state without a GUI.
 - `ui/`: React/TypeScript frontend and typed mock bridge.
 - `scripts/`: build, contract, documentation, layout and release checks.
-- `docs/`: current documentation; `docs/archive/` is history and is not read by default.
+- `docs/`: current documentation; `docs/archive/` is history, never current fact.
 
 ## Non-negotiables
 
@@ -31,103 +29,64 @@ facts; this file wins for permission and process.
    build is not an authorized deployment.
 5. Dependency changes and release/signing decisions need human approval.
 
-## Working with other agents
+## Other agents
 
-- Respect the assigned directories: `crates/` and `src-tauri/` belong to the
-  backend owner; `ui/` belongs to the frontend owner.
+- Respect ownership: `crates/` and `src-tauri/` are backend; `ui/` is frontend.
 - Shared files need coordination: manifests, `Cargo.lock`, `ui/src/api.ts`,
   `ui/mock-bridge.ts`, the three i18n dictionaries, fixtures and
   `docs/docs.manifest.json`.
-- Re-read a shared file immediately before patching it. Use explicit paths when
-  staging. One owner publishes Git commits at a time.
-- Delegate only when the user or task authorizes it; parallel workers need
-  non-overlapping write scopes.
+- Re-read a shared file immediately before patching it; stage explicit paths; one
+  owner publishes commits at a time. Delegate only when authorized.
 
 ## Implementation contracts
 
-- Keep module boundaries and feature gates. Backend wire fields are `snake_case`;
-  follow the existing Tauri argument mapping in `ui/src/api.ts`.
-- IPC changes: define the `api.ts` contract, implement Rust, then synchronize
-  `ui/mock-bridge.ts`. Register commands in both `src-tauri/src/lib.rs` and
-  `src-tauri/build.rs` (`src-tauri/build.rs::APP_COMMANDS`), and grant only the
-  required capabilities in `src-tauri/capabilities/`
-  (`src-tauri/capabilities/default.json::permissions`).
-- Configuration is declaration; runtime observations, credentials and historical
-  accounting have separate owners.
-- Preserve request/attempt identity and unique terminal settlement. Failed
-  attempts' known costs remain recorded; unknown usage, price or balance is not
-  measured zero.
-- Cache read/write tokens are subsets of input; reasoning tokens are inside
-  output. Monetary totals keep currencies and non-equivalent units separate.
-- Retain native protocol semantics, capability evidence and explicit reasoning
-  controls. A local persistence failure must not replay an executed upstream or
-  tool action.
-- Client takeover must preserve unrelated edits and support preview, stale-file
-  detection and recovery. Run file-writing tests against isolated temporary roots.
-- Use platform-specific dependencies for native features; preserve Windows,
-  macOS and Linux target boundaries.
-- UI changes follow the design system; keep English, Simplified Chinese and
-  Traditional Chinese keys synchronized and update layout/interaction fixtures
-  when structure changes.
+[reference/implementation-contracts.md](docs/development/reference/implementation-contracts.md)
+owns the IPC, lifecycle, takeover, platform and UI boundaries. This entry does
+not restate them.
 
 ## Documentation is part of the change
 
-- Every change to code, contracts, gates, toolchain, configuration keys, wire
-  fields, release steps or process rules updates every affected document in the
-  same change.
-- The affected set is computed, not remembered:
-  `python3 -B scripts/docs_impact.py --base <start> --head HEAD`.
-  If it fails, update the listed documents. There is no `none` escape; if a
-  trigger is wrong, fix the manifest or the citation in the same change.
-- Every factual sentence in a normative or reference document must cite a source
-  you read in this change (`path::symbol` or `path#Lx`). Old documents are leads,
+- Every change updates every affected document in the same change. The affected
+  set is computed: `python3 -B scripts/docs_impact.py --base <start> --head HEAD`.
+  There is no `none` escape; fix the manifest or citation if a trigger is wrong.
+- Every factual sentence in a normative or reference document cites a source
+  read in the same change (`path::symbol` or `path#Lx`). Old documents are leads,
   never sources. See [docs/DOCUMENTATION.md](docs/DOCUMENTATION.md).
-- Reports of audits, findings and triage are GitHub Issues, not files under
-  `docs/`. An audit that yields a decision writes an ADR; one that yields a
-  durable fact updates the relevant document. If you cannot read the issue
-  tracker, ask the user for the issue body; do not invent it.
-- `docs/development/state.json` may carry a one-line status projection (a red
-  gate, a blocker, a quarantine); `current_state.py` renders it into
-  `current-state.md`. The finding and its discussion stay in the Issue.
-- `docs/development/node-status/`, the evidence registry and the execution
-  records are legacy history. Do not add new records there; they are archived.
-  The current facts live in `current-state.md`.
+- Audits, findings and triage are GitHub Issues, not files under `docs/`. An
+  audit that yields a decision writes an ADR; one that yields a durable fact
+  updates the relevant document. Ask for an issue body rather than inventing it.
+- `state.json` may carry a one-line status projection; `current_state.py`
+  renders it. The finding and its discussion stay in the Issue.
+- Node status, the evidence registry and execution records are archived legacy
+  history. Do not add records there.
 
 ## Verification
 
 The toolchain and every gate are defined once in
-[docs/development/verification.md](docs/development/verification.md). Do not
-copy the commands here.
+[verification.md](docs/development/verification.md). Do not copy commands here.
 
-- Resolve the CI compiler first; `verification.md` names the resolver and the
-  version to use. `1.90.0` is the separate MSRV check.
-- Tier 1 is blocking on every change. Tier 2 is surface-specific; `verification.md`
-  says which rows block a CI job and which are local-only.
-- A gate that could not run is **unrun**, not passed. Record the reason.
+- Resolve the CI compiler first; `verification.md` names the resolver and version.
+  `1.90.0` is the separate MSRV check.
+- Tier 1 blocks every change. Tier 2 is surface-specific; `verification.md` says
+  which rows block a CI job and which are local-only.
+- A gate that cannot run, or times out, is **unrun**, never a pass. Record it.
 - A known-red gate is in `current-state.md`; report it, do not silently fix an
   unrelated red gate.
 
 ## Commits
 
 - Commit when the change is verified; do not wait to be asked.
-- One file or one module per commit; independently understandable and green for
-  its scope. Do not batch unrelated files into one commit.
+- One file or one module per commit; independently understandable and green.
 - Format: `<type>(<scope>): <imperative summary>`, lowercase, at most 72
-  characters. The validator is authoritative:
-  `scripts/commit_contract_test.py`.
+  characters. `scripts/commit_contract_test.py` is authoritative.
 - Validate the range: `python3 -B scripts/commit_contract_test.py --base <start> --head HEAD`.
-- Put plans, test transcripts and delivery status in Issues or
+- Plans, test transcripts and delivery status belong in Issues or
   `docs/development/`, never in commit subjects or long bodies.
-- Inspect each committed diff and confirm unrelated staged work is preserved.
 
 ## Stop and report
 
-Stop instead of guessing when:
-
-- a gate fails for a reason unrelated to your change;
-- the required toolchain, browser or network is unavailable;
-- a citation cannot be resolved or a document contradicts the code;
-- a dependency, release or ownership decision is needed.
-
-Report what ran, what did not, and the exact failure. A green local unit-test run
-is not a full green: Tier 2 and unrun platforms are part of the truth.
+Stop instead of guessing when a gate fails for an unrelated reason, the required
+toolchain/browser/network is unavailable, a citation cannot be resolved, a
+document contradicts the code, or a dependency/release/ownership decision is
+needed. Report what ran, what did not, and the exact failure. A green local unit
+run is not a full green.

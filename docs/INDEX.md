@@ -82,12 +82,12 @@ Audits, findings, triage and risk discussions live in GitHub Issues. Use the `au
 ## Health
 
 - active documents: 45
-- source-anchored (non-ADR): 32
+- source-anchored (non-ADR): 31
 - hash-ledgered: 32
 - guides: 5
 - ADRs: 8 (5 with code anchors; decision records, not machine-verified)
 - generated/index: 5
 - pending migration: 0
-- documents that must be anchored but are not: none
+- documents that must be anchored but are not: `AGENTS.md`
 - source anchors are checked by `scripts/docs_sources.py`
 - links, sizes, freshness and code paths are checked by `scripts/docs_check.py`
