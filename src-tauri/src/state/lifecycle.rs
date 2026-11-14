@@ -17,8 +17,15 @@ use crate::store;
 
 impl Desktop {
     pub fn new(config_dir: PathBuf, config: AppConfig, secrets: Arc<KeychainSecrets>) -> Self {
+        let plugins = Arc::new(crate::plugins::PluginState::new(&config_dir));
+        Self::verify_plugin_sandbox(&config_dir);
         let config = Self::with_ml_state_dir(config_dir.clone(), config);
         let core = Arc::new(AppState::new(config, secrets.clone() as Arc<_>));
+        #[cfg(feature = "plugin")]
+        core.attach_plugin_port(Arc::new(crate::plugins::bindings::HostBindings::new(
+            Arc::clone(&plugins),
+            Arc::clone(&secrets),
+        )));
         core.require_accounting();
         // Spend is carried over from previous runs, because a budget that starts from
         // zero on every launch protects nothing.
@@ -102,6 +109,7 @@ impl Desktop {
         );
         let desktop = Desktop {
             core,
+            plugins,
             secrets,
             config_dir,
             runtime_path,
@@ -128,6 +136,12 @@ impl Desktop {
             client_files: Mutex::new(()),
             cutover: Mutex::new(None),
         };
+        #[cfg(feature = "plugin")]
+        if let Err(error) = desktop.recover_plugin_slots() {
+            desktop.set_warning(Some(format!(
+                "plugin credential recovery unavailable: {error}"
+            )));
+        }
         #[cfg(feature = "account")]
         if let Err(error) = desktop.recover_bindings() {
             desktop.set_warning(Some(format!(
@@ -193,6 +207,35 @@ impl Desktop {
 
     pub fn warning(&self) -> Option<String> {
         lock(&self.warning).clone()
+    }
+
+    fn verify_plugin_sandbox(config_dir: &std::path::Path) {
+        use zroutery_plugin_host::supervisor::{sandbox_status, verify_sandbox, SandboxStatus};
+        if sandbox_status() == SandboxStatus::Verified {
+            return;
+        }
+        let worker = std::env::var_os("ZROUTERY_PLUGIN_WORKER")
+            .map(PathBuf::from)
+            .or_else(|| {
+                std::env::current_exe().ok().and_then(|exe| {
+                    exe.parent()
+                        .map(|dir| dir.join("zroutery-plugin-worker.exe"))
+                })
+            })
+            .or_else(|| {
+                std::env::current_exe().ok().and_then(|exe| {
+                    exe.parent().map(|dir| {
+                        dir.join("..")
+                            .join("zroutery-plugin-worker")
+                            .join("zroutery-plugin-worker.exe")
+                    })
+                })
+            });
+        let Some(worker) = worker.filter(|path| path.is_file()) else {
+            return;
+        };
+        let probe_root = config_dir.join("plugins").join("probe");
+        let _ = verify_sandbox(&worker, &probe_root);
     }
 
     /// A snapshot of the window-layer rules, for the close handler.

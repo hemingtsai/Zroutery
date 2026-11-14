@@ -6625,6 +6625,7 @@ dependencies = [
  "futures-util",
  "keyring",
  "objc2-app-kit",
+ "reqwest 0.12.28",
  "rusqlite",
  "serde",
  "serde_json",
@@ -6645,6 +6646,8 @@ dependencies = [
  "uuid",
  "windows-sys 0.60.2",
  "zroutery-core",
+ "zroutery-plugin-api",
+ "zroutery-plugin-host",
 ]
 
 [[package]]

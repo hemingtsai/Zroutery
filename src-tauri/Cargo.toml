@@ -59,7 +59,7 @@ tauri-build = { version = "2", features = [] }
 # guard, and it is right to: the scanner cannot tell prose from configuration,
 # and guessing which one it is would be worse than refusing. So the switches are
 # declared here and only here, and the dependency line below stays clean.
-default = ["ml", "account", "newapi", "account-maint", "opencode"]
+default = ["ml", "account", "newapi", "account-maint", "opencode", "plugin"]
 # `ml` puts the learned model in the routing path: the durable trace log, the
 # active-model store and the ML ranking of the provider plan.
 ml = ["zroutery-core/ml"]
@@ -86,13 +86,17 @@ opencode = ["zroutery-core/opencode"]
 # reported on with no check-in at all, and a build that forced the browser stack
 # into that path would make the cheaper thing the expensive one.
 account-maint = ["newapi"]
+plugin = ["zroutery-core/plugin"]
 
 [dependencies]
 zroutery-core = { path = "../crates/zroutery-core" }
+zroutery-plugin-api = { path = "../crates/zroutery-plugin-api" }
+zroutery-plugin-host = { path = "../crates/zroutery-plugin-host" }
 chrono = { workspace = true }
 futures-util = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
+reqwest = { workspace = true }
 tokio = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { version = "0.3.20", features = ["env-filter"] }

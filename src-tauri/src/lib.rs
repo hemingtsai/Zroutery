@@ -25,6 +25,7 @@ mod migration_commands;
 #[cfg(test)]
 mod migration_tests;
 pub mod platform;
+pub mod plugins;
 mod secret_refs;
 pub mod secrets;
 #[cfg(desktop)]
@@ -98,6 +99,22 @@ pub fn run() {
             commands::get_snapshot,
             commands::get_activity,
             commands::get_system_accent,
+            plugins::commands::list_plugins,
+            plugins::commands::inspect_plugin_package,
+            plugins::commands::install_plugin_package,
+            plugins::commands::activate_plugin,
+            plugins::commands::disable_plugin,
+            plugins::commands::remove_plugin,
+            plugins::commands::update_plugin,
+            plugins::commands::rollback_plugin,
+            plugins::commands::get_plugin_themes,
+            plugins::commands::render_plugin_ui,
+            plugins::commands::invoke_plugin_ui_action,
+            plugins::commands::enter_safe_appearance,
+            plugins::credentials::instantiate_plugin_provider,
+            plugins::credentials::store_plugin_credential,
+            plugins::credentials::clear_plugin_credential,
+            plugins::credentials::get_plugin_credential_status,
             tray_commands::get_tray_snapshot,
             tray_commands::tray_set_provider_enabled,
             tray_commands::tray_set_gateway_running,

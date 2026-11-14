@@ -132,6 +132,7 @@ export function ConfirmDialog({
       <div className="drawer-veil" onClick={onClose} aria-hidden />
       <div
         className="confirm"
+        data-host-security="true"
         ref={panelRef}
         role="alertdialog"
         aria-modal

@@ -6,7 +6,7 @@ use super::views::*;
 use super::Desktop;
 use crate::store;
 
-pub(super) fn config_revision(config: &zroutery_core::config::AppConfig) -> String {
+pub(crate) fn config_revision(config: &zroutery_core::config::AppConfig) -> String {
     use std::hash::{Hash, Hasher};
     // An immutable configuration's canonical serialization makes no counter
     // bookkeeping necessary at its many backend-owned mutation sites.
@@ -19,6 +19,8 @@ pub(super) fn config_revision(config: &zroutery_core::config::AppConfig) -> Stri
 
 impl Desktop {
     pub async fn snapshot(&self) -> Snapshot {
+        let safe_appearance =
+            std::env::args().any(|arg| arg == "--safe-appearance" || arg == "--disable-plugins");
         let stored = self.core.config();
         let issues = stored.validate();
         let blocking = issues.iter().any(|i| i.severity == IssueSeverity::Error);
@@ -40,6 +42,17 @@ impl Desktop {
             .providers
             .iter()
             .flat_map(|p| {
+                #[cfg(feature = "plugin")]
+                if let Some(binding) = &p.plugin_binding {
+                    return vec![(
+                        p.id.clone(),
+                        binding
+                            .slot_for_operation(&binding.operations()[0])
+                            .ok()
+                            .flatten()
+                            .is_some(),
+                    )];
+                }
                 let mut entries = vec![(p.id.clone(), self.secrets.has(&p.key_ref))];
                 for a in &p.accounts {
                     if !a.key_ref.is_empty() && a.key_ref != p.key_ref {
@@ -58,8 +71,46 @@ impl Desktop {
         // The webview gets everything except the token itself.
         let mut config = (*stored).clone();
         config.server.auth_token = String::new();
+        for instance in &mut config.plugin_instances {
+            instance.credentials.clear();
+            for account in &mut instance.accounts {
+                account.key_ref.clear();
+                for key in &mut account.inference_keys {
+                    key.key_ref.clear();
+                }
+            }
+        }
 
         Snapshot {
+            plugin_providers: {
+                #[cfg(feature = "plugin")]
+                {
+                    stored
+                        .providers
+                        .iter()
+                        .filter_map(|provider| {
+                            provider.plugin_binding.as_ref().map(|binding| {
+                                let mut projection = provider.clone();
+                                projection.key_ref.clear();
+                                projection.accounts.clear();
+                                PluginProviderView {
+                                    provider: projection,
+                                    plugin_origin: PluginOrigin {
+                                        installation_id: binding.installation_id().into(),
+                                        contribution_id: binding.contribution_id().into(),
+                                        package_digest: binding.package_digest().into(),
+                                    },
+                                }
+                            })
+                        })
+                        .collect()
+                }
+                #[cfg(not(feature = "plugin"))]
+                {
+                    Vec::new()
+                }
+            },
+            safe_appearance,
             config_revision: config_revision(&stored),
             server: ServerStatus {
                 running: running_addr.is_some(),

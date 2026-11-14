@@ -5,6 +5,45 @@
 import { invoke as tauriInvoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import type { TKey } from "./i18n";
+import type { PluginManifestV1, PermissionRequest, ThemeV1, UiNode } from "../../docs/development/plugin-api-v1";
+
+/** Management is host-only IPC, never a command forwarding surface for ESM. */
+export interface PluginInstallation {
+  installation_id: string;
+  plugin_id: string;
+  package_digest: string;
+  version: string;
+  enabled: boolean;
+  grant_epoch: string;
+  permissions: PermissionRequest[];
+  manifest: PluginManifestV1;
+  sandbox_available: boolean;
+  previous_digest: string | null;
+  diagnostic: string | null;
+}
+export interface PluginInspection {
+  stage_id: string;
+  package_digest: string;
+  manifest: PluginManifestV1;
+  added_permissions: PermissionRequest[];
+  removed_permissions: PermissionRequest[];
+}
+export interface PluginTheme {
+  theme_id: string;
+  package_digest: string;
+  theme: ThemeV1;
+}
+export interface PluginUiView {
+  installation_id: string;
+  contribution_id: string;
+  revision: string;
+  node: UiNode;
+  actions: Record<string, string>;
+}
+export interface PluginCredentialState {
+  present: boolean;
+  state: "missing" | "ready" | "locked" | "unavailable";
+}
 
 export type ModelTier = "fast" | "standard" | "reasoning" | "frontier";
 /** @deprecated Use ModelTier. */
@@ -221,6 +260,8 @@ export interface ProviderRepairOverrides {
 }
 
 export interface Provider {
+  /** Projection-only provenance. Never saved as a native provider copy. */
+  plugin_origin?: { installation_id: string; contribution_id: string; package_digest: string };
   id: string;
   name: string;
   kind: ProviderKind;
@@ -575,6 +616,11 @@ export interface MlRoutingConfig {
 }
 
 export interface AppConfig {
+  schema_version?: number;
+  plugin_instances?: readonly {
+    id: string; name: string; installation_id: string; contribution_id: string; package_digest: string; enabled: boolean;
+    credentials: readonly unknown[]; accounts: readonly Account[];
+  }[];
   /**
    * Bridge-only revision bound to this exact configuration document.
    *
@@ -1059,6 +1105,8 @@ export interface StatsSummary {
 }
 
 export interface Snapshot {
+  plugin_providers?: { provider: Provider; plugin_origin: NonNullable<Provider["plugin_origin"]> }[];
+  safe_appearance?: boolean;
   config: AppConfig;
   /**
    * Opaque digest of the current saved configuration. Full saves compare the
@@ -2047,6 +2095,8 @@ function invoke<T>(
         // Assignment creates an enumerable property, intentionally: config
         // clones and top-level spreads must carry their own concurrency token.
         (candidate.config as AppConfig).__config_revision = candidate.config_revision;
+        const plugins = (reply as unknown as Snapshot).plugin_providers ?? [];
+        (candidate.config as AppConfig).providers.push(...plugins.map((view) => ({ ...view.provider, plugin_origin: view.plugin_origin })));
       }
     }
     return reply;
@@ -2054,6 +2104,31 @@ function invoke<T>(
 }
 
 export const api = {
+  instantiatePluginProvider: (installation_id: string, contribution_id: string, name: string) =>
+    invoke<Snapshot>("instantiate_plugin_provider", { installationId: installation_id, contributionId: contribution_id, name }),
+  storePluginCredential: (instance_id: string, slot_id: string, secret: string, expected_revision: string, account_id?: string) =>
+    invoke<Snapshot>("store_plugin_credential", { instanceId: instance_id, slotId: slot_id, secret, expectedRevision: expected_revision, accountId: account_id ?? null }),
+  clearPluginCredential: (instance_id: string, slot_id: string, expected_revision: string, account_id?: string) =>
+    invoke<Snapshot>("clear_plugin_credential", { instanceId: instance_id, slotId: slot_id, expectedRevision: expected_revision, accountId: account_id ?? null }),
+  pluginCredentialStatus: (instance_id: string, slot_id: string, account_id?: string) =>
+    invoke<PluginCredentialState>("get_plugin_credential_status", { instanceId: instance_id, slotId: slot_id, accountId: account_id ?? null }),
+  plugins: () => invoke<PluginInstallation[]>("list_plugins"),
+  inspectPlugin: () => invoke<PluginInspection | null>("inspect_plugin_package"),
+  installPlugin: (stage_id: string, package_digest: string) =>
+    invoke<PluginInstallation>("install_plugin_package", { stageId: stage_id, packageDigest: package_digest }),
+  activatePlugin: (installation_id: string, package_digest: string, permissions: PermissionRequest[]) =>
+    invoke<PluginInstallation>("activate_plugin", { installationId: installation_id, packageDigest: package_digest, permissions }),
+  disablePlugin: (installation_id: string) => invoke<PluginInstallation>("disable_plugin", { installationId: installation_id }),
+  removePlugin: (installation_id: string) => invoke<void>("remove_plugin", { installationId: installation_id }),
+  updatePlugin: (installation_id: string, stage_id: string, package_digest: string) =>
+    invoke<PluginInstallation>("update_plugin", { installationId: installation_id, stageId: stage_id, packageDigest: package_digest }),
+  rollbackPlugin: (installation_id: string) => invoke<PluginInstallation>("rollback_plugin", { installationId: installation_id }),
+  pluginThemes: () => invoke<PluginTheme[]>("get_plugin_themes"),
+  renderPluginUi: (installation_id: string, contribution_id: string) =>
+    invoke<PluginUiView>("render_plugin_ui", { installationId: installation_id, contributionId: contribution_id }),
+  pluginUiAction: (installation_id: string, action: string, revision: string, fields: Record<string, string>) =>
+    invoke<void>("invoke_plugin_ui_action", { installationId: installation_id, action, revision, fields }),
+  safeAppearance: () => invoke<void>("enter_safe_appearance"),
   snapshot: () => invoke<Snapshot>("get_snapshot"),
   activity: () => invoke<Activity>("get_activity"),
   /** Least-privilege state for the tray-panel webview. */
@@ -2433,6 +2508,7 @@ export const api = {
    */
   saveConfig: (config: AppConfig) => {
     const { __config_revision: expectedRevision, ...persisted } = config;
+    persisted.providers = persisted.providers.filter((provider) => !provider.plugin_origin);
     return invoke<Snapshot>("save_config", {
       config: persisted,
       expectedRevision,

@@ -90,6 +90,7 @@ import type {
   UsageHistoryPage,
   UsageHistoryQuery,
   UsageAttempt,
+  PluginInstallation,
 } from "./src/api";
 
 /**
@@ -1333,6 +1334,27 @@ const setupPreviewFor = (agent: TakeoverAgent, options: ClientSetupOptions): Cli
 };
 
 const handlers: Record<string, (args: any) => Json | Promise<Json>> = {
+  list_plugins: (): PluginInstallation[] => [],
+  instantiate_plugin_provider: () => { throw new Error("permission_denied"); },
+  store_plugin_credential: () => { throw new Error("permission_denied"); },
+  clear_plugin_credential: () => { throw new Error("permission_denied"); },
+  get_plugin_credential_status: () => { throw new Error("permission_denied"); },
+  get_plugin_themes: () => [],
+  inspect_plugin_package: () => null,
+  install_plugin_package: () => { throw new Error("invalid_manifest"); },
+  activate_plugin: () => { throw new Error("permission_denied"); },
+  disable_plugin: () => { throw new Error("permission_denied"); },
+  remove_plugin: () => { throw new Error("permission_denied"); },
+  update_plugin: () => { throw new Error("invalid_manifest"); },
+  rollback_plugin: () => { throw new Error("stale_revision"); },
+  render_plugin_ui: () => { throw new Error("sandbox_unavailable"); },
+  invoke_plugin_ui_action: () => { throw new Error("permission_denied"); },
+  enter_safe_appearance: () => {
+    document.documentElement.dataset.safeAppearance = "true";
+    document.getElementById("zroutery-plugin-theme")?.remove();
+    delete document.documentElement.dataset.pluginTheme;
+    return null;
+  },
   // Tauri events go through the event plugin rather than a command name, and
   // `listen` is called on mount, so a missing pair here shows up as an
   // unhandled rejection on every page.

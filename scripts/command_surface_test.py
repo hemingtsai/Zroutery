@@ -131,7 +131,7 @@ def registered_handlers() -> list[str]:
         line = line.strip().rstrip(",")
         if not line or line.startswith("//") or line.startswith("#["):
             continue
-        found = re.match(r"[a-z0-9_]+::([a-z0-9_]+)$", line)
+        found = re.match(r"(?:[a-z0-9_]+::)+([a-z0-9_]+)$", line)
         if found:
             names.append(found.group(1))
     return names

@@ -1459,6 +1459,36 @@ pub async fn fetch_provider_models(
     desktop: State<'_, Arc<Desktop>>,
     provider: ProviderConfig,
 ) -> Cmd<Vec<DiscoveredModel>> {
+    // Serialized provider DTOs cannot carry a verified PluginBinding. Reattach
+    // by the host's current instance ID before any native cache/keyring path.
+    #[cfg(feature = "plugin")]
+    let provider = {
+        let config = desktop.core.config();
+        if config.plugin_instances.iter().any(|i| i.id == provider.id) {
+            let current = config
+                .provider(&provider.id)
+                .ok_or("plugin instance is unavailable")?;
+            desktop
+                .core
+                .upstream()
+                .list_models(current, None)
+                .await
+                .map_err(|e| e.to_string())?
+        } else {
+            // Native path retains unsaved form previews, as before.
+            return fetch_native_provider_models(&desktop, provider).await;
+        }
+    };
+    #[cfg(feature = "plugin")]
+    return Ok(provider);
+    #[cfg(not(feature = "plugin"))]
+    fetch_native_provider_models(&desktop, provider).await
+}
+
+async fn fetch_native_provider_models(
+    desktop: &Desktop,
+    provider: ProviderConfig,
+) -> Cmd<Vec<DiscoveredModel>> {
     // The Console tier publishes no `/models` route; its catalog comes from the
     // Console config endpoint, which needs the stored OAuth token.
     #[cfg(feature = "opencode")]

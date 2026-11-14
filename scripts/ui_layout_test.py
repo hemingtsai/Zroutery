@@ -664,7 +664,7 @@ HARNESS = """
             ? { local: { source_name: "This device", revision: 1, summary: SNAPSHOT.summary, recent: SNAPSHOT.recent, days: USAGE_DAYS }, standby: null }
           : cmd === "get_imported_usage"
             ? { totals: { requests: 0, failures: 0, input_tokens: 0, output_tokens: 0, cache_read_tokens: 0, cache_write_tokens: 0, unpriced_requests: 0, suspected_requests: 0, aggregate_requests: 0, cost: {} }, days: [] }
-          : cmd === "pending_usage_history_imports" || cmd === "discover_usage_history_sources" || cmd === "get_usage_attempts"
+           : cmd === "pending_usage_history_imports" || cmd === "discover_usage_history_sources" || cmd === "get_usage_attempts" || cmd === "list_plugins" || cmd === "get_plugin_themes"
             ? []
           : cmd === "takeover_status"
             ? TAKEOVER

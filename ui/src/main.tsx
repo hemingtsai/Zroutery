@@ -11,6 +11,7 @@ applySkin(initialSkin);
 applyTheme(loadThemePref());
 import "@fontsource/ibm-plex-mono/400.css";
 import "./styles.css";
+import "virtual:zroutery-bundled-themes.css";
 
 // Traditional Chinese lives in its own chunk; resolving it before the first
 // paint is what keeps a zh-TW reader from seeing English for a frame.

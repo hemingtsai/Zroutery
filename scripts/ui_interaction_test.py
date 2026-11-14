@@ -4466,7 +4466,7 @@ def case_ui29_appearance_persists_through_reload(devtools: DevTools) -> list[str
     devtools.wait_for("document.querySelectorAll('.select-item').length === 3", "skin options")
     devtools.click_selector(".select-item", 1)
     devtools.wait_for(
-        "document.documentElement.dataset.skin === 'md3'",
+        "document.documentElement.dataset.pluginTheme === 'org.zroutery.theme.md3'",
         "the MD3 skin to apply",
     )
     devtools.wait_for(
@@ -4474,9 +4474,9 @@ def case_ui29_appearance_persists_through_reload(devtools: DevTools) -> list[str
         "the native accent CSS variable",
     )
     stored = devtools.evaluate(
-        "JSON.stringify({theme: localStorage.getItem('zroutery-theme'), skin: localStorage.getItem('zroutery-skin')})"
+        "JSON.stringify({theme: localStorage.getItem('zroutery-theme'), skin: localStorage.getItem('zroutery-theme-ref')})"
     )
-    if json.loads(stored) != {"theme": "dark", "skin": "md3"}:
+    if json.loads(stored) != {"theme": "dark", "skin": "org.zroutery.theme.md3"}:
         failures.append("appearance choices were not stored synchronously: %s" % stored)
 
     devtools.call("Page.reload", {"ignoreCache": True})
@@ -4486,13 +4486,13 @@ def case_ui29_appearance_persists_through_reload(devtools: DevTools) -> list[str
         timeout=25.0,
     )
     restored = devtools.evaluate(
-        "JSON.stringify({theme: document.documentElement.dataset.theme, skin: document.documentElement.dataset.skin, "
+        "JSON.stringify({theme: document.documentElement.dataset.theme, skin: document.documentElement.dataset.pluginTheme, "
         "accent: getComputedStyle(document.documentElement).getPropertyValue('--system-accent').trim()})"
     )
-    if json.loads(restored) != {"theme": "dark", "skin": "md3", "accent": "#0078d4"}:
+    if json.loads(restored) != {"theme": "dark", "skin": "org.zroutery.theme.md3", "accent": "#0078d4"}:
         failures.append("appearance did not survive reload: %s" % restored)
     devtools.evaluate(
-        "localStorage.removeItem('zroutery-theme'); localStorage.removeItem('zroutery-skin')"
+        "localStorage.removeItem('zroutery-theme'); localStorage.removeItem('zroutery-skin'); localStorage.removeItem('zroutery-theme-ref')"
     )
     return failures
 

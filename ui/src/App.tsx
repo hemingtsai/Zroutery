@@ -35,6 +35,7 @@ import {
   useSnapshotRefreshTriggers,
   useSystemAccent,
 } from "./shell/hooks";
+import { safeAppearance } from "./themes/registry";
 
 /**
  * The quirks the provider drawer offers as toggles.
@@ -224,6 +225,7 @@ function Shell() {
   useEffect(() => {
     void run(api.snapshot, "observe");
   }, [run]);
+  useEffect(() => { if (snapshot?.safe_appearance) safeAppearance(); }, [snapshot?.safe_appearance]);
 
   /**
    * Re-read the whole snapshot without touching the save queue, coalesced.
