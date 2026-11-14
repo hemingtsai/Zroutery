@@ -1,0 +1,107 @@
+{
+  "as_of": "2026-11-14",
+  "head": "26d887f",
+  "branch": "dev",
+  "gates": [
+    {
+      "name": "fmt",
+      "status": "pass",
+      "command": "cargo fmt --all -- --check"
+    },
+    {
+      "name": "clippy (workspace, all targets, all features)",
+      "status": "pass",
+      "command": "cargo clippy --workspace --all-targets --all-features --locked -- -D warnings"
+    },
+    {
+      "name": "tests (workspace, all features)",
+      "status": "pass",
+      "command": "cargo test --workspace --all-features --locked",
+      "detail": "3478 passed, 0 failed, 22 ignored, 110 suites"
+    },
+    {
+      "name": "frontend build",
+      "status": "pass",
+      "command": "pnpm --dir ui build"
+    },
+    {
+      "name": "frontend tests",
+      "status": "pass",
+      "command": "pnpm --dir ui test",
+      "detail": "86 passed"
+    },
+    {
+      "name": "command surface",
+      "status": "pass",
+      "command": "python3 -B scripts/command_surface_test.py",
+      "detail": "90 interface commands, 254 registered"
+    },
+    {
+      "name": "documentation sources",
+      "status": "pass",
+      "command": "python3 -B scripts/docs_sources.py --check"
+    },
+    {
+      "name": "documentation check",
+      "status": "pass",
+      "command": "python3 -B scripts/docs_check.py"
+    },
+    {
+      "name": "documentation impact",
+      "status": "pass",
+      "command": "python3 -B scripts/docs_impact.py --self-test",
+      "detail": "self-test passes; CI blocks on an affected document that did not change"
+    },
+    {
+      "name": "orchestration docs (legacy)",
+      "status": "pass",
+      "command": "python3 -B scripts/orch_docs_test.py",
+      "detail": "84 nodes, 122 edges, 196 evidence IDs, 8 ADRs"
+    },
+    {
+      "name": "UI budget",
+      "status": "pass",
+      "command": "python3 -B scripts/ui_budget_test.py",
+      "detail": "734,994 B JS of 742,000"
+    },
+    {
+      "name": "UI layout",
+      "status": "pass",
+      "command": "python3 -B scripts/ui_layout_test.py",
+      "detail": "12 surfaces, 79 controls"
+    },
+    {
+      "name": "UI overflow",
+      "status": "fail",
+      "command": "python3 -B scripts/ui_overflow_test.py",
+      "detail": "routing tab timeout; lazy page stuck on Helium 0.21.2"
+    },
+    {
+      "name": "UI interaction",
+      "status": "timeout",
+      "command": "python3 -B scripts/ui_interaction_test.py",
+      "detail": "exit 124 after 900s"
+    },
+    {
+      "name": "Rust advisories",
+      "status": "fail",
+      "command": "cargo audit --file Cargo.lock",
+      "detail": "5 vulnerabilities, 18 warnings"
+    },
+    {
+      "name": "frontend advisories",
+      "status": "pass",
+      "command": "pnpm audit --prod"
+    }
+  ],
+  "issues": [],
+  "blockers": [
+    "7F real-traffic shadow: PARTIAL",
+    "7G controlled takeover: BLOCKED by 7F",
+    "7H bounded exploration: BLOCKED by 7G"
+  ],
+  "flaky": [
+    "ui_overflow_test.py and ui_interaction_test.py on Helium 0.21.2 (Chromium 157): runtime modulepreload links are not fetched after the initial parse, so lazy pages stay on the loading fallback."
+  ],
+  "last_full_green": null
+}
