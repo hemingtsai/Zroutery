@@ -319,6 +319,20 @@
       "owner": "backend",
       "summary": "Client cutover: plan, fingerprint, snapshot, execution and rollback.",
       "max_lines": 250
+    },
+    {
+      "path": "docs/development/reference/accounts.md",
+      "title": "Accounts Reference",
+      "type": "reference",
+      "authority": "reference",
+      "audience": [
+        "human",
+        "agent"
+      ],
+      "status": "active",
+      "owner": "backend",
+      "summary": "Account declarations, panel-token binding, inference keys, check-in and token capture.",
+      "max_lines": 250
     }
   ],
   "pending": [],

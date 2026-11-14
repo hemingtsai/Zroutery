@@ -331,5 +331,20 @@
       "cargo test --workspace --all-features --locked"
     ],
     "note": "The plan/fingerprint/snapshot path is the source; the reference does not claim a specific client migration."
+  },
+  "docs/development/reference/accounts.md": {
+    "verified_at": "2026-11-14",
+    "sources": {
+      "crates/zroutery-core/src/config/registry.rs": "sha256:0f18de17e1d49c2cb62ab81a611e2b2f41ac3257bd085ed0b2ae032a9c8d703f",
+      "crates/zroutery-core/src/account/store.rs": "sha256:0b4b7cd86cbab923d37a0b9ada4d8ea3d225b6f76087ffd5ad0b021865a80251",
+      "crates/zroutery-core/src/account/types.rs": "sha256:4371384f3422f6cabe378e8623b62e0ec8390582e52041ddf3bd12ffc6b72fca",
+      "src-tauri/src/account_binding.rs": "sha256:a8b5e75fc93b6a654898f269b6bc1c3bbb97248d59191f18ad782c68e34c0835",
+      "src-tauri/src/checkin_commands.rs": "sha256:8a1a299cef652d6c01a14219b24347501c253376a692579a870df3368204fab1",
+      "src-tauri/src/token_capture/mod.rs": "sha256:b85091be81c04944ebb29009ce8e77b4abadf1d7c2b0014602f8bd1acd8aab68"
+    },
+    "commands": [
+      "cargo test --workspace --all-features --locked"
+    ],
+    "note": "No token is described as crossing a view; the binding and capture paths are the source."
   }
 }
