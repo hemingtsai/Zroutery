@@ -96,7 +96,7 @@ The toolchain and every gate are defined once in
 copy the commands here.
 
 - Resolve the CI compiler first: `python3 -B scripts/toolchain_gate.py`; use the
-  version it reports for clippy and tests. `1.90` is the separate MSRV check.
+  version it reports for clippy and tests. `1.90.0` is the separate MSRV check.
 - Tier 1 is blocking on every change. Tier 2 runs for its relevant surface.
 - A gate that could not run is **unrun**, not passed. Record the reason.
 - A known-red gate is in `current-state.md`; report it, do not silently fix an

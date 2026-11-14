@@ -8,9 +8,9 @@ as of `2026-11-14` · branch `dev` · verified code head `26d887f`
 
 | Gate | Status | Command | Detail |
 |---|---|---|---|
-| fmt | **pass** | `cargo fmt --all -- --check` |  |
-| clippy (workspace, all targets, all features) | **pass** | `cargo clippy --workspace --all-targets --all-features --locked -- -D warnings` |  |
-| tests (workspace, all features) | **pass** | `cargo test --workspace --all-features --locked` | 3478 passed, 0 failed, 22 ignored, 110 suites |
+| fmt | **pass** | `cargo fmt --all -- --check` | ran on local rustc 1.98.0; the CI-resolved toolchain was not available, so this is not a CI-toolchain pass |
+| clippy (workspace, all targets, all features) | **pass** | `cargo clippy --workspace --all-targets --all-features --locked -- -D warnings` | ran on local rustc 1.98.0; the CI-resolved toolchain was not available, so this is not a CI-toolchain pass |
+| tests (workspace, all features) | **pass** | `cargo test --workspace --all-features --locked` | 3478 passed, 0 failed, 22 ignored, 110 suites; ran on local rustc 1.98.0; the CI-resolved toolchain was not available, so this is not a CI-toolchain pass |
 | frontend build | **pass** | `pnpm --dir ui build` |  |
 | frontend tests | **pass** | `pnpm --dir ui test` | 86 passed |
 | command surface | **pass** | `python3 -B scripts/command_surface_test.py` | 90 interface commands, 254 registered |
@@ -27,7 +27,7 @@ as of `2026-11-14` · branch `dev` · verified code head `26d887f`
 
 ## Open issues
 
-None recorded in this snapshot. Findings belong in GitHub Issues; this file links them, it does not copy them.
+No GitHub issue number is linked in this snapshot. Findings belong in Issues; the blockers below are recorded here until they are filed.
 
 ## Blockers
 
@@ -37,7 +37,7 @@ None recorded in this snapshot. Findings belong in GitHub Issues; this file link
 
 ## Known flaky
 
-- ui_overflow_test.py and ui_interaction_test.py on Helium 0.21.2 (Chromium 157): runtime modulepreload links are not fetched after the initial parse, so lazy pages stay on the loading fallback.
+- ui_overflow_test.py and ui_interaction_test.py on Helium 0.21.2 (Chromium 157): runtime modulepreload links are not fetched after the initial parse, so lazy pages stay on the loading fallback. Quarantined 2026-11-14; owner frontend; review by 2026-11-21.
 
 ## Last full green
 

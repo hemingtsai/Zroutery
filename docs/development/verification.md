@@ -58,18 +58,20 @@ The `core` CI job runs clippy and tests for `zroutery-core` only
 (`.github/workflows/ci.yml::core`); the workspace-wide clippy above is the local
 contract and is stricter. A CI pass on the narrower command does not replace it.
 
-## Tier 2 — relevant surfaces, release or nightly
+## Tier 2 — surface-specific, not optional
 
-| Gate | Command | When |
-|---|---|---|
-| overflow | `python3 -B scripts/ui_overflow_test.py` | UI structure or styles (`scripts/ui_overflow_test.py::main`) |
-| layout | `python3 -B scripts/ui_layout_test.py` | UI controls or form structure (`scripts/ui_layout_test.py::main`) |
-| interaction | `python3 -B scripts/ui_interaction_test.py` | keyboard, drawers, dialogs, mock IPC |
-| budget | `python3 -B scripts/ui_budget_test.py` | shipped bundle (`scripts/ui_budget_test.py::main`) |
-| feature matrix | `python3 -B scripts/feature_matrix_gate.py` | manifest or feature boundaries |
-| smoke | `python3 -B scripts/smoke_test.py` | proxy, routing or upstream transport |
-| packaging | `.github/workflows/packaging.yml::installer` | installer or release changes |
-| advisories | `cargo audit --file Cargo.lock`, `pnpm audit --prod` | dependency changes and nightly |
+Some Tier 2 rows block CI; others are local-only. The "When" column says which
+surface they cover; the "CI" column says whether the pipeline runs them.
+
+| Gate | Command | When | CI |
+| overflow | `python3 -B scripts/ui_overflow_test.py` | UI structure or styles (`scripts/ui_overflow_test.py::main`) | blocking (reachability) |
+| layout | `python3 -B scripts/ui_layout_test.py` | UI controls or form structure (`scripts/ui_layout_test.py::main`) | local only |
+| interaction | `python3 -B scripts/ui_interaction_test.py` | keyboard, drawers, dialogs, mock IPC | local only |
+| budget | `python3 -B scripts/ui_budget_test.py` | shipped bundle (`scripts/ui_budget_test.py::main`) | blocking (reachability) |
+| feature matrix | `python3 -B scripts/feature_matrix_gate.py` | manifest or feature boundaries | blocking (desktop) |
+| smoke | `python3 -B scripts/smoke_test.py` | proxy, routing or upstream transport | blocking (desktop) |
+| packaging | `.github/workflows/packaging.yml::installer` | installer or release changes | nightly |
+| advisories | `cargo audit --file Cargo.lock`, `pnpm audit --prod` | dependency changes and nightly | PR warning / nightly |
 
 ## What CI actually runs
 

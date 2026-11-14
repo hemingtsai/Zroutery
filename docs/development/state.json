@@ -6,18 +6,20 @@
     {
       "name": "fmt",
       "status": "pass",
-      "command": "cargo fmt --all -- --check"
+      "command": "cargo fmt --all -- --check",
+      "detail": "ran on local rustc 1.98.0; the CI-resolved toolchain was not available, so this is not a CI-toolchain pass"
     },
     {
       "name": "clippy (workspace, all targets, all features)",
       "status": "pass",
-      "command": "cargo clippy --workspace --all-targets --all-features --locked -- -D warnings"
+      "command": "cargo clippy --workspace --all-targets --all-features --locked -- -D warnings",
+      "detail": "ran on local rustc 1.98.0; the CI-resolved toolchain was not available, so this is not a CI-toolchain pass"
     },
     {
       "name": "tests (workspace, all features)",
       "status": "pass",
       "command": "cargo test --workspace --all-features --locked",
-      "detail": "3478 passed, 0 failed, 22 ignored, 110 suites"
+      "detail": "3478 passed, 0 failed, 22 ignored, 110 suites; ran on local rustc 1.98.0; the CI-resolved toolchain was not available, so this is not a CI-toolchain pass"
     },
     {
       "name": "frontend build",
@@ -101,7 +103,7 @@
     "7H bounded exploration: BLOCKED by 7G"
   ],
   "flaky": [
-    "ui_overflow_test.py and ui_interaction_test.py on Helium 0.21.2 (Chromium 157): runtime modulepreload links are not fetched after the initial parse, so lazy pages stay on the loading fallback."
+    "ui_overflow_test.py and ui_interaction_test.py on Helium 0.21.2 (Chromium 157): runtime modulepreload links are not fetched after the initial parse, so lazy pages stay on the loading fallback. Quarantined 2026-11-14; owner frontend; review by 2026-11-21."
   ],
   "last_full_green": null
 }

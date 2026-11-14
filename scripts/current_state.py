@@ -53,7 +53,7 @@ def render(state: dict) -> str:
         for issue in issues:
             lines.append(f"- #{issue.get('number')} — {issue.get('title', '')}")
     else:
-        lines.append("None recorded in this snapshot. Findings belong in GitHub Issues; this file links them, it does not copy them.")
+        lines.append("No GitHub issue number is linked in this snapshot. Findings belong in Issues; the blockers below are recorded here until they are filed.")
     lines += ["", "## Blockers", ""]
     blockers = state.get("blockers", [])
     lines += [f"- {item}" for item in blockers] if blockers else ["None."]
