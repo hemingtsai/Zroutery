@@ -93,16 +93,19 @@ deliberately not flattering.
 | UI build and unit tests | `reachability` | yes | |
 | UI budget | `reachability` | yes | |
 | UI overflow | `reachability` | yes | |
+| shipped desktop binary | `reachability` | yes | `tauri build --no-bundle`; the gate reads the binary this job built |
+| desktop without the learning stack | `reachability` | yes | `cargo check -p zroutery --no-default-features` |
 | UI layout | — | **no** | local only |
 | UI interaction | — | **no** | local only |
 | MSRV check | `msrv` | yes | 1.90.0, locked, all targets |
 | commit contract | `contracts` | yes | range check |
-| orchestration docs | — | no | retired; node and evidence records are archived |
+| validator self-tests (mutation, feature matrix) | `contracts` | yes | each tool's `--self-test` runs before its real gate |
+| orchestration docs | `contracts` | self-test only | the gate is retired; `orch_docs_test.py --self-test` still runs as a validator self-test |
 | command surface | `contracts` | yes | |
 | docs checks | `contracts` | yes | anchors, index, impact |
 | Rust advisories | `audit` | nightly; warning on PR | `continue-on-error` on pull requests |
 | frontend advisories | `audit` | nightly; warning on PR | production dependencies only |
-| installers | `packaging` | nightly | Windows NSIS |
+| installers | `packaging` / `installer` | nightly | Windows NSIS and MSI; install, reinstall and uninstall |
 
 Consequences, stated rather than discovered:
 
@@ -129,8 +132,9 @@ Consequences, stated rather than discovered:
 
 - `docs_contracts.py` is the single entry point: it runs every documentation
   contract below, including `freshness_report.py --check`. Branch protection
-  must require the `Documentation contracts` job; `--no-range` is for local
-  diagnosis only, never for CI.
+  must require the `contracts` job (its documentation step is named
+  `Documentation contracts`); a required status check keys on the job, not on a
+  step name. `--no-range` is for local diagnosis only, never for CI.
 - `markdown_check.py` enforces fenced-code closure and table structure without
   a third-party parser.
 - `docs_sources.py --check` resolves every `path::symbol` and `path#Lx` anchor in
@@ -177,7 +181,9 @@ Consequences, stated rather than discovered:
   gate status, `ran_at` and commit into `state.json`; it also derives `head`
   from the latest code commit and `as_of` from today. `state_check.py` rejects
   a `head` with later code commits. Hand-filled doc statuses are not the source. `documentation contracts (local)` is the state truth;
-  `documentation impact` is CI-only and is not recorded in `state.json`.
+  `documentation impact (range)` is not recorded in `state.json`; it runs both in
+CI and from the installed pre-commit hook, which stages the change into the
+range.
 - Commit messages are checked by the CI range; no local `commit-msg` hook is
   installed. `state_check.py` also validates that every gate `commit` exists and
   is an ancestor of HEAD, and that `ran_at` is an ISO timestamp.
