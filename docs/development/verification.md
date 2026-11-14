@@ -93,7 +93,7 @@ deliberately not flattering.
 | UI build and unit tests | `reachability` | yes | |
 | UI budget | `reachability` | yes | |
 | UI overflow | `reachability` | yes | |
-| shipped desktop binary | `reachability` | yes | `tauri build --no-bundle`; the gate reads the binary this job built |
+| shipped desktop binary | `reachability` | yes | `tauri build --no-bundle` proves the shipped target builds with the custom protocol, not the dev server |
 | desktop without the learning stack | `reachability` | yes | `cargo check -p zroutery --no-default-features` |
 | UI layout | — | **no** | local only |
 | UI interaction | — | **no** | local only |
