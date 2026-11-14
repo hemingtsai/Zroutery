@@ -459,6 +459,20 @@
       "owner": "backend",
       "summary": "Crash-recoverable multi-file commits: snapshot, journal, marker, forward recovery and external-edit refusal.",
       "max_lines": 250
+    },
+    {
+      "path": "docs/development/reference/model-catalog.md",
+      "title": "Model Catalog Reference",
+      "type": "reference",
+      "authority": "reference",
+      "audience": [
+        "human",
+        "agent"
+      ],
+      "status": "active",
+      "owner": "backend",
+      "summary": "models.dev fields, cache, lookup widening, enrichment and manual-correction precedence.",
+      "max_lines": 250
     }
   ],
   "pending": [],

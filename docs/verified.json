@@ -502,5 +502,15 @@
       "cargo test --workspace --all-features --locked"
     ],
     "note": "Recovery is forward-only; a committed transaction is never rolled back by this module."
+  },
+  "docs/development/reference/model-catalog.md": {
+    "verified_at": "2026-11-14",
+    "sources": {
+      "crates/zroutery-core/src/models_dev.rs": "sha256:c8b9f6b8714aeb417b1bac06efe9905d912bd5c0e7024d5b86e3fb2af29125e1"
+    },
+    "commands": [
+      "cargo test --workspace --all-features --locked"
+    ],
+    "note": "The catalogue mapping and lookup rules are the source; prices are not taken from models.dev."
   }
 }
