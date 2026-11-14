@@ -1,43 +1,38 @@
-# Zroutery Development Record
+# Development Record
 
-Git history carries code changes only. Process, history treatment and subsystem
-design records live here, so a commit message never has to explain the roadmap
-(`WORKFLOW.md` is the rule; this file is the map).
+> Authority: index · Owner: docs · Last verified: 2026-11-14 · Verified by: `scripts/docs_check.py`
+
+This directory holds the current development documentation. The generated map is
+[../INDEX.md](../INDEX.md); the rules for writing it are
+[../DOCUMENTATION.md](../DOCUMENTATION.md).
 
 ## Reading order
 
-1. [WORKFLOW.md](WORKFLOW.md) — commit content rule, message format, what CI
-   enforces, and the history of the 2026-09-11 rewrite.
-2. [history-treatment-map.md](history-treatment-map.md) — the rewrite itself:
-   every original commit, its KEEP / SQUASH / FIXUP treatment, the 34 resulting
-   nodes and the nine rulings taken along the way (Chinese).
-3. [tag-remap.md](tag-remap.md) — where the `stage-*` tags ended up, which old
-   tags were archived, and the tree-equality evidence for the rewrite.
-4. Subsystem records, one file per subsystem or non-obvious change, named after
-   the subsystem:
+1. [current-state.md](current-state.md) — what is red, blocked or flaky right now.
+2. [../../AGENTS.md](../../AGENTS.md) — what an agent may do.
+3. [verification.md](verification.md) — the only toolchain and gate definitions.
+4. [architecture.md](architecture.md) — layers and invariants.
+5. [WORKFLOW.md](WORKFLOW.md) — commit and evidence rules.
 
-| Record | Covers |
+## What lives here
+
+| Path | Holds |
 |---|---|
-| [upgrade-contracts.md](upgrade-contracts.md) | Agreed upgrade implementation contracts: six task doors, versioned identities/rates/settlements/history/catalogues, decision authority, compatibility and failure recovery. |
-| [upgrade-execution.md](upgrade-execution.md) | Current upgrade baseline and bounded delivery/verification evidence; code, local validation, submission and release are separate states. |
-| [backend-optimization-execution.md](backend-optimization-execution.md) | Backend optimization implementation, API handoff and scoped verification for tray, client attribution, usage, export and recoverable configuration publication. |
-| [newapi-adapter.md](newapi-adapter.md) | The NewAPI account adapter: panel endpoints and auth, quota-unit semantics, what "quota exhausted" means there, test approach, and the application-side wiring that is still missing. |
-| [opencode-zen.md](opencode-zen.md) | The two OpenCode Zen upstream providers (anonymous free tier and Console OAuth), the field-verified free-tier gate, the shared shaping identity, non-streaming collapse, discovery, and what is deliberately excluded. |
+| `decisions/` | accepted ADRs; superseded records stay in place |
+| `reference/` | one page per subsystem, source-verified |
+| `current-state.md` | generated facts; never hand-edited |
+| `verification.md` | canonical gates and CI coverage |
+| `architecture.md` | boundaries and invariants |
 
-## Adding a record
+Historical audits, plans, execution records, node status and the evidence
+registry live under `docs/archive/`. They are not current fact; audits and
+findings are discussed in GitHub Issues.
 
-- One file per subsystem or decision, named after the subject
-  (`newapi-adapter.md`, not `notes-2026-09.md`).
-- Record what the code does and why, where the upstream reference is pinned
-  (repository + commit), and what is deliberately not implemented.
-- Keep the file out of commit messages: link it from the commit body at most.
-- If a claim can drift — a test count, an endpoint list, a preset table — write
-  the command or source it was measured from next to it, so the next reader can
-  re-check it instead of guessing.
+## Adding a document
 
-## Language
-
-User-facing documentation (`README.md`) and the history treatment map are
-Chinese; the workflow, tag remap, contributing guide and subsystem records are
-English. There is no stated policy yet — pick the majority language for the
-document's audience and stay consistent within a file.
+- Pick one type from `docs/DOCUMENTATION.md`; do not add an audit or a plan.
+- Every factual sentence cites a source you read; run
+  `python3 -B scripts/docs_sources.py --check`.
+- Regenerate the index with `python3 -B scripts/docs_check.py --write-index`.
+- The source hash ledger is `docs/verified.json`; a changed source forces a
+  re-read.
