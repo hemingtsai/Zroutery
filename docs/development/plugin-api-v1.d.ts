@@ -337,6 +337,20 @@ export interface ComponentRecipe {
   readonly fill?: ColorExpr;
   readonly foreground?: ColorExpr;
   readonly stroke?: { readonly width: number; readonly color: ColorExpr };
+  /**
+   * Additive in v1 (2026-11-14): a two-stop gradient stroke, the WinUI
+   * ControlElevationBorderBrush signature. Mutually exclusive with `stroke`
+   * and requires `fill` — the fill is re-emitted as the padding-box layer of
+   * the border-box gradient composite, which is what keeps the gradient in
+   * the ring. `angle` is a css linear-gradient angle (default 180 = to top
+   * edge first, matching the brush's StartPoint→EndPoint).
+   */
+  readonly stroke_gradient?: {
+    readonly width: number;
+    readonly from: ColorExpr;
+    readonly to: ColorExpr;
+    readonly angle?: number;
+  };
   readonly radius?: number;
   readonly shadow?: readonly ShadowValue[];
   readonly focus_rings?: readonly { readonly width: number; readonly offset: number; readonly color: ColorExpr }[];

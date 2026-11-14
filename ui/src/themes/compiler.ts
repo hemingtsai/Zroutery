@@ -242,6 +242,9 @@ export function compileTheme(value: unknown, reference?: string): string {
       target = pseudo >= 0 ? target.slice(0, pseudo) + excluded + target.slice(pseudo) : target + excluded;
       const body = declarations(recipe, sheet.colors);
       const key = `${target}{${body}}`;
+      const existing = common.get(key);
+      if (existing) { if (!existing.modes.includes(mode)) existing.modes.push(mode); }
+      else common.set(key, { target, declarations: body, modes: [mode] });
       rules.push({ target, declarations: body, mode, key });
       // Radix highlights menu rows with `data-highlighted` during keyboard
       // navigation, exactly where a pointer would hover; a menu hover recipe
@@ -249,11 +252,11 @@ export function compileTheme(value: unknown, reference?: string): string {
       if ((part === "menu.item" || part === "menu.radio") && recipe.when.interaction === "hover") {
         const keyboardTarget = target.replace(":hover", "[data-highlighted]");
         const keyboardKey = `${keyboardTarget}{${body}}`;
+        const keyboardExisting = common.get(keyboardKey);
+        if (keyboardExisting) { if (!keyboardExisting.modes.includes(mode)) keyboardExisting.modes.push(mode); }
+        else common.set(keyboardKey, { target: keyboardTarget, declarations: body, modes: [mode] });
         rules.push({ target: keyboardTarget, declarations: body, mode, key: keyboardKey });
       }
-      const existing = common.get(key);
-      if (existing) { if (!existing.modes.includes(mode)) existing.modes.push(mode); }
-      else common.set(key, { target, declarations: body, modes: [mode] });
     }
   }
   const emitted = new Set<string>();
@@ -263,4 +266,8 @@ export function compileTheme(value: unknown, reference?: string): string {
     if (emitted.has(rule.key)) continue;
     emitted.add(rule.key);
     const root = `html[data-plugin-theme${reference ? `="${reference}"` : ""}]${common.get(rule.key)!.modes.length === 1 ? `[data-theme=${rule.mode}]` : "[data-theme]"}`;
-    css += `${root} ${rule.target}{
+    css += `${root} ${rule.target}{${rule.declarations}}\n`;
+  }
+  if (css.length > 192 * 1024 || /url\(|@import|<\/style/i.test(css)) fail();
+  return css;
+}

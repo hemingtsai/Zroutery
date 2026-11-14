@@ -41,3 +41,62 @@ describe("data-only theme boundary", () => {
     expect(values.get("zroutery-theme")).toBe("dark");
   });
 });
+
+describe("v1.1 recipe surface", () => {
+  const base = structuredClone(md3);
+  (base.modes.light.recipes as unknown[]) = [];
+
+  it("compiles the Fluent elevation gradient as a typed border composite", () => {
+    const css = compileTheme(fluent);
+    // The hover recipe fills with the padding-box layer and rings the element
+    // with the xaml ControlElevationBorderBrush gradient in the border-box.
+    expect(css).toContain(
+      "background-image:linear-gradient(var(--hover),var(--hover)),linear-gradient(180deg,#00000029,#0000000f)",
+    );
+    expect(css).toContain("background-clip:padding-box,border-box");
+    expect(css).toContain("border:1px solid transparent");
+  });
+
+  it("rejects a gradient without a fill and stroke plus gradient together", () => {
+    const withGradient = structuredClone(base);
+    (withGradient.modes.light.recipes as unknown[]).push({
+      part: "button",
+      when: { interaction: "hover" },
+      stroke_gradient: { width: 1, from: { hex: "#000000" }, to: { hex: "#ffffff" } },
+    });
+    expect(() => compileTheme(withGradient)).toThrow("invalid_theme");
+    const both = structuredClone(base);
+    (both.modes.light.recipes as unknown[]).push({
+      part: "button",
+      when: { interaction: "hover" },
+      fill: { hex: "#ffffff" },
+      stroke: { width: 1, color: { hex: "#000000" } },
+      stroke_gradient: { width: 1, from: { hex: "#000000" }, to: { hex: "#ffffff" } },
+    });
+    expect(() => compileTheme(both)).toThrow("invalid_theme");
+  });
+
+  it("puts a menu radio's checked state on the item, not its dot", () => {
+    const theme = structuredClone(base);
+    (theme.modes.light.recipes as unknown[]).push({
+      part: "menu.radio",
+      when: { interaction: "rest", checked: true },
+      fill: { role: "primary" },
+    });
+    expect(compileTheme(theme)).toContain(
+      ".menu-item[aria-checked=true] .menu-radio",
+    );
+  });
+
+  it("covers Radix keyboard highlights with the menu hover recipes", () => {
+    const theme = structuredClone(base);
+    (theme.modes.light.recipes as unknown[]).push({
+      part: "menu.item",
+      when: { interaction: "hover" },
+      fill: { role: "hover" },
+    });
+    const css = compileTheme(theme);
+    expect(css).toContain(".menu-item:hover");
+    expect(css).toContain(".menu-item[data-highlighted]");
+  });
+});
