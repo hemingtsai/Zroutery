@@ -1,9 +1,25 @@
 #!/usr/bin/env python3
-"""Real computed-style parity of the entire frozen layer-3 theme matrix.
+"""Real computed-style parity of the shipped theme matrix against a frozen baseline.
 
 Runs only local synthetic pages in an isolated browser profile. Tests actual
 hover, pressed, checked+hover and keyboard focus at 820x560, both color modes,
 plus the unchanged Industrial base. Native accent is a separately scoped gate.
+
+The baseline was the pre-plugin hand CSS at commit 26d887f while the ThemeV1
+migration was being compared. Since the 2026-11-14
+official-source re-pin (skin-spec v3.2) the baseline is the accepted shipped
+stylesheet itself, frozen by `--refreeze` into
+docs/development/plugin-theme-baseline-v3.2.css. Differences therefore mean
+the bundle's visuals drifted from the last accepted state — a pack edit, a
+compiler change, a class change — and a reviewer re-freezes only with the
+change that bought it. Pack values themselves are governed separately by
+scripts/plugin_theme_source_check.py.
+
+This new baseline checks regression against the accepted v3.2 visuals; zero
+differences does not prove parity with the old CSS. Use --legacy-baseline to
+retain that separate comparison (the initial run reported 822 differences).
+
+Usage: python scripts/plugin_theme_test.py [--refreeze | --legacy-baseline]
 """
 from __future__ import annotations
 import json
@@ -16,6 +32,7 @@ import ui_layout_test as browser
 
 ROOT = Path(__file__).resolve().parents[1]
 TARGET = ROOT / "target/plugin-temp/theme-parity"
+BASELINE = ROOT / "docs/development/plugin-theme-baseline-v3.2.css"
 PROPERTIES = ["background-color", "color", "border-top-color", "border-left-color", "border-right-color", "border-bottom-color",
     "border-top-width", "border-left-width", "border-right-width", "border-bottom-width", "border-radius", "box-shadow",
     "outline", "outline-offset", "width", "height", "padding-top", "padding-bottom", "padding-left", "padding-right",
@@ -53,10 +70,21 @@ SAMPLES = [
 ]
 
 def main():
+    argv = sys.argv[1:]
     assets = list((ROOT / "ui/dist/assets").glob("index-*.css"))
     if len(assets) != 1: raise RuntimeError("build ui first")
     compiled = assets[0].read_text(encoding="utf-8")
-    baseline = subprocess.check_output(["git", "show", "26d887fd4733fba374a769db2e50653ad98d114b:ui/src/styles.css"], cwd=ROOT).decode("utf-8")
+    if "--refreeze" in argv:
+        BASELINE.write_text(
+            "<!-- Frozen shipped stylesheet (industrial + compiled ThemeV1 packs).\n"
+            "     Regenerate only with the reviewed change that shifted the\n"
+            "     visuals: pnpm --dir ui build && python scripts/plugin_theme_test.py --refreeze -->\n"
+            + compiled, encoding="utf-8")
+        print(f"refrozen: {BASELINE.relative_to(ROOT)} ({len(compiled):,} B)")
+        return 0
+    baseline = (subprocess.check_output(
+        ["git", "show", "26d887fd4733fba374a769db2e50653ad98d114b:ui/src/styles.css"], cwd=ROOT
+    ).decode("utf-8") if "--legacy-baseline" in argv else BASELINE.read_text(encoding="utf-8"))
     TARGET.mkdir(parents=True, exist_ok=True)
     for kind, css in [("baseline", baseline), ("plugin", compiled)]:
         (TARGET / f"{kind}.html").write_text(f'<!doctype html><html><head><meta charset="utf-8"><style>{css}</style><style>*,*::before,*::after{{transition:none!important;animation:none!important}}</style></head><body>{FIXTURE}</body></html>', encoding="utf-8")
@@ -79,7 +107,12 @@ def main():
                         dt.call("Page.navigate", {"url":f"http://127.0.0.1:{port}/{kind}.html"})
                         dt.wait_for("document.querySelector('.toggle input') && document.readyState==='complete'", "fixture", timeout=30.0)
                         dt.evaluate("document.documentElement.dataset.theme=%s; document.documentElement.style.setProperty('--system-accent','#0078d4');document.documentElement.style.setProperty('--system-accent-fg','#ffffff');" % json.dumps(mode))
-                        if skin != "industrial": dt.evaluate("document.documentElement.dataset[%s]=%s" % (json.dumps("skin" if kind == "baseline" else "pluginTheme"), json.dumps(skin if kind == "baseline" else "org.zroutery.theme." + skin)))
+                        if skin != "industrial":
+                            # Both sides use the shipped attribute interface;
+                            # industrial styles are global and need no mark.
+                            attribute = "skin" if kind == "baseline" and "--legacy-baseline" in argv else "pluginTheme"
+                            reference = skin if attribute == "skin" else "org.zroutery.theme." + skin
+                            dt.evaluate("document.documentElement.dataset[%s]=%s" % (json.dumps(attribute), json.dumps(reference)))
                         for state in ["rest", "hover", "pressed", "focus", "checked", "checked_hover"]:
                             for selector, pseudo in SAMPLES:
                                 dt.evaluate("document.activeElement?.blur(); for(const el of document.querySelectorAll('input[type=checkbox]'))el.checked=%s" % ("true" if state.startswith("checked") else "false"))

@@ -169,3 +169,75 @@ dark 45% accent 混白做 tone-80 反转 + on-primary 15% accent 混墨、hover 
      复用），不再用 Background1 实色（深色卡上读成洞）。
    - 未做（记录）：ControlElevationBorderBrush 悬停渐变描边（控件签名细节，
      CSS 需 border-image/backgroud-clip 双层，留待单独 pass）。
+
+## 六、v3.2 附录：官方源机器对账 + 行为层标准化（2026-11-14）
+
+### 1. 主题包值改由官方实现源机器对账（"主题带 UI 库"）
+
+手抄对照（v1–v3 的做法）已被证明会漂移：MD3 包的主色系（#0b57d0 一族）在
+material-web `v0_192`、`latest` 与 Flutter `color_scheme.dart` 中**均不存在**
+——它来自 JS 渲染的 m3.material.io 站点，正是本规格开头声明"值以机器可读源
+为准"所要排除的来源。本轮起：
+
+- **`scripts/theme_sources/manifest.json`** 钉住上游仓库的精确 commit
+  （material-web v0_192、material-foundation/material-tokens、fluentui tokens、
+  microsoft-ui-xaml Common_themeresources_any.xaml），快照随仓库提交；
+  `scripts/plugin_theme_source_check.py --fetch` 才会重下。
+- **`scripts/plugin_theme_source_check.py`** 把两个包的每个值对账为三类之一：
+  `official`（等于钉住源解析出的 token，含 WinUI xaml 的 #AARRGGBB 换算）、
+  `mix`（官方操作数 × 官方 opacity/换算常数）、`deviation`（EXPECTED 表中
+  带出处的受治例外：v3.1 的 36/32/40×20 控件几何、host 网格内边距、
+  ok/warn 推导对、WCAG 3:1 控制线等）。零 `unexplained` 才通过。
+- **据此修正的漂移**：MD3 主色系整体重钉 v0_192（primary #0b57d0→#6750a4、
+  primary-container #d3e3fd→#eaddff、outline #747790→#79747e 等，共 11 角色
+  ×亮暗）；Fluent 重钉三个陈旧值（light selected #e8e8e8→grey[92] #ebebeb、
+  dark text-2 #d1d1d1→grey[84] #d6d6d6、dark muted #a0a0a0→grey[68] #adadad）。
+  Fluent `warn` 保留旧 ramp 值 #bc4b09 并记录为例外：现行官方 #de590b 只有
+  3.8:1 文本对比度，不满足 4.5:1 的既有裁定。
+- **冻结基线换代**：`plugin_theme_test.py` 的对比基线从 26d887f 的手写
+  styles.css 换为 `--refreeze` 冻结的发布样式表
+  （`docs/development/plugin-theme-baseline-v3.2.css`）——此后该门守护
+  "发布视觉态 == 上次验收态"，任何有意改动随改动一起重新冻结并说明理由。
+  这不证明与旧 CSS 无差异：初次旧基线对比有 822 处差异；E-204 是状态
+  对账，不是主题迁移验收。`--legacy-baseline` 保留旧版本对比入口。
+
+### 2. 交互层标准化为 Radix 无头原语（视觉仍归 ThemeV1）
+
+手搓交互实现全部换为成品库，包只管视觉（`--control-h`、配方、part 选择器
+不变；宿主依旧零 `if theme_id === …` 分支）：
+
+| 组件 | 库 | 保留的宿主契约 |
+|---|---|---|
+| confirm | react-dialog（`role="alertdialog"` 经 props 覆写） | `.confirm`、`data-host-security`、veil 点击关闭、确认钮 autoFocus |
+| drawer | react-dialog | `.drawer`、脏输入/IME Escape 让路（`drawerEscapeCloses` + 输入元素 `data-commit-dirty` 标记，因 Radix 在 document 捕获段应答 Escape，早于 React 根的冒泡处理器） |
+| popover/menu | react-dropdown-menu | `.popover`/`.bar-action`/`.menu-item`/`.menu-radio`、`children(close)` API |
+| toast | react-toast（viewport 即 `.toast-host`，ol） | 去重/上限/生命周期仍归 Provider（去重窗口=寿命，单一时钟），Radix 计时器封顶不触发 |
+| tabs | react-tabs | `.segment`/`.segment-item`/`.tab-panel`、`data-active`、测试钩子改 `data-tab`/`data-panel`（Radix id 不可覆写） |
+| segment | react-toggle-group type=single（role=radiogroup/radio 原生） | `.segment`、`data-active` |
+| select | react-select **2.3.7→2.4.1** | 不变；2.4 修复了 Dialog 内 Select 的焦点协调（UI-14） |
+
+- **编译器谓词随库对齐**：`menu.radio` 的 checked 谓词由永不匹配的 `:checked`
+  改为 `[aria-checked=true]`（挂在 `.menu-item` 祖先上）；`menu.item`/`menu.radio`
+  的 hover 配方同时发射 `[data-highlighted]` 规则（Radix 键盘高亮语义）。
+- **嵌套弹层焦点**：drawer 内 Radix Select 的键盘导航由 react-select 2.4.1
+  与 react-dialog 1.3.1 的层栈/焦点域协调，应用层不再手写 portalled 焦点
+  特例（旧 `overlay.ts` 删除）。
+
+### 3. stroke_gradient（ThemeV1 新增可选配方字段，见 plugin-api-v1.d.ts）
+
+v3.1 记录的"未做"落地：Fluent 按钮悬停描边改为 xaml
+ControlElevationBorderBrush——`stroke_gradient: { width, from, to, angle? }`，
+与 `stroke` 互斥且必须有 `fill`；宿主编译为透明边框 + 双层
+`background-image`（padding-box 填充层 + border-box 渐变环），角度为 CSS
+linear-gradient 角（默认 180 = 顶边起）。亮暗端点取自 xaml 的
+ControlStrokeColorSecondary/Default（#AARRGGBB 已换算为包的 #RRGGBBAA），
+dark 沿 WinUI 的 ScaleY=-1 翻转方向。MD3 包不使用该字段。
+
+### 4. 布局门按皮肤断言（plugin-api-design §9.3 的落地）
+
+`ui_layout_test.py --skin industrial|md3|fluent`：注入主题 ref 后以皮肤自身
+的 `--control-h` 断言控件高（industrial 30 / MD3 36 / Fluent 32，segment 36
+不变），12 个声明 surface 全量照跑；锚点等待按可见面板作用域化
+（`[data-panel=…]:not([hidden])`），因为 Radix 保留隐藏面板且 lazy chunk 挂起
+期间 React 会以 `display:none !important` 隐藏整棵子树，通用锚点会被旧面板
+提前满足。

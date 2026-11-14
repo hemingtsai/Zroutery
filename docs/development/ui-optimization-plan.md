@@ -146,3 +146,20 @@
 - **cc-switch**（Tauri，farion1231/cc-switch）：切换一等公民+状态位定宽防跳；托盘 3 击切换且面板不关；toast 原地去重；事务写入（pending/staged/发布）；反面对照：图标按钮堆砌、巨石表单（3153 行）、用量页默认藏列。
 - **magpie**（Go/Wails，yetone/magpie，**同类竞品**）：行内点击即生效（无保存键）、乐观更新失败回滚、模型选择器带实测 tok/s/TTFT、失败计数可点下钻到厂商原话与路由决策解释；LESSONS.md 铁律："布局是产品意志，不做无诉求重排"、"默认永不覆盖用户设定"；反面对照：24,585 行单文件前端、托盘菜单不能直切。
 - 两者收敛的顺滑公式：**行内即时操作 / 反馈贴身 / 数据上浮到决策现场 / 当前态永远可见 / 计数到诊断连续路径**。
+
+## 批次 T-v3.2 · 主题官方源对账 + Radix 行为层（2026-11-14）✅ [F]
+
+- ✅ **主题值机器对账**：`scripts/plugin_theme_source_check.py` + 钉住快照
+  （`scripts/theme_sources/`）；MD3 蓝色基线（无任何官方机器源，系站点手抄）
+  重钉 material-web v0_192，Fluent 三个陈旧值重钉现行 tokens；ok/warn、
+  控件几何等受治例外全部带出处记录，零 unexplained。
+- ✅ **Radix 行为层**：confirm/drawer/menu/toast/tabs/segment 换 Radix 原语，
+  类名/属性契约保持（页面零改动）；`overlay.ts` 手写焦点栈删除；
+  select 升 2.4.1（Dialog 内键盘修复，UI-14）；预算门 742k→848k
+  （实测 830,381 B，理由在 ui_budget_test.py 注释）。
+- ✅ **stroke_gradient** 契约扩展 + Fluent ControlElevationBorderBrush 悬停
+  描边（v3.1 未做项落地）；`plugin-theme-baseline-v3.2.css` 重冻。
+- ✅ **门禁**：布局门 `--skin` 三皮肤全绿（36/32px 实测）；交互门 31 例全过；
+  parity 1,620 样本 0 差异；编译器新增 4 条契约单测。
+- ⬜ 真机（WebView2 原生 accent / 全六态截图）与证据 ID 分配待提交时闭环；
+  UI-UX-M3 节点不因此宣布闭环。

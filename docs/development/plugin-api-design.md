@@ -826,3 +826,22 @@ UI 使用宿主组件；TLS 使用受约束 profile；先通过合成 provider �
 ```text
 pnpm --dir ui exec tsc --ignoreConfig --noEmit --strict --skipLibCheck false --target ES2022 --module ESNext --moduleResolution bundler ../docs/development/plugin-api-v1.d.ts ../docs/development/plugin-api-contract.test-d.ts
 ```
+
+## 15. 2026-11-14 附注：主题数据与宿主行为层的 v1.1 增量
+
+- **ThemeV1 增加可选配方字段 `stroke_gradient`**（§9.2 的 WinUI
+  ControlElevationBorderBrush 落地）：与 `stroke` 互斥、必须有 `fill`，
+  编译为透明边框 + 双层 background 的类型化渐变环；additive、向后兼容，
+  定义见 `plugin-api-v1.d.ts`，对账边界见 `skin-spec-md3-fluent.md` v3.2。
+- **宿主行为层标准化**：interactive 组件（confirm/drawer/menu/toast/tabs/
+  segment）的键盘、焦点、portal、层叠全部交给 Radix 无头原语，主题包继续
+  经 parts/recipes 拥有全部视觉；宿主无 per-theme 分支的约束不变。主题包
+  的每个值此后由 `scripts/plugin_theme_source_check.py` 对账到钉住的官方
+  实现源（`scripts/theme_sources/manifest.json`）。
+- **按皮肤布局断言**：`ui_layout_test.py --skin industrial|md3|fluent` 落地
+  §9.3 的要求——MD3 36px、Fluent 32px 的控件高在各自皮肤下实测。
+- 本批未新增 IPC：主题流沿用既有 `get_plugin_themes`；无 Rust 改动。
+
+提交整合补充：Rust `ComponentRecipe` 原先遗漏 `stroke_gradient`，导致同一
+Fluent 包无法通过宿主校验。现已同步受限字段、fill/互斥/边界校验与正负
+回归；旧字段保持兼容，未知字段继续拒绝。
