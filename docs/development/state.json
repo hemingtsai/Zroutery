@@ -65,7 +65,7 @@
       "name": "module coverage",
       "status": "pass",
       "command": "python3 -B scripts/coverage_check.py",
-      "detail": "36 public Core modules owned"
+      "detail": "37 modules: 36 owned, 1 covered elsewhere"
     },
     {
       "name": "whitespace",
@@ -93,7 +93,7 @@
     },
     {
       "name": "UI overflow",
-      "status": "fail",
+      "status": "unrun",
       "command": "python3 -B scripts/ui_overflow_test.py",
       "detail": "routing tab timeout; lazy page stuck on Helium 0.21.2",
       "quarantine": true
@@ -143,6 +143,15 @@
       "url": "https://github.com/hemingtsai/Zroutery/issues/3",
       "labels": [
         "enhancement"
+      ]
+    },
+    {
+      "number": 4,
+      "title": "Rust advisories: 5 vulnerabilities and 18 warnings",
+      "state": "open",
+      "url": "https://github.com/hemingtsai/Zroutery/issues/4",
+      "labels": [
+        "bug"
       ]
     }
   ],

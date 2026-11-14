@@ -17,7 +17,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 LIB = Path("crates/zroutery-core/src/lib.rs")
 LEDGER = Path("docs/coverage.json")
-MOD_RE = re.compile(r"^pub mod ([a-z_]+);", re.MULTILINE)
+MOD_RE = re.compile(r"^(?:pub )?mod ([a-z_]+);", re.MULTILINE)
 STATUSES = {"owned", "covered_elsewhere", "unowned"}
 
 

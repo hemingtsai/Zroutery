@@ -18,13 +18,14 @@ short on purpose: a rulebook that needs its own rulebook is not a rulebook.
 | 3 | `docs/development/architecture.md` | what the boundaries and invariants are |
 | 4 | `docs/development/WORKFLOW.md` | how a commit and its evidence are formed |
 | 5 | `docs/development/reference/*` | how one subsystem behaves |
-| 6 | `docs/development/current-state.md` | what is true right now |
-| 7 | `README*.md`, `CONTRIBUTING.md`, `docs/development/runbook.md` | how to use and operate it |
-| 8 | `docs/archive/**` | what happened before; never current fact |
+| 6 | `docs/development/state.json` | what is true right now; the machine fact source |
+| 7 | `docs/development/current-state.md` | the render of `state.json`; never hand-edited |
+| 8 | `README*.md`, `CONTRIBUTING.md`, `docs/development/runbook.md` | how to use and operate it |
+| 9 | `docs/archive/**` | what happened before; never current fact |
 
 A guide points; it does not own a fact. If a guide and a reference disagree, the
-reference wins. If a guide and `current-state.md` disagree, `current-state.md`
-wins. Change the guide, not the higher-ranked document.
+reference wins. If a guide and the state disagree, the state wins. Change the
+guide, not the higher-ranked document.
 
 ## Document types
 
