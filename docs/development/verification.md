@@ -118,6 +118,7 @@ Consequences, stated rather than discovered:
   network mirror is **unrun**, with the reason.
 - Never fix a flaky gate by loosening its threshold, skipping a test or deleting
   an assertion. Fix the gate or quarantine it with an owner and a date in
+  `docs/development/state.json`; `current_state.py` renders it into
   `current-state.md`.
 - A known-red gate is listed in `current-state.md`; do not silently "fix" an
   unrelated red gate in a change that did not cause it.

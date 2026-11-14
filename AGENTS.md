@@ -85,8 +85,9 @@ permission and process.
   `docs/`. An audit that yields a decision writes an ADR; one that yields a
   durable fact updates the relevant document. If you cannot read the issue
   tracker, ask the user for the issue body; do not invent it.
-- `current-state.md` may carry a one-line status projection (a red gate, a
-  blocker, a quarantine); the finding and its discussion stay in the Issue.
+- `docs/development/state.json` may carry a one-line status projection (a red
+  gate, a blocker, a quarantine); `current_state.py` renders it into
+  `current-state.md`. The finding and its discussion stay in the Issue.
 - `docs/development/node-status/`, the evidence registry and the execution
   records are legacy history. Do not add new records there; they are being
   archived. The current facts live in `current-state.md`.
