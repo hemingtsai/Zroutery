@@ -60,6 +60,7 @@ This file is generated from `docs/docs.manifest.json`. Do not edit it.
 | [docs/development/reference/outcome.md](development/reference/outcome.md) | reference | reference | backend | One request outcome: attempts, terminal status, identity evidence, validation and fan-out. |
 | [docs/development/reference/file-transactions.md](development/reference/file-transactions.md) | reference | reference | backend | Crash-recoverable multi-file commits: snapshot, journal, marker, forward recovery and external-edit refusal. |
 | [docs/development/reference/model-catalog.md](development/reference/model-catalog.md) | reference | reference | backend | models.dev fields, cache, lookup widening, enrichment and manual-correction precedence. |
+| [docs/development/reference/request-purpose.md](development/reference/request-purpose.md) | reference | reference | backend | Main versus side queries, shape-based detection, confidence and fail-closed verdicts. |
 
 ## Pending migration
 
@@ -77,9 +78,9 @@ Audits, findings, triage and risk discussions live in GitHub Issues. Use the `au
 
 ## Health
 
-- active documents: 41
-- source-anchored (non-ADR): 29
-- hash-ledgered: 29
+- active documents: 42
+- source-anchored (non-ADR): 30
+- hash-ledgered: 30
 - guides: 5
 - ADRs: 8 (5 with code anchors; decision records, not machine-verified)
 - generated/index: 4

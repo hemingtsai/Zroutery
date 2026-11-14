@@ -512,5 +512,17 @@
       "cargo test --workspace --all-features --locked"
     ],
     "note": "The catalogue mapping and lookup rules are the source; prices are not taken from models.dev."
+  },
+  "docs/development/reference/request-purpose.md": {
+    "verified_at": "2026-11-14",
+    "sources": {
+      "crates/zroutery-core/src/query.rs": "sha256:f32aa4ae4e08d2f90dd124a133f0e56efb5e7c4276596de8ff42bf8fd4b67c47",
+      "crates/zroutery-core/src/classifier.rs": "sha256:2d36ed94895c51e65680fceedb4859e8a67b92798cabfbb14e62358e7cf184db",
+      "crates/zroutery-core/src/config/routing.rs": "sha256:5867f6a23b6568bbe71957a4bb9c776d5d4686f67c2dfd922f95f4d0c14f77e3"
+    },
+    "commands": [
+      "cargo test --workspace --all-features --locked"
+    ],
+    "note": "Detection is shape-based and fail-closed; the model name is never used as evidence."
   }
 }

@@ -473,6 +473,20 @@
       "owner": "backend",
       "summary": "models.dev fields, cache, lookup widening, enrichment and manual-correction precedence.",
       "max_lines": 250
+    },
+    {
+      "path": "docs/development/reference/request-purpose.md",
+      "title": "Request Purpose Reference",
+      "type": "reference",
+      "authority": "reference",
+      "audience": [
+        "human",
+        "agent"
+      ],
+      "status": "active",
+      "owner": "backend",
+      "summary": "Main versus side queries, shape-based detection, confidence and fail-closed verdicts.",
+      "max_lines": 300
     }
   ],
   "pending": [],
