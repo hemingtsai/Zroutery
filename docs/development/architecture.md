@@ -1,5 +1,7 @@
 # Zroutery Architecture Memory
 
+> Authority: normative · Owner: backend · Last verified: 2026-11-14 · Verified by: pending rewrite; see `docs/DOCUMENTATION.md`
+
 ## Scope and baseline
 
 This document is the architecture memory for the audited repository. It is a
