@@ -14,11 +14,29 @@ import re
 import sys
 from pathlib import Path
 
+import docs_sources
+
 ROOT = Path(__file__).resolve().parents[1]
 LIB = Path("crates/zroutery-core/src/lib.rs")
 LEDGER = Path("docs/coverage.json")
 MOD_RE = re.compile(r"^(?:pub )?mod ([a-z_]+);", re.MULTILINE)
 STATUSES = {"owned", "covered_elsewhere", "unowned"}
+
+
+def cited_by(root: Path) -> dict[str, set[str]]:
+    manifest = json.loads((root / "docs" / "docs.manifest.json").read_text(encoding="utf-8"))
+    by_doc: dict[str, set[str]] = {}
+    for entry in manifest.get("docs", []):
+        path = entry.get("path")
+        if not path or entry.get("type") in {"adr", "index", "fact"}:
+            continue
+        text = (root / path).read_text(encoding="utf-8")
+        by_doc[path] = {citation[0] for citation in docs_sources.citations(text)}
+    return by_doc
+
+
+def module_paths(module: str) -> tuple[str, str]:
+    return (f"crates/zroutery-core/src/{module}.rs", f"crates/zroutery-core/src/{module}/")
 
 
 def validate(root: Path) -> tuple[list[str], dict[str, int]]:
@@ -31,6 +49,7 @@ def validate(root: Path) -> tuple[list[str], dict[str, int]]:
     if data.get("derived_from") != str(LIB):
         errors.append(f"derived_from must be {LIB}")
     entries = data.get("modules", [])
+    citations = cited_by(root)
     seen: dict[str, dict] = {}
     counts = {status: 0 for status in STATUSES}
     for index, entry in enumerate(entries):
@@ -47,6 +66,10 @@ def validate(root: Path) -> tuple[list[str], dict[str, int]]:
             owner = entry.get("owner")
             if not owner or not (root / owner).is_file():
                 errors.append(f"module `{name}`: owner `{owner}` does not exist")
+                continue
+            file_path, dir_path = module_paths(name)
+            if not any(path == file_path or path.startswith(dir_path) for path in citations.get(owner, set())):
+                errors.append(f"module `{name}`: owner `{owner}` does not cite {file_path} or {dir_path}")
         elif status == "covered_elsewhere":
             if not entry.get("where"):
                 errors.append(f"module `{name}`: covered_elsewhere needs a `where`")
@@ -108,7 +131,7 @@ def main(argv: list[str] | None = None) -> int:
             print(f"coverage-check: {error}", file=sys.stderr)
         return 1
     print(
-        f"coverage-check: {sum(counts.values())} modules "
+        f"coverage-check: {sum(counts.values())} top-level modules "
         f"({counts['owned']} owned, {counts['covered_elsewhere']} covered elsewhere, {counts['unowned']} unowned)"
     )
     return 0

@@ -150,7 +150,7 @@
     {
       "module": "runtime_store",
       "status": "owned",
-      "owner": "docs/development/reference/observability.md"
+      "owner": "docs/development/reference/accounting.md"
     },
     {
       "module": "server",
