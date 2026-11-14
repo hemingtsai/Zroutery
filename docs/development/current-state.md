@@ -15,7 +15,7 @@ as of `2026-11-14` · branch `dev` · verified code head `26d887f`
 | frontend tests | **pass** | `pnpm --dir ui test` | 86 passed |
 | command surface | **pass** | `python3 -B scripts/command_surface_test.py` | 90 interface commands, 254 registered |
 | documentation sources | **pass** | `python3 -B scripts/docs_sources.py --check` |  |
-| documentation check | **pass** | `python3 -B scripts/docs_check.py` | 37 active, 0 pending, 0 warnings |
+| documentation check | **pass** | `python3 -B scripts/docs_check.py` | 44 active, 0 pending, 0 warnings |
 | documentation impact | **pass** | `python3 -B scripts/docs_impact.py --base <base> --head HEAD` | self-test passes; the CI range check blocks on an affected document that did not change |
 | documentation parity | **pass** | `python3 -B scripts/docs_parity.py --check` | three READMEs have matching headings, fences, images and anchors |
 | whitespace | **pass** | `git diff --check` | no trailing whitespace damage |
