@@ -36,7 +36,12 @@ def page_rows(root: Path) -> dict[str, tuple[str, str, str]]:
 def files_errors(root: Path) -> list[str]:
     errors = []
     hook = root / ".githooks" / "pre-commit"
-    if not hook.is_file() or not (hook.stat().st_mode & 0o111):
+    # Git for Windows runs hooks without the POSIX executable bit (chmod cannot
+    # set it on NTFS), so on Windows an installed hook is an executable hook.
+    executable = hook.is_file() and (
+        bool(hook.stat().st_mode & 0o111) or sys.platform == "win32"
+    )
+    if not hook.is_file() or not executable:
         errors.append("pre-commit hook is missing or not executable")
     else:
         text = hook.read_text(encoding="utf-8")
