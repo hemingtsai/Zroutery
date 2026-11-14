@@ -49,9 +49,9 @@ def main(argv: list[str] | None = None) -> int:
 
     base = (args.base or "").strip()
     if args.no_range:
-        print("==> docs_impact: range check disabled with --no-range", flush=True)
+        print("==> docs_impact: UNVERIFIED (range check disabled with --no-range)", flush=True)
     elif args.base == "":
-        print("==> docs_impact: no base revision supplied; range check skipped", flush=True)
+        print("==> docs_impact: UNVERIFIED (no base revision supplied)", flush=True)
     elif not base:
         for candidate in ("origin/dev", "HEAD~1"):
             result = subprocess.run(["git", "rev-parse", "--verify", candidate], cwd=ROOT, text=True, capture_output=True)

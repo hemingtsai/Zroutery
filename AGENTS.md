@@ -7,6 +7,12 @@ validated by `state.schema.json`. [current-state.md](docs/development/current-st
 is its rendered view. If this file and the state disagree, the state wins for
 facts; this file wins for permission and process.
 
+## Definition of done
+
+Before each commit run `docs_contracts.py`, `current_state.py --check` and
+`commit_contract_test.py --base origin/dev --head HEAD`. A red gate is fixed in
+the document or trigger; never weaken it or use `--no-verify`.
+
 ## Layout
 
 - `crates/zroutery-core/`: protocol codecs, routing, accounts, accounting, storage, optional ML.
