@@ -48,10 +48,11 @@ def reviewed_in_same_change(commit: str, doc: str, source: str) -> bool:
     return all(doc in commit_files(rev) for rev in result.stdout.splitlines() if rev)
 
 
-def check() -> tuple[list[str], list[str]]:
+def check() -> tuple[list[str], list[str], list[str]]:
     data = json.loads((ROOT / VERIFIED).read_text(encoding="utf-8"))
     stale: list[str] = []
     errors: list[str] = []
+    same_change: list[str] = []
     for doc, entry in data.items():
         commit = entry.get("reviewed_commit")
         if not commit:
@@ -67,21 +68,27 @@ def check() -> tuple[list[str], list[str]]:
         unresolved = [source for source in changed if not reviewed_in_same_change(commit, doc, source)]
         if unresolved:
             stale.append(f"{doc}: {len(unresolved)} source(s) changed after {commit}: {', '.join(unresolved)}")
-    return errors, stale
+        elif changed:
+            same_change.append(doc)
+    return errors, stale, same_change
 
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--check", action="store_true")
     args = parser.parse_args(argv)
-    errors, stale = check()
+    errors, stale, same_change = check()
     for error in errors:
         print(f"freshness: {error}", file=sys.stderr)
     for item in stale:
         print(f"freshness: STALE {item}")
     if errors or (args.check and stale):
         return 1
-    print(f"freshness: {len(json.loads((ROOT / VERIFIED).read_text()) )} documents; no source changed after its review commit")
+    count = len(json.loads((ROOT / VERIFIED).read_text()))
+    if same_change:
+        print(f"freshness: {count} documents; every post-review source change is covered by a same-change document edit")
+    else:
+        print(f"freshness: {count} documents; no source changed after its review commit")
     return 0
 
 
