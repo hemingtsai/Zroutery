@@ -193,6 +193,7 @@ The machine-readable rule registry is
 - Mechanical checks prove anchors resolve, links exist, sizes fit and sources did
   not move. They cannot prove an interpretation is correct. Every rewrite is
   spot-checked by a second reader on 3-5 factual sentences.
-- `docs/verified.json` records `reviewed_by`, `reviewed_at` and a 3-5 sentence
-  `sample`; `scripts/docs_review.py --plan` produces the deterministic sample.
-  A reviewer equal to the last author fails.
+- `docs/verified.json` records `reviewed_by`, `reviewed_at`, `reviewed_sha` (the
+  content reviewed) and a 3-5 sentence `sample`; `docs_review.py --plan` produces
+  the sample, `--record --doc` records one document, and an edit after review
+  fails until re-recorded. A reviewer equal to the last author fails.

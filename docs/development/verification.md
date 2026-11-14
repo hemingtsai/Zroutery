@@ -169,12 +169,15 @@ Consequences, stated rather than discovered:
   sections; it is a generator, not a gate.
 - `docs_sources.py` resolves definition-shaped symbols (fn/struct/enum/impl/
   const/mod, TOML/YAML keys, CSS custom properties, macro invocations), not
-  arbitrary substrings.
+  arbitrary substrings. A Rust anchor of the form `path::Type::item` must
+  resolve inside that type's `impl`/`enum`/`mod` block, and a URL on the line no
+  longer hides the anchors beside it.
 - `docs_verified.py` derives the cited source set and hashes into
   `docs/verified.json`; `--check` requires exact coverage and current hashes.
-- `docs_review.py` records `reviewed_by`, `reviewed_at` and a deterministic
-  3-5 sentence `sample` per verified document; a reviewer equal to the last
-  author fails.
+- `docs_review.py` records `reviewed_by`, `reviewed_at`, `reviewed_sha` and a
+  deterministic 3-5 sentence `sample` per verified document. Recording is per
+  document (`--doc`); a document edited after its review fails until it is
+  recorded again; a reviewer equal to the last author fails.
 - `docs_rules.py` checks that every `docs/rules.json` machine rule names an
   executed `docs_contracts.py` step, and that every gated step is registered.
 - `record_state.py` runs `docs_contracts.py --json` and writes the documentation

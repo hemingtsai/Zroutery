@@ -18,6 +18,11 @@ VERIFIED = Path("docs/verified.json")
 SENTENCE_RE = re.compile(r"(?<=[.!?])\s+")
 
 
+def document_sha(root: Path, doc: str) -> str:
+    """The content a review covered, so an edit after it is visible."""
+    return "sha256:" + hashlib.sha256((root / doc).read_bytes()).hexdigest()
+
+
 def sentences(root: Path, doc: str) -> list[str]:
     text = (root / doc).read_text(encoding="utf-8")
     found: list[str] = []
@@ -56,6 +61,7 @@ def check(root: Path = ROOT) -> list[str]:
     for doc, entry in data.items():
         reviewer = entry.get("reviewed_by")
         reviewed_at = entry.get("reviewed_at")
+        reviewed_sha = entry.get("reviewed_sha")
         samples = entry.get("sample")
         if not reviewer:
             errors.append(f"{doc}: missing reviewed_by")
@@ -66,6 +72,10 @@ def check(root: Path = ROOT) -> list[str]:
                 dt.date.fromisoformat(reviewed_at)
             except (TypeError, ValueError):
                 errors.append(f"{doc}: reviewed_at is not YYYY-MM-DD")
+        if not reviewed_sha:
+            errors.append(f"{doc}: missing reviewed_sha; record the review against the document content")
+        elif reviewed_sha != document_sha(root, doc):
+            errors.append(f"{doc}: document changed since its review; record the review again")
         if not isinstance(samples, list) or not 3 <= len(samples) <= 5:
             errors.append(f"{doc}: sample must contain 3-5 sentences")
             continue
@@ -79,15 +89,21 @@ def check(root: Path = ROOT) -> list[str]:
     return errors
 
 
-def record(root: Path, reviewer: str) -> int:
+def record(root: Path, reviewer: str, docs: list[str] | None = None) -> int:
     path = root / VERIFIED
     data = json.loads(path.read_text(encoding="utf-8"))
-    for doc in data:
+    targets = list(data) if docs is None else docs
+    unknown = [doc for doc in targets if doc not in data]
+    if unknown:
+        print(f"docs-review: no ledger entry for {', '.join(unknown)}", file=sys.stderr)
+        return 1
+    for doc in targets:
         data[doc]["reviewed_by"] = reviewer
         data[doc]["reviewed_at"] = dt.date.today().isoformat()
+        data[doc]["reviewed_sha"] = document_sha(root, doc)
         data[doc]["sample"] = sample(root, doc)
     path.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
-    print(f"docs-review: recorded {reviewer} on {len(data)} document(s)")
+    print(f"docs-review: recorded {reviewer} on {len(targets)} document(s)")
     return 0
 
 
@@ -104,13 +120,22 @@ def self_test() -> int:
         if check(root):
             print(f"docs-review self-test: recorded evidence rejected ({check(root)})", file=sys.stderr)
             return 1
+        with open(root / "docs" / "guide.md", "a", encoding="utf-8") as handle:
+            handle.write("Yes is blocked.\n")
+        if not any("changed since" in error for error in check(root)):
+            print("docs-review self-test: a document edited after review was NOT caught", file=sys.stderr)
+            return 1
+        record(root, "second-reader")
+        if check(root):
+            print(f"docs-review self-test: re-recorded evidence rejected ({check(root)})", file=sys.stderr)
+            return 1
         data = json.loads((root / "docs" / "verified.json").read_text(encoding="utf-8"))
         data["docs/guide.md"]["sample"] = ["not in the document one", "not in the document two", "not in the document three"]
         (root / "docs" / "verified.json").write_text(json.dumps(data), encoding="utf-8")
         if not any("no longer" in error for error in check(root)):
             print("docs-review self-test: missing sample was NOT caught", file=sys.stderr)
             return 1
-        print("docs-review: self-test passed (records samples, rejects a missing sample)")
+        print("docs-review: self-test passed (records samples, rejects a missing sample and a document edited after review)")
         return 0
 
 
@@ -119,6 +144,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--check", action="store_true")
     parser.add_argument("--plan", action="store_true")
     parser.add_argument("--record", metavar="REVIEWER")
+    parser.add_argument("--doc", action="append", default=None, help="document path to record; repeatable")
+    parser.add_argument("--all", action="store_true", help="record every verified document (migration only)")
     parser.add_argument("--self-test", action="store_true")
     parser.add_argument("--root", default=str(ROOT))
     args = parser.parse_args(argv)
@@ -126,7 +153,12 @@ def main(argv: list[str] | None = None) -> int:
         return self_test()
     root = Path(args.root)
     if args.record:
-        return record(root, args.record)
+        if args.doc:
+            return record(root, args.record, docs=args.doc)
+        if args.all:
+            return record(root, args.record)
+        print("docs-review: --record needs --doc <path> (repeatable), or --all for a migration", file=sys.stderr)
+        return 2
     if args.plan:
         print(json.dumps(plan(root), indent=2, sort_keys=True))
         return 0
@@ -134,7 +166,7 @@ def main(argv: list[str] | None = None) -> int:
     if errors:
         for error in errors:
             print(f"docs-review: {error}", file=sys.stderr)
-        print("fix: run `python3 -B scripts/docs_review.py --record second-reader` after sampling", file=sys.stderr)
+        print("fix: run `python3 -B scripts/docs_review.py --record <reviewer> --doc <path>` after reading the document", file=sys.stderr)
         return 1
     print(f"docs-review: {len(json.loads((root / VERIFIED).read_text(encoding='utf-8')))} document(s) have recorded review evidence")
     return 0

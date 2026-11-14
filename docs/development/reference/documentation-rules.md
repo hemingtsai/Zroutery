@@ -27,7 +27,7 @@ registered set and the executed set are the same. The executed list is
 | DOC-14 | Commit is blocked locally and in CI | `rules registry` | machine |
 | DOC-15 | Reference prose matches code | second-reader sample of three sentences | manual |
 | DOC-16 | Verified ledger covers every cited source | `verified ledger` | machine |
-| DOC-17 | Review evidence is recorded and not self-authored | `review evidence` | machine |
+| DOC-17 | Review is content-bound and not self-authored | `review evidence` | machine |
 
 ## Failure modes
 

@@ -36,8 +36,19 @@ ANCHOR_RE = re.compile(
 )
 # A plain file plus line range, for non-symbol anchors.
 LINE_RE = re.compile(r"`([A-Za-z0-9_./-]+\.(?:rs|toml|json|yml|yaml|py|md|ts|tsx|css))#L(\d+)(?:-L(\d+))?`")
-SKIP_PREFIXES = ("http://", "https://", "mailto:")
+# A URL carries no anchor, but an anchor may sit on the same line. Strip the URL
+# rather than the line: skipping the line let any citation next to a link escape
+# every check below.
+URL_RE = re.compile(r"(?:https?://|mailto:)[^\s)\]]+")
+# A Markdown link keeps its text and drops its target, so an anchor written as
+# the link text is still scanned.
+MD_LINK_RE = re.compile(r"\[([^\]]*)\]\([^)]*\)")
 PLACEHOLDER_PATHS = {"path", "file", "src"}
+
+
+def scannable(line: str) -> str:
+    """Remove link targets and bare URLs, keeping the prose around them."""
+    return URL_RE.sub(" ", MD_LINK_RE.sub(lambda match: match.group(1), line))
 
 
 def load_manifest(root: Path) -> dict:
@@ -61,8 +72,7 @@ def citations(text: str) -> list[tuple[str, str | None, int | None, int | None, 
     """Return (path, symbol, start, end, line_number) for every anchor."""
     found: list[tuple[str, str | None, int | None, int | None, int]] = []
     for line_number, line in enumerate(text.splitlines(), start=1):
-        if any(prefix in line for prefix in SKIP_PREFIXES):
-            continue
+        line = scannable(line)
         for match in ANCHOR_RE.finditer(line):
             anchor, start, end = match.group(1), match.group(2), match.group(3)
             path, _, symbol = anchor.partition("::")
@@ -107,6 +117,69 @@ def symbol_defined(text: str, segment: str) -> bool:
     return False
 
 
+def _block_after(text: str, start: int) -> str | None:
+    """Return the brace-balanced body that follows `start`.
+
+    Line comments and double-quoted strings are stepped over; this is a
+    checker heuristic, not a parser.
+    """
+    opening = text.find("{", start)
+    if opening < 0:
+        return None
+    depth = 0
+    index = opening
+    limit = len(text)
+    while index < limit:
+        character = text[index]
+        if character == "{":
+            depth += 1
+        elif character == "}":
+            depth -= 1
+            if depth == 0:
+                return text[opening + 1:index]
+        elif character == "/" and index + 1 < limit and text[index + 1] == "/":
+            newline = text.find("\n", index)
+            if newline < 0:
+                break
+            index = newline
+        elif character == '"':
+            cursor = index + 1
+            while cursor < limit:
+                if text[cursor] == "\\":
+                    cursor += 2
+                    continue
+                if text[cursor] == '"':
+                    break
+                cursor += 1
+            index = cursor
+        index += 1
+    return None
+
+
+def rust_item_defined(text: str, parent: str, child: str) -> bool:
+    """True when `child` is defined inside an `impl`/`enum`/`mod` of `parent`.
+
+    A Rust anchor `Type::item` is a path, not two substrings. Checking the last
+    segment anywhere in the file let `Other::method` pass as long as `method`
+    was defined on some type, and let a comment such as `// fn gone() {}` satisfy
+    `Type::gone`.
+    """
+    escaped_parent = re.escape(parent)
+    for pattern in (
+        rf"\bimpl\b[^\n{{]*?\b{escaped_parent}\b",
+        rf"\btrait\s+{escaped_parent}\b",
+    ):
+        for match in re.finditer(pattern, text):
+            body = _block_after(text, match.end())
+            if body and re.search(rf"\b(?:fn|const|type|static)\s+{re.escape(child)}\b", body):
+                return True
+    for match in re.finditer(rf"\b(?:enum|mod)\s+{escaped_parent}\b", text):
+        body = _block_after(text, match.end())
+        if body and re.search(rf"(?:^|\n)\s*{re.escape(child)}\b", body):
+            return True
+    return False
+
+
 def check_citation(root: Path, path: str, symbol: str | None, start: int | None, end: int | None) -> str | None:
     target = root / path
     if not target.is_file():
@@ -122,9 +195,15 @@ def check_citation(root: Path, path: str, symbol: str | None, start: int | None,
         if end is not None and (end < start or end > lines):
             return f"`{path}` line range {start}-{end} is outside 1-{lines}"
     if symbol:
-        for segment in symbol.split("::"):
-            if not symbol_defined(text, segment):
-                return f"symbol `{segment}` is not defined in `{path}`"
+        segments = symbol.split("::")
+        if path.endswith(".rs") and len(segments) >= 2:
+            parent, child = segments[-2], segments[-1]
+            if not rust_item_defined(text, parent, child):
+                return f"`{child}` is not defined under `{parent}` in `{path}`"
+        else:
+            for segment in segments:
+                if not symbol_defined(text, segment):
+                    return f"symbol `{segment}` is not defined in `{path}`"
     return None
 
 
@@ -170,10 +249,27 @@ def self_test() -> int:
         root = Path(temporary)
         (root / "crates").mkdir()
         source = root / "crates" / "sample.rs"
-        source.write_text("pub struct Sample {}\nimpl Sample { pub fn value(&self) -> u8 { 1 } }\n", encoding="utf-8")
+        source.write_text(
+            "pub struct Sample {}\n"
+            "pub struct Other;\n"
+            "impl Sample { pub fn value(&self) -> u8 { 1 } }\n"
+            "// fn gone() {}\n",
+            encoding="utf-8",
+        )
         (root / "docs").mkdir()
         (root / "docs" / "docs.manifest.json").write_text(
-            json.dumps({"docs": [{"path": "docs/good.md"}, {"path": "docs/bad.md"}, {"path": "docs/notdef.md"}]}),
+            json.dumps(
+                {
+                    "docs": [
+                        {"path": "docs/good.md"},
+                        {"path": "docs/bad.md"},
+                        {"path": "docs/notdef.md"},
+                        {"path": "docs/scope.md"},
+                        {"path": "docs/url.md"},
+                        {"path": "docs/urlbad.md"},
+                    ]
+                }
+            ),
             encoding="utf-8",
         )
         (root / "docs" / "good.md").write_text(
@@ -185,18 +281,36 @@ def self_test() -> int:
         (root / "docs" / "notdef.md").write_text(
             "`crates/sample.rs::pub::fn`\n", encoding="utf-8"
         )
+        (root / "docs" / "scope.md").write_text(
+            "`crates/sample.rs::Other::value`\n", encoding="utf-8"
+        )
+        (root / "docs" / "url.md").write_text(
+            "See https://example.com/x and `crates/sample.rs::Sample::value`.\n", encoding="utf-8"
+        )
+        (root / "docs" / "urlbad.md").write_text(
+            "See https://example.com/x and `crates/sample.rs::Sample::gone`.\n", encoding="utf-8"
+        )
         problems = []
-        problems += check_document(root, root / "docs" / "good.md")
-        problems += check_document(root, root / "docs" / "bad.md")
-        problems += check_document(root, root / "docs" / "notdef.md")
-        if len(problems) != 2 or "missing" not in problems[0] or "not defined" not in problems[1]:
-            print(f"docs-sources self-test: FAILED ({problems})", file=sys.stderr)
+        for name in ("good", "bad", "notdef", "scope", "url", "urlbad"):
+            problems += check_document(root, root / "docs" / f"{name}.md")
+        if len(problems) != 4:
+            print(f"docs-sources self-test: expected 4 problems, got {problems}", file=sys.stderr)
+            return 1
+        if not any("missing" in problem for problem in problems):
+            print("docs-sources self-test: a missing item was NOT caught", file=sys.stderr)
+            return 1
+        if not any("Other" in problem for problem in problems):
+            print("docs-sources self-test: a wrong parent type was NOT caught", file=sys.stderr)
+            return 1
+        if not any("gone" in problem for problem in problems):
+            print("docs-sources self-test: a URL line still skipped its anchor", file=sys.stderr)
             return 1
         index = reverse_index(root)
-        if index.get("crates/sample.rs") != ["docs/bad.md", "docs/good.md", "docs/notdef.md"]:
+        expected = ["docs/bad.md", "docs/good.md", "docs/notdef.md", "docs/scope.md", "docs/url.md", "docs/urlbad.md"]
+        if index.get("crates/sample.rs") != expected:
             print(f"docs-sources self-test: index mismatch ({index})", file=sys.stderr)
             return 1
-        print("docs-sources: self-test passed (resolves anchors, rejects missing symbols, builds the reverse index)")
+        print("docs-sources: self-test passed (resolves anchors, rejects a missing item, a wrong parent type and an anchor beside a URL, builds the reverse index)")
         return 0
 
 

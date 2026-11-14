@@ -17,7 +17,8 @@
       "(`crates/zroutery-core/src/agent_takeover/ownership.rs::OwnershipState`).",
       "`last_applied`, a release after a crash would treat every legitimate proxy",
       "(`crates/zroutery-core/src/agent_takeover/ownership.rs::OwnershipManifest`)."
-    ]
+    ],
+    "reviewed_sha": "sha256:dd66e32043d91251d7d2d38c77043916b21d323e12ea875d6810e7d7249e6171"
   },
   "docs/development/reference/ml-routing.md": {
     "verified_at": "2026-11-14",
@@ -42,7 +43,8 @@
       "(`crates/zroutery-core/src/ml/promotion.rs::PromotionGate::evaluate`).",
       "(`crates/zroutery-core/src/server/ml_state.rs::reload_active_model`,",
       "eligibility on the side (`crates/zroutery-core/src/ml/serving.rs::MlRouter::rank`)."
-    ]
+    ],
+    "reviewed_sha": "sha256:9c6fc1fffdca2cfb0230adfffecc2577e77ab7d0b1a70d35e004ca4952ca8268"
   },
   "docs/development/reference/accounting.md": {
     "verified_at": "2026-11-14",
@@ -73,7 +75,8 @@
       "The desktop writes the spend projection through `flush_ledger` and `save_ledger`",
       "`crates/zroutery-core/src/budget.rs::Ledger` is the value type the check reads.",
       "(`crates/zroutery-core/src/ir/mod.rs::Usage::fresh_input_tokens`)."
-    ]
+    ],
+    "reviewed_sha": "sha256:f4a5078f8d4cc69826d1b83ad840e3a52286f231579ef358d570771e5d376354"
   },
   "docs/development/reference/ipc.md": {
     "verified_at": "2026-11-14",
@@ -99,7 +102,8 @@
       "stale (`src-tauri/capabilities/default.json::permissions`).",
       "fields such as `ml_available`, `account_available` and",
       "build-time app manifest (`src-tauri/build.rs::APP_COMMANDS`)."
-    ]
+    ],
+    "reviewed_sha": "sha256:53cff630de974098b258f8710b85c6276f793a3c3e7155a7bb22e44af659475f"
   },
   "docs/development/WORKFLOW.md": {
     "verified_at": "2026-11-14",
@@ -118,7 +122,8 @@
       "`reviewed_commit` is the baseline for the separate-commit path: changes before",
       "python3 -B scripts/docs_impact.py --base <start> --head HEAD",
       "The validator (`scripts/commit_contract_test.py::TRAILER_KEYS`,"
-    ]
+    ],
+    "reviewed_sha": "sha256:5918ceb1498eb742f9c768747061c58a6e809a29a3726ee9db92dd4356b03839"
   },
   "docs/development/architecture.md": {
     "verified_at": "2026-11-14",
@@ -179,7 +184,8 @@
       "`crates/zroutery-core/src/budget.rs::Ledger`,",
       "against the frontend contract by `scripts/command_surface_test.py`.",
       "early exit; `/health` is the only unauthenticated route"
-    ]
+    ],
+    "reviewed_sha": "sha256:3cb2222bd16ee0ec37bccdc0afd35654bcff529e0c53c81e3216d898536f589c"
   },
   "CONTRIBUTING.md": {
     "verified_at": "2026-11-14",
@@ -198,7 +204,8 @@
       "The validator is authoritative: `scripts/commit_contract_test.py`.",
       "`python3 -B scripts/docs_impact.py --base <start> --head HEAD`.",
       "cargo +1.90.0 check --workspace --all-targets --locked"
-    ]
+    ],
+    "reviewed_sha": "sha256:ebfdd2db3fcd4474c574a1bf2a1f1da1c40780d3cd078a87cb2a37084a3a59ec"
   },
   "docs/DOCUMENTATION.md": {
     "verified_at": "2026-11-14",
@@ -216,7 +223,8 @@
       "[`docs/development/reference/documentation-rules.md`](development/reference/documentation-rules.md).",
       "`Status` is `accepted`, `proposed`, or `superseded by ADR-XXXX`.",
       "`docs_check.py` fails when a Markdown file is in none of `docs`,"
-    ]
+    ],
+    "reviewed_sha": "sha256:ae85c18d38a99675ec70bf63220dcc154a035a183e8e7c65112ecfba7fa98d4d"
   },
   "docs/development/verification.md": {
     "verified_at": "2026-11-14",
@@ -250,10 +258,11 @@
     "reviewed_by": "second-reader",
     "reviewed_at": "2026-11-14",
     "sample": [
-      "3-5 sentence `sample` per verified document; a reviewer equal to the last",
       "is an ancestor of HEAD, and that `ran_at` is an ISO timestamp.",
+      "`Documentation contracts`); a required status check keys on the job, not on a",
       "An ADR `Date` must equal the file's first"
-    ]
+    ],
+    "reviewed_sha": "sha256:0cb71e149b51942aed895af5d750ae7e91238dadf8f798d1a0bbb3ed26f20dd6"
   },
   "docs/development/reference/providers.md": {
     "verified_at": "2026-11-14",
@@ -279,7 +288,8 @@
       "(`src-tauri/src/ccswitch/read.rs::read_providers`); the import itself is",
       "(`crates/zroutery-core/src/config/registry.rs::AccountConfig`).",
       "A relay endpoint ending in `/v1` is not the panel root."
-    ]
+    ],
+    "reviewed_sha": "sha256:99a1cf3f725e082ad43245f5d4a7fde76fae172c22a0fefd7205b46e1942e3d4"
   },
   "docs/development/reference/ui-design-system.md": {
     "verified_at": "2026-11-14",
@@ -313,7 +323,8 @@
       "(`ui/src/accent.ts::applySystemAccent`).",
       "skin attribute (`ui/src/skin.ts::applySkin`).",
       "(`ui/src/components/drawer.tsx::Drawer`)."
-    ]
+    ],
+    "reviewed_sha": "sha256:fd96c572446e5d04692ad11187d83c6bbff603c76df15ae9395ec0016a5f0c6f"
   },
   "docs/development/reference/routing-data.md": {
     "verified_at": "2026-11-14",
@@ -335,7 +346,8 @@
       "(`crates/zroutery-core/src/ml/traces.rs::RequestTrace`).",
       "(`crates/zroutery-core/src/runtime_store/imports.rs::commit_import`).",
       "failed (`crates/zroutery-core/src/ml/traces.rs::RequestTrace`)."
-    ]
+    ],
+    "reviewed_sha": "sha256:c6b408010a3f22e09b1510ed86887b5ff26d013c08d2d950db44aa5bc25e686e"
   },
   "README.md": {
     "verified_at": "2026-11-14",
@@ -363,7 +375,8 @@
       "Point `ZROUTERY_CONFIG_DIR` at a custom config directory.",
       "Desktop builds include the `ml` module, disabled by default: no collection, no training, no effect on routing.",
       "[![rust](https://img.shields.io/badge/rust-1.90-dea584)](https://github.com/hemingtsai/Zroutery)"
-    ]
+    ],
+    "reviewed_sha": "sha256:a611a7e84ab8b5b34fda62c8bc7972102b221a275c31d59df170cc128347a9c7"
   },
   "README.zh-CN.md": {
     "verified_at": "2026-11-14",
@@ -391,7 +404,8 @@
       "\u63d0\u4ea4\u4fe1\u606f\u6309 Conventional Commits \u4e66\u5199\uff0cCI \u4f1a\u9010\u6761\u68c0\u67e5\u3002\u67b6\u6784\u51b3\u7b56\u548c\u5404\u9636\u6bb5\u7684\u8bb0\u5f55\u5728 `docs/development/`\uff1b\u6539\u4ee3\u7801\u524d\u5148\u770b `CONTRIBUTING.md` \u548c `AGENTS.md`\u3002",
       "\u65e0\u754c\u9762\u6a21\u5f0f\u4e0b key \u4ece\u73af\u5883\u53d8\u91cf\u8bfb\u53d6\uff0c\u6bd4\u5982 `ZROUTERY_KEY_PROVIDER_DEEPSEEK=sk-...`\uff08\u4f9b\u5e94\u5546 `provider:deepseek` \u5bf9\u5e94\u8fd9\u4e2a\u53d8\u91cf\u540d\uff09\u3002\u914d\u7f6e\u76ee\u5f55\u7528 `ZROUTERY_CONFIG_DIR` \u6307\u5b9a\uff1b\u591a\u4e2a\u5b9e\u4f8b\u8981\u5171\u7528\u7528\u91cf\u8bb0\u5f55\u65f6\uff0c\u8ba9 `ZROUTERY_RUNTIME_DB` \u6307\u5411\u540c\u4e00\u4e2a `runtime.sqlite3`\u3002",
       "\u5ba2\u6237\u7aef\u7528\u54ea\u79cd\u534f\u8bae\u90fd\u884c\u2014\u2014Anthropic\u3001OpenAI Chat\u3001OpenAI Responses\u3001Gemini\uff1bClaude Code\u3001Codex\u3001Chatbox \u6216\u4efb\u610f SDK \u6307\u5411 `http://127.0.0.1:8787` \u5373\u53ef\u4f7f\u7528\uff0c\u8bf7\u6c42\u5931\u8d25\u4f1a\u81ea\u52a8\u5207\u6362\u5230\u4e0b\u4e00\u4e2a\u6a21\u578b\u3002macOS \u548c Windows \u4e0a\u662f\u5e38\u9a7b\u83dc\u5355\u680f / \u6258\u76d8\u7684\u684c\u9762\u5e94\u7528\uff0c\u4e5f\u53ef\u4ee5\u4e0d\u5f00\u754c\u9762\uff0c\u53ea\u8dd1\u4ee3\u7406\u8fdb\u7a0b\u3002"
-    ]
+    ],
+    "reviewed_sha": "sha256:54189b1bd726cd6731b356cdbc4c7b45b1316c574f1b307634a130e399398cbf"
   },
   "README.zh-TW.md": {
     "verified_at": "2026-11-14",
@@ -419,7 +433,8 @@
       "\u5ba2\u6236\u7aef\u7528\u54ea\u7a2e\u5354\u5b9a\u90fd\u884c\u2014\u2014Anthropic\u3001OpenAI Chat\u3001OpenAI Responses\u3001Gemini\uff1bClaude Code\u3001Codex\u3001Chatbox \u6216\u4efb\u610f SDK \u6307\u5411 `http://127.0.0.1:8787` \u5373\u53ef\u4f7f\u7528\uff0c\u8acb\u6c42\u5931\u6557\u6703\u81ea\u52d5\u5207\u63db\u5230\u4e0b\u4e00\u500b\u6a21\u578b\u3002macOS \u548c Windows \u4e0a\u662f\u5e38\u99d0\u9078\u55ae\u5217 / \u7cfb\u7d71\u5323\u7684\u684c\u9762\u61c9\u7528\uff0c\u4e5f\u53ef\u4ee5\u4e0d\u958b\u4ecb\u9762\uff0c\u53ea\u8dd1\u4ee3\u7406\u7a0b\u5e8f\u3002",
       "\u53e6\u5916\u6709 `GET /v1/models`\uff08\u5217\u51fa\u6240\u6709\u53ef\u547c\u53eb\u7684 id\uff09\u3001`GET /v1/status` \u548c `GET /health`\uff08\u552f\u4e00\u4e0d\u9700\u8981\u9a57\u8b49\u7684\u4ecb\u9762\uff09\u3002\u9a57\u8b49\u652f\u63f4 `x-api-key` \u548c `Authorization: Bearer`\uff0ctoken \u5728\u300c\u9598\u9053\u300d\u9078\u55ae\u88e1\u8907\u88fd\u3002",
       "[![release](https://img.shields.io/badge/release-1.0.0--rc.2-blue)](https://github.com/hemingtsai/Zroutery/releases)"
-    ]
+    ],
+    "reviewed_sha": "sha256:3882e9f1aaab656cb14a6f1dfad122327fd45fc77f3e674c9dd24e2b240d7992"
   },
   "docs/development/runbook.md": {
     "verified_at": "2026-11-14",
@@ -443,7 +458,8 @@
       "python3 -B scripts/commit_contract_test.py --base <start> --head HEAD",
       "Run the Tier 1 gates in [verification.md](verification.md); report any Tier 2",
       "`%APPDATA%\\app.zroutery.desktop\\`; override with `ZROUTERY_CONFIG_DIR`."
-    ]
+    ],
+    "reviewed_sha": "sha256:46f9b8400ccf2a1c4def10a6e0c14701f8198b00aa779811a11bf529746466ce"
   },
   "docs/development/reference/migration.md": {
     "verified_at": "2026-11-14",
@@ -467,7 +483,8 @@
       "**The record survives the process.** `MigrationStore` persists the state and",
       "`crates/zroutery-core/src/migration/store.rs::save_snapshot`).",
       "`crates/zroutery-core/src/migration/executor.rs::snapshot_from_disk`)."
-    ]
+    ],
+    "reviewed_sha": "sha256:fa67e84726665401cc91f79a559276f8bb744e5ba0c4f141b6183c80fe14db92"
   },
   "docs/development/reference/accounts.md": {
     "verified_at": "2026-11-14",
@@ -493,7 +510,8 @@
       "(`crates/zroutery-core/src/config/registry.rs::InferenceKeyConfig`);",
       "(`crates/zroutery-core/src/config/registry.rs::AccountConfig`):",
       "`src-tauri/src/account_binding.rs::BindingPreview`)."
-    ]
+    ],
+    "reviewed_sha": "sha256:4f2b1b7103093b3c1c20f35f0c83923807759cf25e3e5bf49031203c39d71c81"
   },
   "docs/development/reference/protocol.md": {
     "verified_at": "2026-11-14",
@@ -531,7 +549,8 @@
       "`crates/zroutery-core/src/ir/mod.rs::ThinkingConfig`).",
       "zero by `crates/zroutery-core/src/ir/mod.rs::Usage::fresh_input_tokens`, never wrapped",
       "`encode_response` (`crates/zroutery-core/src/protocol/mod.rs::decode_request`,"
-    ]
+    ],
+    "reviewed_sha": "sha256:b8b0afe016a3f0d5e56b15e7ed64a70b601e3a190afb4c049b2e3560660c5c9e"
   },
   "docs/development/reference/routing-policy.md": {
     "verified_at": "2026-11-14",
@@ -560,7 +579,8 @@
       "order (`crates/zroutery-core/src/election.rs::Election`,",
       "the `NoCandidate` error, never an empty plan served by a rejected fallback",
       "`Balanced` falls back to `Priority` until an election has been held."
-    ]
+    ],
+    "reviewed_sha": "sha256:a0dfa52264bc29f952f1742a4be12400e8f4b28c401d81ada87074519f1ecd15"
   },
   "docs/development/reference/failure.md": {
     "verified_at": "2026-11-14",
@@ -581,7 +601,8 @@
       "A provider that rejects the gateway's translated body is `ProviderRejected`: it",
       "(`crates/zroutery-core/src/failure.rs::upstream_payload_status`).",
       "request (`crates/zroutery-core/src/server/pipeline/lifecycle.rs::TerminalKind`):"
-    ]
+    ],
+    "reviewed_sha": "sha256:37a1492a69a6c967ee7ab7092aaa2ef90cf27c99add7579f12eb3ee6c64fa3e4"
   },
   "docs/development/reference/observability.md": {
     "verified_at": "2026-11-14",
@@ -607,7 +628,8 @@
       "(`crates/zroutery-core/src/observability.rs::RequestProjection`);",
       "`observability.rs` is a read-only correlation view over accepted Core types:",
       "(`crates/zroutery-core/src/observability.rs::ProjectionRefusal`)."
-    ]
+    ],
+    "reviewed_sha": "sha256:f15cc70bbbf7be288a04150555d42b053a988e4201e21684ea87c00c6f7049cc"
   },
   "docs/development/reference/config.md": {
     "verified_at": "2026-11-14",
@@ -634,7 +656,8 @@
       "`SecretStore` is the credential boundary",
       "Provider entries carry a `key_ref`, not a key",
       "listener cannot move (`src-tauri/src/state/server.rs::apply_config_locked`)."
-    ]
+    ],
+    "reviewed_sha": "sha256:9ecf60d73c8050f40f00d0513c778ffc8c3cfff6473dd74a5072943a8b6acb8c"
   },
   "docs/development/reference/security.md": {
     "verified_at": "2026-11-14",
@@ -668,7 +691,8 @@
       "(`crates/zroutery-core/src/server/cors.rs::cors_layer`).",
       "it is written owner-only and atomically (`src-tauri/src/store.rs::save`,",
       "(`crates/zroutery-core/src/error.rs::safe_message`)."
-    ]
+    ],
+    "reviewed_sha": "sha256:d659c67bedfcce835613fd9a34e78d3c245a7c719d54079cc7ce3507cc87362b"
   },
   "docs/development/reference/rectifier.md": {
     "verified_at": "2026-11-14",
@@ -694,7 +718,8 @@
       "It is enabled by the config's `codex_auto` switch, separate from the four repair",
       "`crates/zroutery-core/src/rectifier/codex_auto.rs::DEADLINE`,",
       "`RectifierConfig` defaults every switch to true: `enabled`,"
-    ]
+    ],
+    "reviewed_sha": "sha256:e2b938b09b42bd42ac659e8974648fcfa7c0de8cb75c6b4d504a5f54a7e914c6"
   },
   "docs/development/reference/outcome.md": {
     "verified_at": "2026-11-14",
@@ -718,7 +743,8 @@
       "One outcome per client request (`crates/zroutery-core/src/outcome/mod.rs::Outcome`):",
       "(`crates/zroutery-core/src/outcome/attempt.rs::Attempt::is_terminal_success`).",
       "(`crates/zroutery-core/src/outcome/validation.rs::Outcome::canonicalized`)."
-    ]
+    ],
+    "reviewed_sha": "sha256:b6b55d073728901b502ed601faa29eb73fe6c0faa6966660697fc603c68aaaf0"
   },
   "docs/development/reference/file-transactions.md": {
     "verified_at": "2026-11-14",
@@ -736,7 +762,8 @@
       "`Some(Vec::new())` is an existing empty file; `None` is absence.",
       "writes (`crates/zroutery-core/src/agent_takeover/gemini.rs`).",
       "at most 4,096 changes, 256 MiB per blob, 512 MiB total, 4 MiB manifest,"
-    ]
+    ],
+    "reviewed_sha": "sha256:16622f22cf50fe07a09b5c3893a58420ff411bbde3bd94c221cc4f0771109a0b"
   },
   "docs/development/reference/model-catalog.md": {
     "verified_at": "2026-11-14",
@@ -754,7 +781,8 @@
       "models.dev supplies the capabilities a provider's own `/models` route rarely",
       "into a `ModelEntry` when the user imports a model; after that the saved",
       "`Catalog::lookup(provider_id, kind_hint, model_id)` widens in a fixed order"
-    ]
+    ],
+    "reviewed_sha": "sha256:a08267dff072751b091d3dce40ffa312790571e6c4d9e1947219ffe277862f63"
   },
   "docs/development/reference/request-purpose.md": {
     "verified_at": "2026-11-14",
@@ -774,7 +802,8 @@
       "`{\"outcome\":\"allow\"}` or `{\"outcome\":\"deny\"}` count",
       "(`crates/zroutery-core/src/classifier.rs::DetectionConfig`).",
       "fabricated probability (`crates/zroutery-core/src/classifier.rs::decision_text_for_request`)."
-    ]
+    ],
+    "reviewed_sha": "sha256:f97e9c48da422fc0d8f03785f748ad4e605caf55321fc8f37ede85db0270ec4d"
   },
   "docs/development/reference/client-attribution.md": {
     "verified_at": "2026-11-14",
@@ -792,7 +821,8 @@
       "with provenance (`crates/zroutery-core/src/client.rs::registered_rules`).",
       "(`crates/zroutery-core/src/client.rs::Confidence`).",
       "The confidence helper `is_recognised` excludes `Weak`; a `python-requests` match identifies"
-    ]
+    ],
+    "reviewed_sha": "sha256:9ea1fe583f32c95efceb5d0ffa5c8c956abedf7eb0676c0616df7b71d1285e55"
   },
   "docs/development/reference/implementation-contracts.md": {
     "verified_at": "2026-11-14",
@@ -826,7 +856,8 @@
       "controls (`crates/zroutery-core/src/ir/mod.rs::ChatRequest`,",
       "`crates/zroutery-core/src/outcome/attempt.rs::Attempt`).",
       "`crates/zroutery-core/src/outcome/mod.rs::Outcome`)."
-    ]
+    ],
+    "reviewed_sha": "sha256:d68173a9ab953960a237b74d745275f6793c111c11a47cbe3ab18fecaca8b5e5"
   },
   "docs/development/reference/documentation-rules.md": {
     "verified_at": "2026-11-14",
@@ -845,6 +876,7 @@
       "DOC-15 is a review protocol, not a gate.",
       "`docs/rules.json` is the machine source; `scripts/docs_rules.py` checks that the",
       "A rule with no step, or a step with no rule, fails `docs_rules.py`."
-    ]
+    ],
+    "reviewed_sha": "sha256:5c5c33084119bb830ec8bd5e1e73e2be7ea36aaecd3c576fb5b222100e0af760"
   }
 }
