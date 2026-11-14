@@ -1,5 +1,9 @@
 # ADR-0003: Core Capability and Media Fail-Closed Boundary
 
+Status: accepted
+Date: 2026-11-14
+Supersedes: none
+
 ## Decision state
 
 Accepted for the bounded Core P1 repair batch. This ADR does not activate ML or
@@ -58,3 +62,9 @@ value of `Unknown` is not evidence of support.
 - `docs/development/node-status/core-p1-media-req.status.json`
 - `docs/development/dependency-dag.md`
 - `docs/development/regression-ledger.md`
+
+## Sources
+
+- `crates/zroutery-core/src/policy/eligibility.rs`
+- `crates/zroutery-core/src/media/`
+- `docs/development/reference/protocol.md`

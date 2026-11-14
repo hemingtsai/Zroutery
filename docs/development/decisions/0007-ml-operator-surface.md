@@ -1,5 +1,9 @@
 # ADR-0007: The Loop Is Legible and Reversible
 
+Status: accepted
+Date: 2026-11-14
+Supersedes: none
+
 Builds on ADR-0006. Does not supersede it.
 
 ## Context
@@ -168,3 +172,9 @@ everything else, and the tests assert the 401.
   failure rather than read as an absence.
 - **Multi-provider robustness is still unmeasured.** Every fixture is
   single-provider, so cross-provider interaction remains unexercised.
+
+## Sources
+
+- `crates/zroutery-core/src/ml/serving.rs`
+- `ui/src/pages/routing/ml/`
+- `docs/development/reference/ml-routing.md`

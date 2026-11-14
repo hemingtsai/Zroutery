@@ -1,6 +1,8 @@
 # ADR-0009: User Documentation Scope
 
 Status: accepted
+Date: 2026-11-14
+Supersedes: none
 
 ## Context
 
@@ -45,3 +47,12 @@ current data. Do not add a root `LICENSE` as part of this rollback.
 Reopen this decision when a Chromium-based browser can render the built UI
 reliably, or when an owner accepts the three-language README maintenance. A
 root `LICENSE` can be added independently at any time.
+
+## Sources
+
+- `README.md`
+- `README.zh-CN.md`
+- `README.zh-TW.md`
+- `docs/images/`
+- `scripts/ui_overflow_test.py`
+- `docs/development/state.json`

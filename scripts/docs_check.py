@@ -25,6 +25,7 @@ ROOT = Path(__file__).resolve().parents[1]
 MANIFEST = Path("docs/docs.manifest.json")
 INDEX = Path("docs/INDEX.md")
 LINK_RE = re.compile(r"\[[^\]]*\]\(([^)]+)\)")
+ADR_STATUS_RE = re.compile(r"^(accepted|proposed|superseded by ADR-\d{4})$")
 CODE_PATH_RE = re.compile(r"`([A-Za-z0-9_./-]+/[A-Za-z0-9_./-]+/?)`")
 ROOT_PREFIXES = ("crates/", "src-tauri/", "ui/", "scripts/", "docs/", "tests/")
 ROOT_FILES = ("Cargo.toml", "package.json", "README.md", "README.zh-CN.md", "README.zh-TW.md", "AGENTS.md", "CONTRIBUTING.md")
@@ -209,6 +210,93 @@ def check_successors(root: Path) -> list[str]:
     return errors
 
 
+def adr_errors(root: Path, entry: dict, text: str) -> list[str]:
+    errors: list[str] = []
+    lines = text.splitlines()
+    header = "\n".join(lines[:10])
+    status = re.search(r"^Status: (.+)$", header, re.MULTILINE)
+    date = re.search(r"^Date: (.+)$", header, re.MULTILINE)
+    supersedes = re.search(r"^Supersedes: (.+)$", header, re.MULTILINE)
+    if not status or not ADR_STATUS_RE.match(status.group(1).strip()):
+        errors.append(f"{entry['path']}: ADR needs `Status: accepted|proposed|superseded by ADR-XXXX`")
+    if not date or not re.match(r"^\d{4}-\d{2}-\d{2}$", date.group(1).strip()):
+        errors.append(f"{entry['path']}: ADR needs `Date: YYYY-MM-DD`")
+    if not supersedes or not re.match(r"^(none|ADR-\d{4})$", supersedes.group(1).strip()):
+        errors.append(f"{entry['path']}: ADR needs `Supersedes: none|ADR-XXXX`")
+    headings = {line.strip() for line in lines if line.startswith("## ")}
+    for heading in ("## Context", "## Decision", "## Consequences", "## Sources"):
+        if heading not in headings:
+            errors.append(f"{entry['path']}: ADR needs `{heading}`")
+    targets = []
+    if status:
+        match = re.search(r"superseded by (ADR-\d{4})", status.group(1))
+        if match:
+            targets.append(match.group(1))
+    if supersedes:
+        match = re.match(r"(ADR-\d{4})", supersedes.group(1).strip())
+        if match:
+            targets.append(match.group(1))
+    for target in targets:
+        number = target.split("-", 1)[1]
+        found = list((root / "docs" / "development" / "decisions").glob(f"{number}-*.md"))
+        if not found:
+            errors.append(f"{entry['path']}: ADR target `{target}` does not exist")
+    if "## Sources" in headings:
+        in_sources = False
+        for line in lines:
+            if line.strip() == "## Sources":
+                in_sources = True
+                continue
+            if in_sources and line.startswith("## "):
+                break
+            if in_sources:
+                for raw in re.findall(r"`([^`]+)`", line):
+                    if (root / raw).exists():
+                        continue
+                    errors.append(f"{entry['path']}: source `{raw}` does not exist")
+    return errors
+
+
+def canonical_errors(root: Path, manifest: dict) -> list[str]:
+    errors = []
+    for entry in manifest.get("canonical", []):
+        home = entry.get("home", "")
+        path, _, fragment = home.partition("#")
+        if not path or not (root / path).is_file():
+            errors.append(f"canonical `{entry.get('fact')}`: `{path}` does not exist")
+            continue
+        if fragment:
+            text = (root / path).read_text(encoding="utf-8")
+            slugs = {
+                re.sub(r"[^\w\s-]", "", line.lstrip("#").strip().lower()).strip().replace(" ", "-")
+                for line in text.splitlines()
+                if line.startswith("#")
+            }
+            if fragment not in slugs:
+                errors.append(f"canonical `{entry.get('fact')}`: `#{fragment}` does not resolve in `{path}`")
+    return errors
+
+
+def adr_title_summary(root: Path, path: str) -> tuple[str, str]:
+    text = (root / path).read_text(encoding="utf-8")
+    title = next((line[2:].strip() for line in text.splitlines() if line.startswith("# ADR-")), path)
+    summary = ""
+    lines = text.splitlines()
+    try:
+        start = next(i for i, line in enumerate(lines) if line.strip() == "## Decision")
+    except StopIteration:
+        return title, summary
+    for line in lines[start + 1:]:
+        if line.startswith("## "):
+            break
+        if line.strip() and not line.startswith(("#", "-", "1.", "2.", "3.", "4.", "5.")):
+            summary = line.strip()
+            break
+    if len(summary) > 140:
+        summary = summary[:137].rstrip() + "..."
+    return title, summary
+
+
 def check_active(root: Path, entry: dict, verified: dict, redirects: dict[str, str]) -> tuple[list[str], list[str]]:
     errors: list[str] = []
     warnings: list[str] = []
@@ -230,6 +318,8 @@ def check_active(root: Path, entry: dict, verified: dict, redirects: dict[str, s
         errors.append(f"{entry['path']}: generated file lacks its generated-by header")
     errors.extend(check_links(root, path, text, redirects))
     errors.extend(check_code_paths(root, path, text, redirects))
+    if type_ == "adr":
+        errors.extend(adr_errors(root, entry, text))
     if type_ != "adr":
         errors.extend(docs_sources.check_document(root, path))
         anchors = len(docs_sources.citations(text))
@@ -295,14 +385,18 @@ def render_index(root: Path, manifest: dict) -> str:
     ]
     for entry in docs:
         link = os.path.relpath(entry["path"], "docs")
+        title = entry.get("title", "")
+        summary = entry.get("summary", "")
+        if entry.get("type") == "adr":
+            title, summary = adr_title_summary(root, entry["path"])
         lines.append(
             "| [{path}]({link}) | {type} | {authority} | {owner} | {summary} |".format(
-                path=entry["path"],
+                path=title or entry["path"],
                 link=link,
                 type=entry.get("type", ""),
                 authority=entry.get("authority", ""),
                 owner=entry.get("owner", ""),
-                summary=entry.get("summary", ""),
+                summary=summary,
             )
         )
     lines += [
@@ -432,10 +526,24 @@ def self_test() -> int:
             print("docs-check self-test: a broken archived link was NOT caught", file=sys.stderr)
             return 1
         (archive / "bad.md").unlink()
+        decisions = root / "docs" / "development" / "decisions"
+        decisions.mkdir()
+        adr = decisions / "0001-test.md"
+        adr.write_text(
+            "# ADR-0001: Test\n\nStatus: accepted\nDate: 2026-11-14\nSupersedes: none\n\n## Context\n\n## Decision\n\n## Consequences\n",
+            encoding="utf-8",
+        )
+        if not adr_errors(root, {"path": str(adr.relative_to(root))}, adr.read_text()):
+            print("docs-check self-test: an ADR without Sources was NOT caught", file=sys.stderr)
+            return 1
+        (root / "docs" / "DOCUMENTATION.md").write_text("# Doc\n\n## Findings and decisions\n", encoding="utf-8")
+        if not canonical_errors(root, {"canonical": [{"fact": "findings", "home": "docs/DOCUMENTATION.md#missing"}]}):
+            print("docs-check self-test: a broken canonical anchor was NOT caught", file=sys.stderr)
+            return 1
         if resolve_redirect("docs/old/x.json", {"docs/old/*": "docs/new/*"}) != "docs/new/x.json":
             print("docs-check self-test: prefix redirect did not resolve", file=sys.stderr)
             return 1
-        print("docs-check: self-test passed (accepts a valid document, rejects a broken link, a broken archived link and an over-budget file, resolves a prefix redirect)")
+        print("docs-check: self-test passed (rejects a broken link, archived link, over-budget file, ADR without Sources and broken canonical anchor; resolves a prefix redirect)")
         return 0
 
 
@@ -473,6 +581,7 @@ def main(argv: list[str] | None = None) -> int:
         except json.JSONDecodeError as error:
             errors.append(f"docs/verified.json: invalid JSON: {error}")
     errors.extend(check_redirects(root, redirects))
+    errors.extend(canonical_errors(root, manifest))
     errors.extend(check_archive_links(root, redirects, successors))
     errors.extend(check_successors(root))
     covered = {entry["path"] for entry in docs} | set(manifest.get("pending", []))

@@ -142,6 +142,9 @@ Consequences, stated rather than discovered:
   `docs/archive/successors.json`.
 - `coverage_check.py` requires every top-level Core module (public or private) to be owned, covered
   elsewhere, or explicitly unowned with a reason.
+- `docs_check.py` requires an ADR header (`Status`, `Date`, `Supersedes`), the
+  `Context`/`Decision`/`Consequences`/`Sources` sections, and a resolvable
+  `manifest.canonical[].home` anchor.
 - `invariant_check.py` requires every architecture invariant to name a test anchor
   or an explicit `untested` reason.
 - `current_state.py --check` fails when `current-state.md` is not the render of

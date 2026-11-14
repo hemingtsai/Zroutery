@@ -14,7 +14,7 @@ as of `2026-11-14` · branch `dev` · verified code head `26d887f`
 | frontend build | **pass** | `pnpm --dir ui build` |  |
 | frontend tests | **pass** | `pnpm --dir ui test` | 86 passed |
 | command surface | **pass** | `python3 -B scripts/command_surface_test.py` | 90 interface commands, 254 registered |
-| documentation contracts | **pass** | `python3 -B scripts/docs_contracts.py` | all docs gates, including freshness and state |
+| documentation contracts | **pass** | `python3 -B scripts/docs_contracts.py` | all docs gates; CI runs range impact with --base/--head |
 | documentation sources | **pass** | `python3 -B scripts/docs_sources.py --check` |  |
 | markdown structure | **pass** | `python3 -B scripts/markdown_check.py` | fenced blocks and tables well formed |
 | documentation check | **pass** | `python3 -B scripts/docs_check.py` | 46 active, 0 pending, 0 warnings |

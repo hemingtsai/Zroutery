@@ -1,5 +1,9 @@
 # ADR-0001: Recoverable Node Record Contract
 
+Status: proposed
+Date: 2026-11-14
+Supersedes: none
+
 ## Decision state
 
 Unresolved. The provisional record format is implemented by ORCH-DOCS so the
@@ -15,7 +19,7 @@ acceptance. The current audit explicitly requires legal state values,
 dependencies, dependents, gates, blockers, unblock conditions, and exact
 evidence.
 
-## Provisional decision
+## Decision
 
 Use one JSON object per node under `docs/development/node-status/`, with the
 following stable fields:
@@ -41,7 +45,7 @@ REG-010. Historical tags remain provenance only.
 4. How should a node represent an external dependency that is not a repository
    node without weakening the dependency/dependent symmetry rule?
 
-## Consequences until resolved
+## Consequences
 
 - A status is recoverable without reading implementation intent.
 - A failed or blocked node cannot be hidden by a tag or an aggregate stage.
@@ -55,3 +59,9 @@ REG-010. Historical tags remain provenance only.
 - `docs/development/dependency-dag.md`
 - `docs/development/evidence-registry.md`
 - `docs/development/roadmap.md`
+
+## Sources
+
+- `docs/archive/audits/repository-audit-2026-09-25.md`
+- `docs/archive/records/node-status/`
+- `docs/development/decisions/0005-core-p1-node-boundaries.md`

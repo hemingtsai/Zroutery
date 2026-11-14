@@ -1,5 +1,9 @@
 # ADR-0004: Canonical Failure and Outcome Authority
 
+Status: accepted
+Date: 2026-11-14
+Supersedes: none
+
 ## Decision state
 
 Accepted for the bounded Core P1 repair batch. This is a Core contract, not an
@@ -67,3 +71,10 @@ planned, last-attempted, and actually served identities are not separated.
 - `docs/development/node-status/core-p1-failure-authority.status.json`
 - `docs/development/node-status/core-p1-outcome-feedback.status.json`
 - `docs/development/node-status/core-p1-pipeline-lifecycle.status.json`
+
+## Sources
+
+- `crates/zroutery-core/src/failure.rs`
+- `crates/zroutery-core/src/error.rs`
+- `crates/zroutery-core/src/outcome/`
+- `docs/development/reference/failure.md`

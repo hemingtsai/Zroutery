@@ -1,9 +1,19 @@
 # ADR-0005: Core P1 Repair Node Boundaries
 
+Status: accepted
+Date: 2026-11-14
+Supersedes: none
+
 ## Decision state
 
 Accepted for dispatch sequencing. The node records remain the canonical status
 source; this ADR defines ownership and merge order.
+
+## Context
+
+The former broad `CORE-P1-REPAIR` package mixed protocol, failure, routing and
+ML schema work in one node. One owner could not review it, and one merge order
+could not keep the boundaries intact.
 
 ## Decision
 
@@ -49,6 +59,12 @@ evidence files, push, merge, rebase, or touch the main worktree. A worker may
 return `DONE`, `PARTIAL`, `BLOCKED`, or `FAILED`; only the parent may accept a
 node after independent diff and gate review.
 
+## Consequences
+
+Each bounded node has one owner and one write scope, so a failure in one area
+cannot be mistaken for progress in another. The split adds merge ordering, but
+the order is declared here rather than discovered during a conflict.
+
 ## Related records
 
 - `docs/development/node-status/core-p1-repair.status.json`
@@ -59,3 +75,9 @@ node after independent diff and gate review.
 - `docs/development/node-status/core-p1-pipeline-lifecycle.status.json`
 - `docs/development/dependency-dag.md`
 - `docs/development/roadmap.md`
+
+## Sources
+
+- `docs/development/decisions/0003-capability-media-fail-closed.md`
+- `docs/development/decisions/0004-failure-outcome-authority.md`
+- `docs/development/architecture.md`

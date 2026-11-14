@@ -42,7 +42,7 @@
       "name": "documentation contracts",
       "status": "pass",
       "command": "python3 -B scripts/docs_contracts.py",
-      "detail": "all docs gates, including freshness and state"
+      "detail": "all docs gates; CI runs range impact with --base/--head"
     },
     {
       "name": "documentation sources",

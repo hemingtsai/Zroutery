@@ -1,12 +1,16 @@
 # ADR-0002: Production ML Boundary
 
+Status: superseded by ADR-0006
+Date: 2026-11-14
+Supersedes: none
+
 ## Decision state
 
 **Superseded by ADR-0006.** The boundary this record provisions no longer
 exists. Kept because the reasoning it recorded is the reasoning ADR-0006 had to
 answer, and a reader who has only seen the outcome deserves to see the question.
 
-## What this decided, and why it was wrong
+## Context
 
 The boundary was: ML is an optional in-process library, shadow evaluation is
 record-only, and "automatic activation, online RL, exploration, or takeover"
@@ -38,6 +42,12 @@ A gate that proves a thing cannot happen is only worth its cost until the thing
 becomes the requirement. At that point it is not a safety mechanism; it is the
 thing standing in the way, and it will resist with exactly the rigour it was
 built with.
+
+## Decision
+
+The production ML boundary was: ML is an optional in-process library, shadow
+evaluation is record-only, and automatic activation, online RL, exploration or
+takeover must not be enabled in the production Tauri path.
 
 ## Where that reasoning was right, and was kept
 
@@ -71,3 +81,9 @@ The safety concern was real, so it became mechanism rather than prohibition.
 - `docs/development/architecture.md`
 - `docs/development/roadmap.md`
 - `docs/development/ml-closed-loop-report.md`
+
+## Sources
+
+- `docs/development/decisions/0006-ml-closed-loop.md`
+- `docs/archive/plans/roadmap.md`
+- `crates/zroutery-core/src/ml/`

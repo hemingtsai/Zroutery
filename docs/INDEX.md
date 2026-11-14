@@ -19,52 +19,52 @@ This file is generated from `docs/docs.manifest.json`. Do not edit it.
 
 | Document | Type | Authority | Owner | Summary |
 |---|---|---|---|---|
-| [AGENTS.md](../AGENTS.md) | entry | normative | docs | The only agent entry: current state, non-negotiables, implementation contracts, documentation sync, verification pointers, stop conditions. |
-| [CONTRIBUTING.md](../CONTRIBUTING.md) | guide | guide | docs | Human onboarding: toolchain, commit format, where the rules live. |
-| [README.md](../README.md) | guide | guide | docs | User-facing overview, setup and platform support. |
-| [README.zh-CN.md](../README.zh-CN.md) | guide | guide | docs | Simplified Chinese mirror of README.md. |
-| [docs/DOCUMENTATION.md](DOCUMENTATION.md) | normative | normative | docs | Document types, authority, source verification, sizes, archive and change synchronization. |
-| [docs/INDEX.md](INDEX.md) | index | index | docs | Generated map of active, pending and archived documents. |
-| [docs/development/README.md](development/README.md) | index | index | docs | Short signpost into the development records. |
-| [docs/development/current-state.md](development/current-state.md) | fact | fact | docs | Generated snapshot: gates, blockers, flaky gates, last full green. |
-| [docs/development/verification.md](development/verification.md) | normative | normative | backend | The only toolchain and gate definition, including what CI does and does not run. |
-| [docs/development/architecture.md](development/architecture.md) | normative | normative | backend | Layers, boundaries and invariants of Core, the desktop shell and the learning stack. |
-| [docs/development/WORKFLOW.md](development/WORKFLOW.md) | normative | normative | docs | Commit content, subject contract, evidence policy and documentation synchronization. |
-| [docs/development/reference/ipc.md](development/reference/ipc.md) | reference | reference | frontend | The webview-to-Rust command boundary: registration, capabilities, feature gates and mock fixtures. |
-| [docs/development/reference/accounting.md](development/reference/accounting.md) | reference | reference | backend | Usage semantics, cost arithmetic, settlement, budgets and ledger persistence. |
-| [docs/development/reference/ml-routing.md](development/reference/ml-routing.md) | reference | reference | backend | How a learned model reaches a route: ranking, gate, promotion and rollback. |
-| [docs/development/reference/client-takeover.md](development/reference/client-takeover.md) | reference | reference | backend | Ownership, preview, fingerprint, adopt and release for an external client configuration. |
-| [docs/development/decisions/0001-recoverable-node-records.md](development/decisions/0001-recoverable-node-records.md) | adr | normative | docs | Accepted decisions and their consequences; superseded records stay in place. |
-| [docs/development/decisions/0002-production-ml-boundary.md](development/decisions/0002-production-ml-boundary.md) | adr | normative | docs | Accepted decisions and their consequences; superseded records stay in place. |
-| [docs/development/decisions/0003-capability-media-fail-closed.md](development/decisions/0003-capability-media-fail-closed.md) | adr | normative | docs | Accepted decisions and their consequences; superseded records stay in place. |
-| [docs/development/decisions/0004-failure-outcome-authority.md](development/decisions/0004-failure-outcome-authority.md) | adr | normative | docs | Accepted decisions and their consequences; superseded records stay in place. |
-| [docs/development/decisions/0005-core-p1-node-boundaries.md](development/decisions/0005-core-p1-node-boundaries.md) | adr | normative | docs | Accepted decisions and their consequences; superseded records stay in place. |
-| [docs/development/decisions/0006-ml-closed-loop.md](development/decisions/0006-ml-closed-loop.md) | adr | normative | docs | Accepted decisions and their consequences; superseded records stay in place. |
-| [docs/development/decisions/0007-ml-operator-surface.md](development/decisions/0007-ml-operator-surface.md) | adr | normative | docs | Accepted decisions and their consequences; superseded records stay in place. |
-| [docs/development/decisions/0008-nothing-random-decides.md](development/decisions/0008-nothing-random-decides.md) | adr | normative | docs | Accepted decisions and their consequences; superseded records stay in place. |
-| [docs/development/decisions/0009-user-docs-scope.md](development/decisions/0009-user-docs-scope.md) | adr | normative | docs | Accepted decisions and their consequences; superseded records stay in place. |
-| [docs/archive/README.md](archive/README.md) | index | index | docs | Index of archived audits, plans, records, history and node snapshots; not current fact. |
-| [docs/development/reference/providers.md](development/reference/providers.md) | reference | reference | backend | Provider kinds, NewAPI panels, OpenCode Zen shaping and the CC Switch import. |
-| [docs/development/reference/ui-design-system.md](development/reference/ui-design-system.md) | reference | reference | frontend | Tokens, skins, shell primitives, languages and the frontend gates. |
-| [docs/development/reference/routing-data.md](development/reference/routing-data.md) | reference | reference | backend | Local usage, routing traces and imported history: identity, privacy and retention. |
-| [README.zh-TW.md](../README.zh-TW.md) | guide | guide | docs | Traditional Chinese mirror of README.md. |
-| [docs/development/runbook.md](development/runbook.md) | guide | guide | docs | Start, stop, diagnose, release and roll back Zroutery. |
-| [docs/development/reference/migration.md](development/reference/migration.md) | reference | reference | backend | Client cutover: plan, fingerprint, snapshot, execution and rollback. |
-| [docs/development/reference/accounts.md](development/reference/accounts.md) | reference | reference | backend | Account declarations, panel-token binding, inference keys, check-in and token capture. |
-| [docs/development/reference/protocol.md](development/reference/protocol.md) | reference | reference | backend | Canonical IR, dialect encode/decode, SSE, usage normalisation, reasoning and media. |
-| [docs/development/reference/routing-policy.md](development/reference/routing-policy.md) | reference | reference | backend | Resolution, policy, eligibility, strategy, election and the circuit breaker. |
-| [docs/development/reference/failure.md](development/reference/failure.md) | reference | reference | backend | Failure classes, impact bits, retry/failover rules, safe wire messages and terminal states. |
-| [docs/development/reference/observability.md](development/reference/observability.md) | reference | reference | backend | Request records, health and latency state, activity projection and in-memory sessions. |
-| [docs/development/reference/config.md](development/reference/config.md) | reference | reference | backend | Defaults, validation, normalisation, persistence, secret boundary and feature gates. |
-| [docs/development/reference/security.md](development/reference/security.md) | reference | reference | backend | Local trust boundary: auth, CORS, secrets, webview capabilities, redirects and error redaction. |
-| [docs/development/reference/rectifier.md](development/reference/rectifier.md) | reference | reference | backend | Request-shape repairs, the repair loop, Codex Auto and the breaker exception. |
-| [docs/development/reference/outcome.md](development/reference/outcome.md) | reference | reference | backend | One request outcome: attempts, terminal status, identity evidence, validation and fan-out. |
-| [docs/development/reference/file-transactions.md](development/reference/file-transactions.md) | reference | reference | backend | Crash-recoverable multi-file commits: snapshot, journal, marker, forward recovery and external-edit refusal. |
-| [docs/development/reference/model-catalog.md](development/reference/model-catalog.md) | reference | reference | backend | models.dev fields, cache, lookup widening, enrichment and manual-correction precedence. |
-| [docs/development/reference/request-purpose.md](development/reference/request-purpose.md) | reference | reference | backend | Main versus side queries, shape-based detection, confidence and fail-closed verdicts. |
-| [docs/development/reference/client-attribution.md](development/reference/client-attribution.md) | reference | reference | backend | Reporting attribution ladder, confidence, canonical ids and the bounded registry. |
-| [docs/development/reference/README.md](development/reference/README.md) | index | index | docs | Module-to-reference map and the areas that are covered elsewhere. |
-| [docs/development/reference/implementation-contracts.md](development/reference/implementation-contracts.md) | reference | reference | backend | Module, IPC, lifecycle, takeover, platform and UI boundaries that AGENTS delegates here. |
+| [Agent entry](../AGENTS.md) | entry | normative | docs | The only agent entry: current state, non-negotiables, implementation contracts, documentation sync, verification pointers, stop conditions. |
+| [Contributing](../CONTRIBUTING.md) | guide | guide | docs | Human onboarding: toolchain, commit format, where the rules live. |
+| [Zroutery](../README.md) | guide | guide | docs | User-facing overview, setup and platform support. |
+| [Zroutery (Simplified Chinese)](../README.zh-CN.md) | guide | guide | docs | Simplified Chinese mirror of README.md. |
+| [Documentation Standard](DOCUMENTATION.md) | normative | normative | docs | Document types, authority, source verification, sizes, archive and change synchronization. |
+| [Documentation Index](INDEX.md) | index | index | docs | Generated map of active, pending and archived documents. |
+| [Development Record](development/README.md) | index | index | docs | Short signpost into the development records. |
+| [Current state](development/current-state.md) | fact | fact | docs | Generated snapshot: gates, blockers, flaky gates, last full green. |
+| [Verification](development/verification.md) | normative | normative | backend | The only toolchain and gate definition, including what CI does and does not run. |
+| [Architecture](development/architecture.md) | normative | normative | backend | Layers, boundaries and invariants of Core, the desktop shell and the learning stack. |
+| [Development Workflow](development/WORKFLOW.md) | normative | normative | docs | Commit content, subject contract, evidence policy and documentation synchronization. |
+| [IPC Reference](development/reference/ipc.md) | reference | reference | frontend | The webview-to-Rust command boundary: registration, capabilities, feature gates and mock fixtures. |
+| [Accounting Reference](development/reference/accounting.md) | reference | reference | backend | Usage semantics, cost arithmetic, settlement, budgets and ledger persistence. |
+| [ML Routing Reference](development/reference/ml-routing.md) | reference | reference | backend | How a learned model reaches a route: ranking, gate, promotion and rollback. |
+| [Client Takeover Reference](development/reference/client-takeover.md) | reference | reference | backend | Ownership, preview, fingerprint, adopt and release for an external client configuration. |
+| [ADR-0001: Recoverable Node Record Contract](development/decisions/0001-recoverable-node-records.md) | adr | normative | docs | Use one JSON object per node under `docs/development/node-status/`, with the |
+| [ADR-0002: Production ML Boundary](development/decisions/0002-production-ml-boundary.md) | adr | normative | docs | The production ML boundary was: ML is an optional in-process library, shadow |
+| [ADR-0003: Core Capability and Media Fail-Closed Boundary](development/decisions/0003-capability-media-fail-closed.md) | adr | normative | docs | Policy fallback may select a documented remediation or transform before |
+| [ADR-0004: Canonical Failure and Outcome Authority](development/decisions/0004-failure-outcome-authority.md) | adr | normative | docs | `ClassifiedFailure` constructor is the sole source of retry, fallback, |
+| [ADR-0005: Core P1 Repair Node Boundaries](development/decisions/0005-core-p1-node-boundaries.md) | adr | normative | docs | Split the former broad `CORE-P1-REPAIR` package into five bounded nodes: |
+| [ADR-0006: The ML Closed Loop](development/decisions/0006-ml-closed-loop.md) | adr | normative | docs | ML reaches the routing path, behind a gate, with a fallback and a rollback. |
+| [ADR-0007: The Loop Is Legible and Reversible](development/decisions/0007-ml-operator-surface.md) | adr | normative | docs | The loop ships in the desktop app, and it can be read and undone from it. |
+| [ADR-0008: Nothing Random Decides](development/decisions/0008-nothing-random-decides.md) | adr | normative | docs | `split_samples` now carries each sample's index alongside it and orders by |
+| [ADR-0009: User Documentation Scope](development/decisions/0009-user-docs-scope.md) | adr | normative | docs | Do not expand the README with those sections in this round. Keep it as the |
+| [Archive](archive/README.md) | index | index | docs | Index of archived audits, plans, records, history and node snapshots; not current fact. |
+| [Provider Surfaces Reference](development/reference/providers.md) | reference | reference | backend | Provider kinds, NewAPI panels, OpenCode Zen shaping and the CC Switch import. |
+| [UI Design System Reference](development/reference/ui-design-system.md) | reference | reference | frontend | Tokens, skins, shell primitives, languages and the frontend gates. |
+| [Routing Data Reference](development/reference/routing-data.md) | reference | reference | backend | Local usage, routing traces and imported history: identity, privacy and retention. |
+| [Zroutery (Traditional Chinese)](../README.zh-TW.md) | guide | guide | docs | Traditional Chinese mirror of README.md. |
+| [Runbook](development/runbook.md) | guide | guide | docs | Start, stop, diagnose, release and roll back Zroutery. |
+| [Migration Reference](development/reference/migration.md) | reference | reference | backend | Client cutover: plan, fingerprint, snapshot, execution and rollback. |
+| [Accounts Reference](development/reference/accounts.md) | reference | reference | backend | Account declarations, panel-token binding, inference keys, check-in and token capture. |
+| [Protocol Reference](development/reference/protocol.md) | reference | reference | backend | Canonical IR, dialect encode/decode, SSE, usage normalisation, reasoning and media. |
+| [Routing and Policy Reference](development/reference/routing-policy.md) | reference | reference | backend | Resolution, policy, eligibility, strategy, election and the circuit breaker. |
+| [Failure Reference](development/reference/failure.md) | reference | reference | backend | Failure classes, impact bits, retry/failover rules, safe wire messages and terminal states. |
+| [Observability Reference](development/reference/observability.md) | reference | reference | backend | Request records, health and latency state, activity projection and in-memory sessions. |
+| [Configuration Reference](development/reference/config.md) | reference | reference | backend | Defaults, validation, normalisation, persistence, secret boundary and feature gates. |
+| [Security Reference](development/reference/security.md) | reference | reference | backend | Local trust boundary: auth, CORS, secrets, webview capabilities, redirects and error redaction. |
+| [Rectifier Reference](development/reference/rectifier.md) | reference | reference | backend | Request-shape repairs, the repair loop, Codex Auto and the breaker exception. |
+| [Outcome Reference](development/reference/outcome.md) | reference | reference | backend | One request outcome: attempts, terminal status, identity evidence, validation and fan-out. |
+| [File Transactions Reference](development/reference/file-transactions.md) | reference | reference | backend | Crash-recoverable multi-file commits: snapshot, journal, marker, forward recovery and external-edit refusal. |
+| [Model Catalog Reference](development/reference/model-catalog.md) | reference | reference | backend | models.dev fields, cache, lookup widening, enrichment and manual-correction precedence. |
+| [Request Purpose Reference](development/reference/request-purpose.md) | reference | reference | backend | Main versus side queries, shape-based detection, confidence and fail-closed verdicts. |
+| [Client Attribution Reference](development/reference/client-attribution.md) | reference | reference | backend | Reporting attribution ladder, confidence, canonical ids and the bounded registry. |
+| [Reference Index](development/reference/README.md) | index | index | docs | Module-to-reference map and the areas that are covered elsewhere. |
+| [Implementation Contracts Reference](development/reference/implementation-contracts.md) | reference | reference | backend | Module, IPC, lifecycle, takeover, platform and UI boundaries that AGENTS delegates here. |
 
 ## Pending migration
 

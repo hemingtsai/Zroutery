@@ -1,5 +1,9 @@
 # ADR-0006: The ML Closed Loop
 
+Status: accepted
+Date: 2026-11-14
+Supersedes: ADR-0002
+
 Supersedes ADR-0002.
 
 ## Context
@@ -159,3 +163,9 @@ Five properties are load-bearing:
 - `crates/zroutery-core/tests/promotion_reachability_test.rs`
 - `crates/zroutery-core/src/ml/{traces,learning,comparison,shadow_analysis,promotion,serving,status}.rs`
 - `crates/zroutery-core/tests/ml_closed_loop_test.rs`
+
+## Sources
+
+- `crates/zroutery-core/src/ml/`
+- `docs/development/reference/ml-routing.md`
+- `docs/development/decisions/0002-production-ml-boundary.md`
