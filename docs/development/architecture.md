@@ -53,7 +53,7 @@ ingress handler
 ## 3. Invariants
 
 These are the properties a change must not break. Each is enforced by code or a
-test, not by convention alone.
+test; the evidence table below marks the two that are source-only.
 
 1. **Eligibility is authoritative.** A candidate rejected by a capability or
    policy requirement is not reintroduced by a direct model id. The pipeline

@@ -179,6 +179,12 @@
       "blocked_by": [
         "7G"
       ]
+    },
+    {
+      "id": "ADV",
+      "status": "blocked",
+      "summary": "Rust advisories",
+      "issue": 4
     }
   ],
   "flaky": [
