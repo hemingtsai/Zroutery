@@ -346,5 +346,26 @@
       "cargo test --workspace --all-features --locked"
     ],
     "note": "No token is described as crossing a view; the binding and capture paths are the source."
+  },
+  "docs/development/reference/protocol.md": {
+    "verified_at": "2026-11-14",
+    "sources": {
+      "crates/zroutery-core/src/ir/mod.rs": "sha256:8ce5ac6f85259c3c2265ebdf1f91e306857b9d053b14317e487b4b4f1c85ab0a",
+      "crates/zroutery-core/src/protocol/mod.rs": "sha256:0ab249c5fa67cb585299d26c5412c1b3fbd52cb2a092214160819d24ae40a991",
+      "crates/zroutery-core/src/protocol/anthropic/response.rs": "sha256:dd487f7f7664530ba2648e37a493647e653743a0a254129dda8470aeab6d9f7a",
+      "crates/zroutery-core/src/protocol/openai/response.rs": "sha256:f59f952ef5a3d0fc20c7e7e6f30c9ce80fb8cec14102a30593c05a51637b145c",
+      "crates/zroutery-core/src/protocol/gemini/response.rs": "sha256:76ee38009dd37a039de2a7b7e61e5d58448fd87b29bd8d8a6bc8fd6b53e29c78",
+      "crates/zroutery-core/src/protocol/reasoning_bridge.rs": "sha256:09730b423ea2f8e23cf5e8ea7ca7614148ced37ee2df34944778bb6870a82a1d",
+      "crates/zroutery-core/src/media/collect.rs": "sha256:01ecb091ee888a713cbce6543f0f70c90d9886ef870ebe1cb4d10ff4d5a2dcfe",
+      "crates/zroutery-core/src/media/vision.rs": "sha256:d3bde3494036ff4eacd789550149f71958a2e385e4b7a96d5311f2f3138149ba",
+      "crates/zroutery-core/src/media/transform.rs": "sha256:e880137c2975afcc3e0af7f8dc4323fe8ecfc94c8c34e5135c2985911f8bab6c",
+      "crates/zroutery-core/src/error.rs": "sha256:81cc8c251bc9f6cba72b525fd7361979faf4425b0e32c323cee3c0b7da241c7d",
+      "crates/zroutery-core/src/config/provider.rs": "sha256:5e5c0ad707bae62fcf23bb5b20b0dd1a21a44dc142e3fdb995c4c04bced9391b",
+      "crates/zroutery-core/src/server/pipeline/mod.rs": "sha256:ff5cea3f27a818b38b2a2882c6b64656d342d4344d4c1bee21bdbfaadd5e7320"
+    },
+    "commands": [
+      "cargo test --workspace --all-features --locked"
+    ],
+    "note": "The decoders and encoders are the source; Usage normalisation is the invariant they preserve."
   }
 }

@@ -333,6 +333,20 @@
       "owner": "backend",
       "summary": "Account declarations, panel-token binding, inference keys, check-in and token capture.",
       "max_lines": 250
+    },
+    {
+      "path": "docs/development/reference/protocol.md",
+      "title": "Protocol Reference",
+      "type": "reference",
+      "authority": "reference",
+      "audience": [
+        "human",
+        "agent"
+      ],
+      "status": "active",
+      "owner": "backend",
+      "summary": "Canonical IR, dialect encode/decode, SSE, usage normalisation, reasoning and media.",
+      "max_lines": 300
     }
   ],
   "pending": [],
