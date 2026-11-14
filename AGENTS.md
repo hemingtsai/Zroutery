@@ -97,7 +97,8 @@ copy the commands here.
 
 - Resolve the CI compiler first: `python3 -B scripts/toolchain_gate.py`; use the
   version it reports for clippy and tests. `1.90.0` is the separate MSRV check.
-- Tier 1 is blocking on every change. Tier 2 runs for its relevant surface.
+- Tier 1 is blocking on every change. Tier 2 is surface-specific: the budget and
+  overflow rows block the reachability job; layout and interaction are local-only.
 - A gate that could not run is **unrun**, not passed. Record the reason.
 - A known-red gate is in `current-state.md`; report it, do not silently fix an
   unrelated red gate.
