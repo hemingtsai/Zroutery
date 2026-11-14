@@ -43,6 +43,7 @@ This file is generated from `docs/docs.manifest.json`. Do not edit it.
 | [docs/development/decisions/0007-ml-operator-surface.md](development/decisions/0007-ml-operator-surface.md) | adr | normative | docs | Accepted decisions and their consequences; superseded records stay in place. |
 | [docs/development/decisions/0008-nothing-random-decides.md](development/decisions/0008-nothing-random-decides.md) | adr | normative | docs | Accepted decisions and their consequences; superseded records stay in place. |
 | [docs/archive/README.md](archive/README.md) | index | index | docs | Index of archived audits, plans, records, history and node snapshots; not current fact. |
+| [docs/development/reference/providers.md](development/reference/providers.md) | reference | reference | backend | Provider kinds, NewAPI panels, OpenCode Zen shaping and the CC Switch import. |
 
 ## Pending migration
 
@@ -67,7 +68,7 @@ Audits, findings, triage and risk discussions live in GitHub Issues. Use the `au
 
 ## Health
 
-- active documents: 24
+- active documents: 25
 - pending migration: 6
 - source anchors are checked by `scripts/docs_sources.py`
 - links, sizes and freshness are checked by `scripts/docs_check.py`

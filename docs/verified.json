@@ -184,5 +184,23 @@
       "pnpm audit --prod"
     ],
     "note": "Commands ran on the local toolchain (rustc 1.98.0). The CI-resolved toolchain was not available offline; this is recorded rather than claimed as a CI-toolchain verification."
+  },
+  "docs/development/reference/providers.md": {
+    "verified_at": "2026-11-14",
+    "sources": {
+      "crates/zroutery-core/src/config/provider.rs": "sha256:5e5c0ad707bae62fcf23bb5b20b0dd1a21a44dc142e3fdb995c4c04bced9391b",
+      "crates/zroutery-core/src/config/binding.rs": "sha256:f8610b65e5f4c5a19cc22ccf0302433384fe6c0a634bf2276c0b379f97854ecb",
+      "crates/zroutery-core/src/config/registry.rs": "sha256:0f18de17e1d49c2cb62ab81a611e2b2f41ac3257bd085ed0b2ae032a9c8d703f",
+      "crates/zroutery-core/src/account/adapters/newapi/mod.rs": "sha256:3404a3424c3a853980b7101b28f7fdf217deadcbb0f3486c96ed3dfc384ceea4",
+      "crates/zroutery-core/src/account/adapters/newapi/types.rs": "sha256:986a7321c53e685d27e08e25763f9db7b097e957ccfae175621c3f1d6b231c27",
+      "crates/zroutery-core/src/opencode/mod.rs": "sha256:6aaf5a95d8460d6e16af9263dd4821fece677d5d1211ab1aa9c870b2467e9341",
+      "crates/zroutery-core/src/opencode/console.rs": "sha256:1011cb561d36ad44d81e35658a523e1e2fbb6a05cacac3c5300ff42320ea3e19",
+      "crates/zroutery-core/src/history_import/ccswitch.rs": "sha256:11d6d6c8e623f5cc0057931cdc6c6317b0cc4181c2867e2328ddf767ec8999e2",
+      "src-tauri/src/ccswitch/read.rs": "sha256:345a94d89d617f92cfd1d16fa80bb82ee605a1630f860867ed95257a3b904337"
+    },
+    "commands": [
+      "cargo test --workspace --all-features --locked"
+    ],
+    "note": "The panel and OpenCode behaviours are read from their adapters; real-panel acceptance is not claimed."
   }
 }

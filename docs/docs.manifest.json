@@ -239,6 +239,20 @@
       "owner": "docs",
       "summary": "Index of archived audits, plans, records, history and node snapshots; not current fact.",
       "max_lines": 200
+    },
+    {
+      "path": "docs/development/reference/providers.md",
+      "title": "Provider Surfaces Reference",
+      "type": "reference",
+      "authority": "reference",
+      "audience": [
+        "human",
+        "agent"
+      ],
+      "status": "active",
+      "owner": "backend",
+      "summary": "Provider kinds, NewAPI panels, OpenCode Zen shaping and the CC Switch import.",
+      "max_lines": 300
     }
   ],
   "pending": [
