@@ -67,6 +67,13 @@ Two paths exist, and they are not the same claim:
   `src-tauri/src/checkin_commands.rs::resume_checkin`,
   `src-tauri/src/checkin_commands.rs::cancel_checkin`,
   `src-tauri/src/checkin_commands.rs::get_checkin_status`).
+- The browser engine owns a CDP session, launches the configured browser with a
+  per-account profile and records the DevTools port
+  (`src-tauri/src/checkin/cdp.rs::BrowserSession`,
+  `src-tauri/src/checkin/cdp.rs::launch`,
+  `src-tauri/src/checkin/cdp.rs::build_args`,
+  `src-tauri/src/checkin/profile.rs::profile_dir`,
+  `src-tauri/src/checkin/profile.rs::devtools_port_file`).
 - **HTTP check-in** performs the panel's own API call without a browser
   (`src-tauri/src/checkin_commands.rs::api_checkin`).
 
