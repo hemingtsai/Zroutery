@@ -36,7 +36,10 @@ def check() -> tuple[list[str], list[str]]:
         if git("cat-file", "-e", f"{commit}^{{commit}}").returncode != 0:
             errors.append(f"{doc}: reviewed_commit {commit} is not a commit")
             continue
-        changed = changed_since(commit, list(entry.get("sources", {})))
+        sources = list(entry.get("sources", {}))
+        if not sources:
+            continue
+        changed = changed_since(commit, sources)
         if changed:
             stale.append(f"{doc}: {len(changed)} source(s) changed after {commit}: {', '.join(changed)}")
     return errors, stale

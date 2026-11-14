@@ -167,6 +167,7 @@ jobs:
         run: |
           set -euo pipefail
           python3 -B scripts/docs_contracts.py --base "$BASE_SHA" --head HEAD
+          python3 -B scripts/record_state.py --check --no-range
 
       # Every command the dashboard calls, against every command the backend
       # registers.
