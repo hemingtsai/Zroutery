@@ -475,5 +475,21 @@
       "cargo test --workspace --all-features --locked"
     ],
     "note": "The repair loop and its breaker exception are the source; no retry is described as health-affecting."
+  },
+  "docs/development/reference/outcome.md": {
+    "verified_at": "2026-11-14",
+    "sources": {
+      "crates/zroutery-core/src/outcome/mod.rs": "sha256:e50c59304ab0dc529ed4c9ce7e2b1d18e67ece8df1b1ffb988b7ee4f819745b3",
+      "crates/zroutery-core/src/outcome/status.rs": "sha256:df4e6038fdbdc077b4e055d8bccb8254fcc4f50f93413ddf3c1b71d13ef55a05",
+      "crates/zroutery-core/src/outcome/attempt.rs": "sha256:3f86dac2157c604d3a4331772675ac6753b9af367f7a6fdc1d0ac111367f585d",
+      "crates/zroutery-core/src/outcome/builder.rs": "sha256:d0042b10f52e330497710c328b0ea97f469b8b159f596b7dccf49c5553af82fc",
+      "crates/zroutery-core/src/outcome/validation.rs": "sha256:a4a62eb807a7e4dbdae7026dee3bf420d221af15666f547702a500f2ec2d211d",
+      "crates/zroutery-core/src/outcome/feedback.rs": "sha256:96b1141d7689d9035b46ad5904c3252b063b826bbf808180ba0d1007e42b7e81",
+      "crates/zroutery-core/src/feedback.rs": "sha256:ea0d03916285bac30ec10e1c0d25d3ac94ae68113bae6292f0e098fcea69641c"
+    },
+    "commands": [
+      "cargo test --workspace --all-features --locked"
+    ],
+    "note": "The value model and validation are the source; unknown cost and no-signal feedback remain explicit."
   }
 }

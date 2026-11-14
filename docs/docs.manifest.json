@@ -431,6 +431,20 @@
       "owner": "backend",
       "summary": "Request-shape repairs, the repair loop, Codex Auto and the breaker exception.",
       "max_lines": 300
+    },
+    {
+      "path": "docs/development/reference/outcome.md",
+      "title": "Outcome Reference",
+      "type": "reference",
+      "authority": "reference",
+      "audience": [
+        "human",
+        "agent"
+      ],
+      "status": "active",
+      "owner": "backend",
+      "summary": "One request outcome: attempts, terminal status, identity evidence, validation and fan-out.",
+      "max_lines": 300
     }
   ],
   "pending": [],
