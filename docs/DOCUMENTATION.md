@@ -19,7 +19,12 @@ short on purpose: a rulebook that needs its own rulebook is not a rulebook.
 | 4 | `docs/development/WORKFLOW.md` | how a commit and its evidence are formed |
 | 5 | `docs/development/reference/*` | how one subsystem behaves |
 | 6 | `docs/development/current-state.md` | what is true right now |
-| 7 | `docs/archive/**` | what happened before; never current fact |
+| 7 | `README*.md`, `CONTRIBUTING.md`, `docs/development/runbook.md` | how to use and operate it |
+| 8 | `docs/archive/**` | what happened before; never current fact |
+
+A guide points; it does not own a fact. If a guide and a reference disagree, the
+reference wins. If a guide and `current-state.md` disagree, `current-state.md`
+wins. Change the guide, not the higher-ranked document.
 
 ## Document types
 
@@ -27,7 +32,7 @@ Exactly one type per document. The type decides the required sections.
 
 | Type | Purpose | Required sections | Forbidden |
 |---|---|---|---|
-| `entry` | agent entry | current state, non-negotiables, change matrix, verification pointer, stop conditions | background essays |
+| `entry` | agent entry | current state, non-negotiables, implementation contracts, documentation sync, verification pointer, stop conditions | background essays |
 | `fact` | current facts, generated | gates, open issues, blockers, flaky, last green | hand editing |
 | `normative` | rules and boundaries | scope, rules, canonical commands, change log, see also | unsourced facts, narrative |
 | `guide` | onboarding and runbook | audience, prerequisites, steps, verify, troubleshoot, pointers | restating normative rules |
