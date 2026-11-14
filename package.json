@@ -15,6 +15,6 @@
     "test:layout": "pnpm --dir ui build && python3 scripts/ui_layout_test.py --self-test && python3 scripts/ui_layout_test.py"
   },
   "devDependencies": {
-    "@tauri-apps/cli": "^2.11.4"
+    "@tauri-apps/cli": "^2.12.4"
   }
 }
