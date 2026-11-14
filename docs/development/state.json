@@ -74,6 +74,24 @@
       "detail": "37 modules: 36 owned, 1 covered elsewhere"
     },
     {
+      "name": "rendered state",
+      "status": "pass",
+      "command": "python3 -B scripts/current_state.py --check",
+      "detail": "current-state.md is the render of state.json"
+    },
+    {
+      "name": "invariant evidence",
+      "status": "pass",
+      "command": "python3 -B scripts/invariant_check.py",
+      "detail": "15 invariants, 13 test-backed, 2 explicitly untested"
+    },
+    {
+      "name": "state schema",
+      "status": "pass",
+      "command": "python3 -B scripts/state_check.py",
+      "detail": "schema, enums, issue links, blocker graph and head ancestry"
+    },
+    {
       "name": "whitespace",
       "status": "pass",
       "command": "git diff --check",

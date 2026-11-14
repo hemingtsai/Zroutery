@@ -20,6 +20,9 @@ as of `2026-11-14` · branch `dev` · verified code head `26d887f`
 | documentation impact self-test | **pass** | `python3 -B scripts/docs_impact.py --base <base> --head HEAD` | the self-test passes; the range check is enforced in CI with --base/--head |
 | documentation parity | **pass** | `python3 -B scripts/docs_parity.py --check` | three READMEs have matching headings, fences, images and anchors |
 | module coverage | **pass** | `python3 -B scripts/coverage_check.py` | 37 modules: 36 owned, 1 covered elsewhere |
+| rendered state | **pass** | `python3 -B scripts/current_state.py --check` | current-state.md is the render of state.json |
+| invariant evidence | **pass** | `python3 -B scripts/invariant_check.py` | 15 invariants, 13 test-backed, 2 explicitly untested |
+| state schema | **pass** | `python3 -B scripts/state_check.py` | schema, enums, issue links, blocker graph and head ancestry |
 | whitespace | **pass** | `git diff --check` | no trailing whitespace damage |
 | orchestration docs (legacy) | **retired** | `scripts/orch_docs_test.py (not run)` | legacy node and evidence records are archived; validation retired |
 | UI budget | **pass** | `python3 -B scripts/ui_budget_test.py` | 734,994 B JS of 742,000 |
