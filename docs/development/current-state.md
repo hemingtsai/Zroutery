@@ -46,6 +46,7 @@ as of `2026-11-14` · branch `dev` · verified code head `ad22f8d`
 ## Known flaky
 
 - ui_overflow_test.py / ui_interaction_test.py: Helium 0.21.2 does not fetch modulepreload links after initial parse, so lazy pages stay on the loading fallback. (owner frontend, review by 2026-11-21)
+- clippy and tests / disconnect_cancels_the_buffered_attempt_without_replay: Fails on Linux CI in 2 of 3 runs of the same code (cargo test -p zroutery-core --all-features): passed on 79b1dcf, failed on 21614fe and 223b864, which differ only in documentation. Suspected timing in the buffered-attempt cancellation test; product behaviour not reproduced locally. (owner backend, review by 2026-11-21)
 
 ## Last full green
 
