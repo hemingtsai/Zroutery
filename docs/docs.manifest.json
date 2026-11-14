@@ -305,6 +305,20 @@
       "status": "active",
       "owner": "docs",
       "summary": "Start, stop, diagnose, release and roll back Zroutery."
+    },
+    {
+      "path": "docs/development/reference/migration.md",
+      "title": "Migration Reference",
+      "type": "reference",
+      "authority": "reference",
+      "audience": [
+        "human",
+        "agent"
+      ],
+      "status": "active",
+      "owner": "backend",
+      "summary": "Client cutover: plan, fingerprint, snapshot, execution and rollback.",
+      "max_lines": 250
     }
   ],
   "pending": [],

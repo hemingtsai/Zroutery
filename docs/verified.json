@@ -316,5 +316,20 @@
       "python3 -B scripts/docs_check.py"
     ],
     "note": "Operational facts are anchored to the commands, config paths, bundle and rollback state; the start/stop steps are exercised manually."
+  },
+  "docs/development/reference/migration.md": {
+    "verified_at": "2026-11-14",
+    "sources": {
+      "crates/zroutery-core/src/migration/state.rs": "sha256:3d683b8a4f97f62fdb00b20843dc6012b33ee34ac4bef445b3265d7d43308728",
+      "crates/zroutery-core/src/migration/executor.rs": "sha256:2ba57bc9112cd0eb6a3d4d7e9335f5389eb5cb53257342b24ff2ac26c65da854",
+      "crates/zroutery-core/src/migration/result.rs": "sha256:1a46dd5f0fde1375a49b7242460911207404a0dec4adda7705563b995228f6f2",
+      "crates/zroutery-core/src/migration/store.rs": "sha256:42729f1fa90ac68c5658ef32c4b77966f24b67ca0a1ebe7413e24dd54af5223b",
+      "src-tauri/src/migration.rs": "sha256:bed0077fa0842c1353d5ec68b7f4a15d9dfa424235b3f25fbc4b4dc3c94647b1",
+      "src-tauri/src/migration_commands.rs": "sha256:6f653efd692f74e82be5e3afe7b4233a4403f6d071b9a37d42b29f8474e5cbbf"
+    },
+    "commands": [
+      "cargo test --workspace --all-features --locked"
+    ],
+    "note": "The plan/fingerprint/snapshot path is the source; the reference does not claim a specific client migration."
   }
 }

@@ -48,6 +48,7 @@ This file is generated from `docs/docs.manifest.json`. Do not edit it.
 | [docs/development/reference/routing-data.md](development/reference/routing-data.md) | reference | reference | backend | Local usage, routing traces and imported history: identity, privacy and retention. |
 | [README.zh-TW.md](../README.zh-TW.md) | guide | guide | docs | Traditional Chinese mirror of README.md. |
 | [docs/development/runbook.md](development/runbook.md) | guide | guide | docs | Start, stop, diagnose, release and roll back Zroutery. |
+| [docs/development/reference/migration.md](development/reference/migration.md) | reference | reference | backend | Client cutover: plan, fingerprint, snapshot, execution and rollback. |
 
 ## Pending migration
 
@@ -65,9 +66,9 @@ Audits, findings, triage and risk discussions live in GitHub Issues. Use the `au
 
 ## Health
 
-- active documents: 29
-- source-anchored (non-ADR): 17
-- hash-ledgered: 17
+- active documents: 30
+- source-anchored (non-ADR): 18
+- hash-ledgered: 18
 - guides: 5
 - ADRs: 8 (5 with code anchors; decision records, not machine-verified)
 - generated/index: 4
