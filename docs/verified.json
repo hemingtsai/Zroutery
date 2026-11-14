@@ -198,7 +198,7 @@
       "python3 -B scripts/commit_contract_test.py --self-test"
     ],
     "note": "Toolchain and pnpm pins are read from the manifests; the commit allowlists are owned by the validator and are not copied into prose.",
-    "reviewed_commit": "2ea9033e0b7d04e1b157d6606553d9f0dcdd7ea6",
+    "reviewed_commit": "ad22f8d2894d81e601ec966d797e9fc87081365f",
     "reviewed_by": "verifier-agent",
     "reviewed_at": "2026-11-14",
     "sample": [
@@ -258,7 +258,7 @@
       "pnpm audit --prod"
     ],
     "note": "Commands ran on the local toolchain (rustc 1.98.0). The CI-resolved toolchain was not available offline; this is recorded rather than claimed as a CI-toolchain verification.",
-    "reviewed_commit": "2ea9033e0b7d04e1b157d6606553d9f0dcdd7ea6",
+    "reviewed_commit": "ad22f8d2894d81e601ec966d797e9fc87081365f",
     "reviewed_by": "verifier-agent",
     "reviewed_at": "2026-11-14",
     "sample": [
@@ -378,7 +378,7 @@
       "pnpm --dir ui test"
     ],
     "note": "Key facts are anchored to the manifest, defaults, routes, bundle and data-path code; translations share the same anchors.",
-    "reviewed_commit": "2ea9033e0b7d04e1b157d6606553d9f0dcdd7ea6",
+    "reviewed_commit": "ad22f8d2894d81e601ec966d797e9fc87081365f",
     "reviewed_by": "verifier-agent",
     "reviewed_at": "2026-11-14",
     "sample": [
@@ -413,7 +413,7 @@
       "pnpm --dir ui test"
     ],
     "note": "Key facts are anchored to the manifest, defaults, routes, bundle and data-path code; translations share the same anchors.",
-    "reviewed_commit": "2ea9033e0b7d04e1b157d6606553d9f0dcdd7ea6",
+    "reviewed_commit": "ad22f8d2894d81e601ec966d797e9fc87081365f",
     "reviewed_by": "verifier-agent",
     "reviewed_at": "2026-11-14",
     "sample": [
@@ -448,7 +448,7 @@
       "pnpm --dir ui test"
     ],
     "note": "Key facts are anchored to the manifest, defaults, routes, bundle and data-path code; translations share the same anchors.",
-    "reviewed_commit": "2ea9033e0b7d04e1b157d6606553d9f0dcdd7ea6",
+    "reviewed_commit": "ad22f8d2894d81e601ec966d797e9fc87081365f",
     "reviewed_by": "verifier-agent",
     "reviewed_at": "2026-11-14",
     "sample": [
@@ -475,7 +475,7 @@
       "python3 -B scripts/docs_check.py"
     ],
     "note": "Operational facts are anchored to the commands, config paths, bundle and rollback state; the start/stop steps are exercised manually.",
-    "reviewed_commit": "2ea9033e0b7d04e1b157d6606553d9f0dcdd7ea6",
+    "reviewed_commit": "ad22f8d2894d81e601ec966d797e9fc87081365f",
     "reviewed_by": "verifier-agent",
     "reviewed_at": "2026-11-14",
     "sample": [
