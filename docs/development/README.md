@@ -8,7 +8,9 @@ This directory holds the current development documentation. The generated map is
 
 ## Reading order
 
-1. [current-state.md](current-state.md) — what is red, blocked or flaky right now.
+1. [state.json](state.json) — the machine truth, validated by
+   [state.schema.json](state.schema.json); [current-state.md](current-state.md)
+   is its rendered view.
 2. [../../AGENTS.md](../../AGENTS.md) — what an agent may do.
 3. [verification.md](verification.md) — the only toolchain and gate definitions.
 4. [architecture.md](architecture.md) — layers and invariants.
@@ -20,7 +22,9 @@ This directory holds the current development documentation. The generated map is
 |---|---|
 | `decisions/` | accepted ADRs; superseded records stay in place |
 | `reference/` | one page per subsystem, source-verified |
-| `current-state.md` | generated facts; never hand-edited |
+| `state.json` | machine facts; the only editable status source |
+| `state.schema.json` | the schema state.json is validated against |
+| `current-state.md` | generated render of state.json; never hand-edited |
 | `verification.md` | canonical gates and CI coverage |
 | `architecture.md` | boundaries and invariants |
 

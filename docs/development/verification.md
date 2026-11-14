@@ -140,6 +140,8 @@ Consequences, stated rather than discovered:
   elsewhere, or explicitly unowned with a reason.
 - `invariant_check.py` requires every architecture invariant to name a test anchor
   or an explicit `untested` reason.
+- `current_state.py --check` fails when `current-state.md` is not the render of
+  `state.json`; hand edits are not a source.
 - `state_check.py` validates `state.json` against `state.schema.json` and checks
   issue links, blocker dependencies and cycles.
 - `docs_parity.py` checks that the three READMEs have matching headings, fences,

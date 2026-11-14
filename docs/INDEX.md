@@ -10,9 +10,9 @@ This file is generated from `docs/docs.manifest.json`. Do not edit it.
 
 ## Reading paths
 
-- **New agent:** `docs/development/current-state.md` → `AGENTS.md` → `docs/development/verification.md`.
+- **New agent:** `docs/development/state.json` → `AGENTS.md` → `docs/development/verification.md`.
 - **Human contributor:** `CONTRIBUTING.md` → `docs/development/architecture.md` → `docs/development/WORKFLOW.md`.
-- **Operator:** `docs/development/current-state.md` → `docs/development/verification.md` (Tier 2).
+- **Operator:** `docs/development/state.json` → `docs/development/verification.md` (Tier 2).
 - **History:** `docs/archive/README.md`.
 
 ## Active documents

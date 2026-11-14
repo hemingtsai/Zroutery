@@ -175,6 +175,7 @@ jobs:
           python3 -B scripts/docs_parity.py --check
           python3 -B scripts/state_check.py --self-test
           python3 -B scripts/state_check.py
+          python3 -B scripts/current_state.py --check
           python3 -B scripts/invariant_check.py
           python3 -B scripts/coverage_check.py --self-test
           python3 -B scripts/coverage_check.py
