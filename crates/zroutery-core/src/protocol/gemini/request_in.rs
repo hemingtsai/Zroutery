@@ -84,7 +84,17 @@ pub fn decode_request(body: Value) -> Result<ChatRequest> {
         if let Some(parts) = content.get("parts").and_then(Value::as_array) {
             for part in parts {
                 if let Some(text) = part.get("text").and_then(Value::as_str) {
-                    blocks.push(ContentBlock::text(text));
+                    if part.get("thought").and_then(Value::as_bool) == Some(true) {
+                        blocks.push(ContentBlock::Thinking {
+                            text: text.to_string(),
+                            signature: part
+                                .get("thoughtSignature")
+                                .and_then(Value::as_str)
+                                .map(str::to_string),
+                        });
+                    } else {
+                        blocks.push(ContentBlock::text(text));
+                    }
                 } else if let Some(call) = part.get("functionCall") {
                     let name = call
                         .get("name")

@@ -38,7 +38,17 @@ pub fn decode_response(body: Value) -> Result<ChatResponse> {
         {
             for part in parts {
                 if let Some(text) = part.get("text").and_then(Value::as_str) {
-                    content.push(ContentBlock::text(text));
+                    if part.get("thought").and_then(Value::as_bool) == Some(true) {
+                        content.push(ContentBlock::Thinking {
+                            text: text.to_string(),
+                            signature: part
+                                .get("thoughtSignature")
+                                .and_then(Value::as_str)
+                                .map(str::to_string),
+                        });
+                    } else {
+                        content.push(ContentBlock::text(text));
+                    }
                 } else if let Some(call) = part.get("functionCall") {
                     let id = call.get("id").and_then(Value::as_str).ok_or_else(|| {
                         Error::BadUpstreamPayload("functionCall is missing `id`".into())
@@ -157,6 +167,7 @@ pub fn encode_response(resp: &ChatResponse) -> Value {
         .iter()
         .map(|b| match b {
             ContentBlock::Text { text, .. } => json!({"text": text}),
+            ContentBlock::Thinking { text, .. } => json!({"text": text, "thought": true}),
             ContentBlock::ToolUse { id, name, input } => json!({
                 "functionCall": {"id": id, "name": name, "args": input}
             }),
