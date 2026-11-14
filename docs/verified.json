@@ -159,7 +159,7 @@
       "python3 -B scripts/commit_contract_test.py --self-test"
     ],
     "note": "Toolchain and pnpm pins are read from the manifests; the commit allowlists are owned by the validator and are not copied into prose.",
-    "reviewed_commit": "db37a39"
+    "reviewed_commit": "ebe8b1e"
   },
   "docs/DOCUMENTATION.md": {
     "verified_at": "2026-11-14",
@@ -282,7 +282,7 @@
       "pnpm --dir ui test"
     ],
     "note": "Key facts are anchored to the manifest, defaults, routes, bundle and data-path code; translations share the same anchors.",
-    "reviewed_commit": "e1649af"
+    "reviewed_commit": "ebe8b1e"
   },
   "README.zh-CN.md": {
     "verified_at": "2026-11-14",
@@ -303,7 +303,7 @@
       "pnpm --dir ui test"
     ],
     "note": "Key facts are anchored to the manifest, defaults, routes, bundle and data-path code; translations share the same anchors.",
-    "reviewed_commit": "e1649af"
+    "reviewed_commit": "ebe8b1e"
   },
   "README.zh-TW.md": {
     "verified_at": "2026-11-14",
@@ -324,7 +324,7 @@
       "pnpm --dir ui test"
     ],
     "note": "Key facts are anchored to the manifest, defaults, routes, bundle and data-path code; translations share the same anchors.",
-    "reviewed_commit": "e1649af"
+    "reviewed_commit": "ebe8b1e"
   },
   "docs/development/runbook.md": {
     "verified_at": "2026-11-14",
@@ -341,7 +341,7 @@
       "python3 -B scripts/docs_check.py"
     ],
     "note": "Operational facts are anchored to the commands, config paths, bundle and rollback state; the start/stop steps are exercised manually.",
-    "reviewed_commit": "998424f"
+    "reviewed_commit": "ebe8b1e"
   },
   "docs/development/reference/migration.md": {
     "verified_at": "2026-11-14",
