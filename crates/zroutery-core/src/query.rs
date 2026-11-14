@@ -29,6 +29,9 @@ pub enum SideQueryKind {
     /// — may this action run without asking the user? — asked in a different
     /// protocol, so it is routed to the same review pool.
     CodexGuardian,
+    /// Codex's asynchronous trajectory scorer uses a bare high/low token,
+    /// not the synchronous reviewer's JSON outcome contract.
+    CodexGuardianRisk,
 }
 
 impl SideQueryKind {
@@ -37,6 +40,7 @@ impl SideQueryKind {
         match self {
             SideQueryKind::AutoMode => "auto_mode",
             SideQueryKind::CodexGuardian => "codex_guardian",
+            SideQueryKind::CodexGuardianRisk => "codex_guardian_risk",
         }
     }
 
@@ -67,6 +71,7 @@ impl RequestKind {
             RequestKind::Main => "main",
             RequestKind::Side(SideQueryKind::AutoMode) => "auto_mode",
             RequestKind::Side(SideQueryKind::CodexGuardian) => "codex_guardian",
+            RequestKind::Side(SideQueryKind::CodexGuardianRisk) => "codex_guardian_risk",
         }
     }
 
@@ -92,7 +97,8 @@ impl<'de> Deserialize<'de> for RequestKind {
         impl<'de> serde::de::Visitor<'de> for Visitor {
             type Value = RequestKind;
             fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-                formatter.write_str("`main`, `auto_mode` or `codex_guardian`")
+                formatter
+                    .write_str("`main`, `auto_mode`, `codex_guardian` or `codex_guardian_risk`")
             }
             fn visit_str<E: serde::de::Error>(
                 self,
@@ -102,9 +108,12 @@ impl<'de> Deserialize<'de> for RequestKind {
                     "main" => Ok(RequestKind::Main),
                     "auto_mode" => Ok(RequestKind::Side(SideQueryKind::AutoMode)),
                     "codex_guardian" => Ok(RequestKind::Side(SideQueryKind::CodexGuardian)),
+                    "codex_guardian_risk" => {
+                        Ok(RequestKind::Side(SideQueryKind::CodexGuardianRisk))
+                    }
                     other => Err(E::unknown_variant(
                         other,
-                        &["main", "auto_mode", "codex_guardian"],
+                        &["main", "auto_mode", "codex_guardian", "codex_guardian_risk"],
                     )),
                 }
             }

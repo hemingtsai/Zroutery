@@ -341,7 +341,7 @@ export interface BuiltinDetectors {
   anthropic_beta: boolean;
   xml_classifier_signature: boolean;
   model_1m_signature: boolean;
-  /** Codex Guardian's auto-review prompt; see the Rust `is_codex_guardian`. */
+  /** Codex Guardian's synchronous/asynchronous review prompts. */
   codex_guardian_signature: boolean;
 }
 
@@ -442,14 +442,14 @@ export interface VisionConfig {
 }
 
 /** What a request was for: the main conversation or a side query. */
-export type RequestKind = "main" | "auto_mode" | "codex_guardian";
+export type RequestKind = "main" | "auto_mode" | "codex_guardian" | "codex_guardian_risk";
 
 /**
  * Whether a request is a side query rather than the conversation itself.
  *
  * Every side kind is served from the Auto review pool and reported as review
  * traffic, whatever protocol the client asked in (`<block>` for Claude Code,
- * JSON `outcome` for Codex's Guardian). Testing a record against one kind by
+ * JSON `outcome` or high/low for Codex's Guardian). Testing a record against one kind by
  * name would show the other as ordinary traffic.
  */
 export function isSideKind(kind: RequestKind): boolean {

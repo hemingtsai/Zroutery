@@ -321,6 +321,45 @@ async fn an_unconfident_answer_blocks_the_action() {
     h.shutdown().await;
 }
 
+#[tokio::test]
+async fn guardian_decision_answers_match_risk_and_review_contracts() {
+    for (noul, allowed) in [(0.02, true), (0.97, false), (0.5, false)] {
+        let (base, mock) = start_decision_endpoint(noul).await;
+        let h = Harness::start(config_for(&base, 0.85)).await;
+        for (instructions, risk) in [
+            ("You are acting as a first-step asynchronous security reviewer. Return only high or low.", true),
+            ("You are judging one planned coding-agent action. Derive outcome from risk_level and user_authorization. Return allow or deny.", false),
+        ] {
+            for streaming in [false, true] {
+                let response = reqwest::Client::new().post(format!("{}/v1/responses", h.base))
+                    .header("x-api-key", TOKEN)
+                    .json(&json!({"model":"guardian-alias", "stream":streaming,
+                        "instructions":instructions, "input":"Review this planned action."}))
+                    .send().await.unwrap();
+                let status = response.status();
+                let wire = response.text().await.unwrap();
+                assert_eq!(status, 200, "{wire}");
+                let body: Value = if streaming {
+                    wire.lines().filter_map(|line| line.strip_prefix("data: "))
+                        .filter_map(|data| serde_json::from_str::<Value>(data).ok())
+                        .find(|event| event["type"] == "response.completed").unwrap()["response"].clone()
+                } else {
+                    serde_json::from_str(&wire).unwrap()
+                };
+                let text = body["output"][0]["content"][0]["text"].as_str().unwrap();
+                if risk {
+                    assert_eq!(text, if allowed { "low" } else { "high" });
+                } else {
+                    let verdict: Value = serde_json::from_str(text).unwrap();
+                    assert_eq!(verdict["outcome"], if allowed { "allow" } else { "deny" });
+                }
+            }
+        }
+        assert_eq!(mock.bodies().len(), 4);
+        h.shutdown().await;
+    }
+}
+
 /// A decision model is not a candidate for main traffic.
 ///
 /// It answers typed questions and cannot answer a request that wants prose,
