@@ -375,6 +375,20 @@
       "owner": "backend",
       "summary": "Failure classes, impact bits, retry/failover rules, safe wire messages and terminal states.",
       "max_lines": 250
+    },
+    {
+      "path": "docs/development/reference/observability.md",
+      "title": "Observability Reference",
+      "type": "reference",
+      "authority": "reference",
+      "audience": [
+        "human",
+        "agent"
+      ],
+      "status": "active",
+      "owner": "backend",
+      "summary": "Request records, health and latency state, activity projection and in-memory sessions.",
+      "max_lines": 250
     }
   ],
   "pending": [],
