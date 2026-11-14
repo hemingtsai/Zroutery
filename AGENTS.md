@@ -89,8 +89,8 @@ permission and process.
   gate, a blocker, a quarantine); `current_state.py` renders it into
   `current-state.md`. The finding and its discussion stay in the Issue.
 - `docs/development/node-status/`, the evidence registry and the execution
-  records are legacy history. Do not add new records there; they are being
-  archived. The current facts live in `current-state.md`.
+  records are legacy history. Do not add new records there; they are archived.
+  The current facts live in `current-state.md`.
 
 ## Verification
 

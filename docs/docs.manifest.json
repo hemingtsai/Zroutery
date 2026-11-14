@@ -11,7 +11,7 @@
       ],
       "status": "active",
       "owner": "docs",
-      "summary": "The only agent entry: current state, non-negotiables, change matrix, verification pointers, stop conditions.",
+      "summary": "The only agent entry: current state, non-negotiables, implementation contracts, documentation sync, verification pointers, stop conditions.",
       "max_lines": 150,
       "triggers": [
         "src-tauri/src/lib.rs",

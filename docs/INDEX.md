@@ -19,7 +19,7 @@ This file is generated from `docs/docs.manifest.json`. Do not edit it.
 
 | Document | Type | Authority | Owner | Summary |
 |---|---|---|---|---|
-| [AGENTS.md](../AGENTS.md) | entry | normative | docs | The only agent entry: current state, non-negotiables, change matrix, verification pointers, stop conditions. |
+| [AGENTS.md](../AGENTS.md) | entry | normative | docs | The only agent entry: current state, non-negotiables, implementation contracts, documentation sync, verification pointers, stop conditions. |
 | [CONTRIBUTING.md](../CONTRIBUTING.md) | guide | guide | docs | Human onboarding: toolchain, commit format, where the rules live. |
 | [README.md](../README.md) | guide | guide | docs | User-facing overview, setup and platform support. |
 | [README.zh-CN.md](../README.zh-CN.md) | guide | guide | docs | Simplified Chinese mirror of README.md. |
