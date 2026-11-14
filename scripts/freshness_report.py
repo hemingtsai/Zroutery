@@ -75,9 +75,10 @@ def check(root: Path = ROOT) -> tuple[list[str], list[str], list[str]]:
 
 
 def summary(count: int, same_change: list[str]) -> str:
+    noun = "document" if count == 1 else "documents"
     if same_change:
-        return f"freshness: {count} documents; every post-review source change is covered by a same-change document edit"
-    return f"freshness: {count} documents; no source changed after its review commit"
+        return f"freshness: {count} {noun}; every post-review source change is covered by a same-change document edit"
+    return f"freshness: {count} {noun}; no source changed after its review commit"
 
 
 def fixture(temporary: str) -> tuple[Path, str]:
@@ -153,13 +154,14 @@ def self_test() -> int:
             json.dumps({"docs/guide.md": {"reviewed_commit": source, "sources": {"src/sample.rs": "sha256:new"}}}),
             encoding="utf-8",
         )
-        git(root, "add", "docs/verified.json")
-        git(root, "commit", "-qm", "advance baseline")
+        (root / "docs" / "guide.md").write_text("value is two\n", encoding="utf-8")
+        git(root, "add", "docs/verified.json", "docs/guide.md")
+        git(root, "commit", "-qm", "advance baseline and document")
         errors, stale, same_change = check(root)
         if errors or stale or same_change:
             print("freshness self-test: advanced baseline was not accepted", file=sys.stderr)
             return 1
-        if summary(1, same_change) != "freshness: 1 documents; no source changed after its review commit":
+        if summary(1, same_change) != "freshness: 1 document; no source changed after its review commit":
             print("freshness self-test: advanced-baseline summary is wrong", file=sys.stderr)
             return 1
 
