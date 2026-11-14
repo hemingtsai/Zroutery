@@ -161,7 +161,9 @@ Consequences, stated rather than discovered:
   executed `docs_contracts.py` step, and that every gated step is registered.
 - `record_state.py` runs `docs_contracts.py --json` and writes the documentation
   gate status, `ran_at` and commit into `state.json`; hand-filled doc statuses
-  are not the source.
+  are not the source. `documentation contracts (local)` is the state truth;
+  `documentation impact (range)` is CI-only and stays `unverified` in a local
+  snapshot until a base is supplied.
 - Commit messages are checked by the CI range; no local `commit-msg` hook is
   installed. `state_check.py` also validates that every gate `commit` exists and
   is an ancestor of HEAD, and that `ran_at` is an ISO timestamp.

@@ -14,16 +14,9 @@ ROOT = Path(__file__).resolve().parents[1]
 STATE = Path("docs/development/state.json")
 
 
-def expected(doc_results: list[dict]) -> tuple[str, str]:
+def expected_local(doc_results: list[dict]) -> str:
     non_range = [item for item in doc_results if item["gate"] != "documentation impact (range)"]
-    local = "pass" if all(item["status"] == "pass" for item in non_range) else "fail"
-    if any(item["status"] == "fail" for item in doc_results):
-        aggregate = "fail"
-    elif any(item["status"] == "unverified" for item in doc_results):
-        aggregate = "unverified"
-    else:
-        aggregate = "pass"
-    return local, aggregate
+    return "pass" if all(item["status"] == "pass" for item in non_range) else "fail"
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -53,26 +46,25 @@ def main(argv: list[str] | None = None) -> int:
     state = json.loads((ROOT / STATE).read_text(encoding="utf-8"))
     gates = {gate["name"]: gate for gate in state["gates"]}
     doc_results = [item for item in report["results"] if item["gate"]]
-    local, aggregate_status = expected(doc_results)
+    local = expected_local(doc_results)
 
     if args.check:
         mismatches = []
         for item in doc_results:
+            if item["gate"] == "documentation impact (range)":
+                continue
             gate = gates.get(item["gate"])
             if gate is None or gate.get("status") != item["status"]:
                 mismatches.append(f"{item['gate']}: state={gate.get('status') if gate else 'missing'} run={item['status']}")
         local_gate = gates.get("documentation contracts (local)")
         if local_gate is None or local_gate.get("status") != local:
             mismatches.append(f"documentation contracts (local): state={local_gate.get('status') if local_gate else 'missing'} run={local}")
-        aggregate = gates.get("documentation contracts")
-        if aggregate is None or aggregate.get("status") != aggregate_status:
-            mismatches.append(f"documentation contracts: state={aggregate.get('status') if aggregate else 'missing'} run={aggregate_status}")
         if mismatches:
             for mismatch in mismatches:
                 print(f"record-state: state differs: {mismatch}", file=sys.stderr)
             print("fix: run `python3 -B scripts/record_state.py --no-range` and commit the state change", file=sys.stderr)
             return 1
-        print(f"record-state: state matches the run ({len(doc_results)} gates)")
+        print(f"record-state: state matches the local run ({len(doc_results)} gates)")
         return 0
 
     ran_at = dt.datetime.now(dt.timezone.utc).isoformat(timespec="seconds")
@@ -90,31 +82,32 @@ def main(argv: list[str] | None = None) -> int:
         gate["ran_at"] = ran_at
         if commit:
             gate["commit"] = commit
+        if item["gate"] == "documentation impact (range)" and item["status"] == "unverified":
+            gate["detail"] = "CI-only: pass --base to verify the range"
 
-    for name, status, detail in [
-        ("documentation contracts (local)", local, "all non-range docs gates"),
-        ("documentation contracts", aggregate_status, "all docs gates, including range"),
-    ]:
-        gate = gates.get(name)
-        if gate is None:
-            gate = {"name": name}
-            state["gates"].append(gate)
-            gates[name] = gate
-        gate["status"] = status
-        gate["command"] = "python3 -B scripts/docs_contracts.py"
-        gate["detail"] = detail
-        gate["ran_at"] = ran_at
-        if commit:
-            gate["commit"] = commit
+    local_gate = gates.get("documentation contracts (local)")
+    if local_gate is None:
+        local_gate = {"name": "documentation contracts (local)"}
+        state["gates"].append(local_gate)
+        gates["documentation contracts (local)"] = local_gate
+    local_gate["status"] = local
+    local_gate["command"] = "python3 -B scripts/docs_contracts.py"
+    local_gate["detail"] = "all non-range documentation gates"
+    local_gate["ran_at"] = ran_at
+    if commit:
+        local_gate["commit"] = commit
+
+    # Remove the old ambiguous aggregate if it is still present.
+    state["gates"] = [gate for gate in state["gates"] if gate["name"] != "documentation contracts"]
 
     if args.dry_run:
-        print(json.dumps({"local": local, "aggregate": aggregate_status, "gates": doc_results}, indent=2))
-        return 0
+        print(json.dumps({"local": local, "gates": doc_results}, indent=2))
+        return 1 if local == "fail" else 0
 
     (ROOT / STATE).write_text(json.dumps(state, indent=2) + "\n", encoding="utf-8")
     subprocess.run([sys.executable, "-B", "scripts/current_state.py", "--write"], cwd=ROOT, check=False)
-    print(f"record-state: local {local}, aggregate {aggregate_status} ({len(doc_results)} gates)")
-    return 1 if aggregate_status == "fail" else 0
+    print(f"record-state: local {local} ({len(doc_results)} gates)")
+    return 1 if local == "fail" else 0
 
 
 if __name__ == "__main__":

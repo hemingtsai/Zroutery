@@ -16,20 +16,41 @@ sys.path.insert(0, str(ROOT / "scripts"))
 from docs_contracts import STEPS  # noqa: E402
 
 
+def page_rows(root: Path) -> dict[str, tuple[str, str, str]]:
+    page = root / "docs" / "development" / "reference" / "documentation-rules.md"
+    rows: dict[str, tuple[str, str, str]] = {}
+    if not page.is_file():
+        return rows
+    for line in page.read_text(encoding="utf-8").splitlines():
+        match = re.match(r"^\| (DOC-\d{2}) \| ([^|]*) \| ([^|]*) \| ([^|]*) \|$", line)
+        if match:
+            rows[match.group(1)] = (
+                match.group(2).strip().replace("`", ""),
+                match.group(3).strip().replace("`", ""),
+                match.group(4).strip(),
+            )
+    return rows
+
+
 def files_errors(root: Path) -> list[str]:
     errors = []
     hook = root / ".githooks" / "pre-commit"
     if not hook.is_file() or not (hook.stat().st_mode & 0o111):
         errors.append("pre-commit hook is missing or not executable")
-    ci = root / ".github" / "workflows" / "ci.yml"
-    if not ci.is_file() or "scripts/docs_contracts.py" not in ci.read_text(encoding="utf-8"):
-        errors.append("CI does not invoke scripts/docs_contracts.py")
-    page = root / "docs" / "development" / "reference" / "documentation-rules.md"
-    if page.is_file():
-        page_ids = set(re.findall(r"\| (DOC-\d{2}) \|", page.read_text(encoding="utf-8")))
     else:
-        page_ids = set()
-    return errors + [f"rules page is missing {identifier}" for identifier in []], page_ids
+        text = hook.read_text(encoding="utf-8")
+        for script in ("scripts/docs_contracts.py", "scripts/record_state.py"):
+            if script not in text:
+                errors.append(f"pre-commit hook does not invoke {script}")
+    ci = root / ".github" / "workflows" / "ci.yml"
+    if not ci.is_file():
+        errors.append("CI workflow is missing")
+    else:
+        active = [line for line in ci.read_text(encoding="utf-8").splitlines() if not line.lstrip().startswith("#")]
+        if not any("scripts/docs_contracts.py" in line for line in active):
+            errors.append("CI has no active run step invoking scripts/docs_contracts.py")
+    return errors
+
 
 
 def validate(data: dict, step_names: set[str], root: Path | None = None) -> list[str]:
@@ -60,12 +81,23 @@ def validate(data: dict, step_names: set[str], root: Path | None = None) -> list
     for step in missing:
         errors.append(f"executed gate `{step}` has no registered rule")
     if root is not None:
-        file_errors, page_ids = files_errors(root)
-        errors.extend(file_errors)
-        rule_ids = {rule.get("id") for rule in rules}
-        for identifier in sorted(rule_ids - page_ids):
-            errors.append(f"rules page is missing {identifier}")
-        for identifier in sorted(page_ids - rule_ids):
+        errors.extend(files_errors(root))
+        rows = page_rows(root)
+        for rule in rules:
+            identifier = rule.get("id")
+            row = rows.get(identifier)
+            if row is None:
+                errors.append(f"rules page is missing {identifier}")
+                continue
+            page_rule, page_enforced, page_type = row
+            expected_enforced = ", ".join(rule.get("enforced_by", [])) if rule.get("type") == "machine" else rule.get("manual", "")
+            if page_rule != rule.get("rule"):
+                errors.append(f"{identifier}: rules page text differs from rules.json")
+            if page_enforced != expected_enforced:
+                errors.append(f"{identifier}: rules page enforced_by `{page_enforced}` differs from `{expected_enforced}`")
+            if page_type != rule.get("type"):
+                errors.append(f"{identifier}: rules page type `{page_type}` differs from `{rule.get('type')}`")
+        for identifier in sorted(set(rows) - {rule.get("id") for rule in rules}):
             errors.append(f"rules page has unknown {identifier}")
     return errors
 

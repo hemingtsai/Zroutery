@@ -39,44 +39,36 @@
       "detail": "90 interface commands, 254 registered"
     },
     {
-      "name": "documentation contracts",
-      "status": "unverified",
-      "command": "python3 -B scripts/docs_contracts.py",
-      "detail": "all docs gates, including range",
-      "ran_at": "2026-11-14T07:15:05+00:00",
-      "commit": "fa7a122"
-    },
-    {
       "name": "documentation impact (range)",
       "status": "unverified",
       "command": "python3 -B scripts/docs_contracts.py --base <base> --head HEAD",
-      "detail": "UNVERIFIED (range check disabled with --no-range) (fa7a122)",
-      "ran_at": "2026-11-14T07:15:05+00:00",
-      "commit": "fa7a122"
+      "detail": "CI-only: pass --base to verify the range",
+      "ran_at": "2026-11-14T07:23:51+00:00",
+      "commit": "e216dfa"
     },
     {
       "name": "documentation sources",
       "status": "pass",
       "command": "python3 -B scripts/docs_sources.py --check",
-      "detail": "docs-sources: 799 anchor(s) resolved in 36 active document(s) (fa7a122)",
-      "ran_at": "2026-11-14T07:15:05+00:00",
-      "commit": "fa7a122"
+      "detail": "docs-sources: 798 anchor(s) resolved in 36 active document(s) (e216dfa)",
+      "ran_at": "2026-11-14T07:23:51+00:00",
+      "commit": "e216dfa"
     },
     {
       "name": "markdown structure",
       "status": "pass",
       "command": "python3 -B scripts/markdown_check.py",
-      "detail": "markdown-check: fenced blocks and tables are well formed (fa7a122)",
-      "ran_at": "2026-11-14T07:15:05+00:00",
-      "commit": "fa7a122"
+      "detail": "markdown-check: fenced blocks and tables are well formed (e216dfa)",
+      "ran_at": "2026-11-14T07:23:51+00:00",
+      "commit": "e216dfa"
     },
     {
       "name": "documentation check",
       "status": "pass",
       "command": "python3 -B scripts/docs_check.py",
-      "detail": "docs-check: 47 active document(s), 0 pending, 0 warning(s), all checks passed (fa7a122)",
-      "ran_at": "2026-11-14T07:15:05+00:00",
-      "commit": "fa7a122"
+      "detail": "docs-check: 47 active document(s), 0 pending, 0 warning(s), all checks passed (e216dfa)",
+      "ran_at": "2026-11-14T07:23:51+00:00",
+      "commit": "e216dfa"
     },
     {
       "name": "documentation impact self-test",
@@ -88,41 +80,41 @@
       "name": "documentation parity",
       "status": "pass",
       "command": "python3 -B scripts/docs_parity.py --check",
-      "detail": "docs-parity: the three READMEs have matching headings, fences, images and source anchors (fa7a122)",
-      "ran_at": "2026-11-14T07:15:05+00:00",
-      "commit": "fa7a122"
+      "detail": "docs-parity: the three READMEs have matching headings, fences, images and source anchors (e216dfa)",
+      "ran_at": "2026-11-14T07:23:51+00:00",
+      "commit": "e216dfa"
     },
     {
       "name": "module coverage",
       "status": "pass",
       "command": "python3 -B scripts/coverage_check.py",
-      "detail": "coverage-check: 37 top-level modules (36 owned, 1 covered elsewhere, 0 unowned) (fa7a122)",
-      "ran_at": "2026-11-14T07:15:05+00:00",
-      "commit": "fa7a122"
+      "detail": "coverage-check: 37 top-level modules (36 owned, 1 covered elsewhere, 0 unowned) (e216dfa)",
+      "ran_at": "2026-11-14T07:23:51+00:00",
+      "commit": "e216dfa"
     },
     {
       "name": "rendered state",
       "status": "pass",
       "command": "python3 -B scripts/current_state.py --check",
-      "detail": "current-state: clean (fa7a122)",
-      "ran_at": "2026-11-14T07:15:05+00:00",
-      "commit": "fa7a122"
+      "detail": "current-state: clean (e216dfa)",
+      "ran_at": "2026-11-14T07:23:51+00:00",
+      "commit": "e216dfa"
     },
     {
       "name": "invariant evidence",
       "status": "pass",
       "command": "python3 -B scripts/invariant_check.py",
-      "detail": "invariant-check: 15 invariants, 13 with test anchors, 2 explicitly untested (fa7a122)",
-      "ran_at": "2026-11-14T07:15:05+00:00",
-      "commit": "fa7a122"
+      "detail": "invariant-check: 15 invariants, 13 with test anchors, 2 explicitly untested (e216dfa)",
+      "ran_at": "2026-11-14T07:23:51+00:00",
+      "commit": "e216dfa"
     },
     {
       "name": "state schema",
       "status": "pass",
       "command": "python3 -B scripts/state_check.py",
-      "detail": "state-check: 28 gates, 4 blockers; schema and blockers valid (fa7a122)",
-      "ran_at": "2026-11-14T07:15:05+00:00",
-      "commit": "fa7a122"
+      "detail": "state-check: 27 gates, 4 blockers; schema and blockers valid (e216dfa)",
+      "ran_at": "2026-11-14T07:23:51+00:00",
+      "commit": "e216dfa"
     },
     {
       "name": "whitespace",
@@ -177,25 +169,25 @@
       "name": "freshness",
       "command": "python3 -B scripts/freshness_report.py --check",
       "status": "pass",
-      "detail": "freshness: 33 documents; no source changed after its review commit (fa7a122)",
-      "ran_at": "2026-11-14T07:15:05+00:00",
-      "commit": "fa7a122"
+      "detail": "freshness: 33 documents; no source changed after its review commit (e216dfa)",
+      "ran_at": "2026-11-14T07:23:51+00:00",
+      "commit": "e216dfa"
     },
     {
       "name": "rules registry",
       "command": "python3 -B scripts/docs_rules.py",
       "status": "pass",
-      "detail": "docs-rules: 15 rules; 14 machine, 11 executed gates covered (fa7a122)",
-      "ran_at": "2026-11-14T07:15:05+00:00",
-      "commit": "fa7a122"
+      "detail": "docs-rules: 15 rules; 14 machine, 11 executed gates covered (e216dfa)",
+      "ran_at": "2026-11-14T07:23:51+00:00",
+      "commit": "e216dfa"
     },
     {
       "name": "documentation contracts (local)",
       "status": "pass",
       "command": "python3 -B scripts/docs_contracts.py",
-      "detail": "all non-range docs gates",
-      "ran_at": "2026-11-14T07:15:05+00:00",
-      "commit": "fa7a122"
+      "detail": "all non-range documentation gates",
+      "ran_at": "2026-11-14T07:23:51+00:00",
+      "commit": "e216dfa"
     }
   ],
   "blockers": [

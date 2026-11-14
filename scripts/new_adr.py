@@ -70,6 +70,7 @@ Supersedes: {args.supersedes}
         return 1
     path.write_text(body, encoding="utf-8")
     print(path)
+    print("next: python3 -B scripts/docs_check.py --write-index && python3 -B scripts/docs_contracts.py")
     return 0
 
 

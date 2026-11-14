@@ -138,6 +138,11 @@ def main(argv: list[str] | None = None) -> int:
             for item in results
             if item.get("gate") and item["gate"] != "documentation impact (range)" and gates.get(item["gate"], {}).get("status") != item["status"]
         ]
+        non_range = [item for item in results if item.get("gate") and item["gate"] != "documentation impact (range)"]
+        local = "pass" if all(item["status"] == "pass" for item in non_range) else "fail"
+        local_gate = gates.get("documentation contracts (local)", {})
+        if local_gate.get("status") != local:
+            mismatches.append(f"documentation contracts (local): state={local_gate.get('status', 'missing')} run={local}")
         if mismatches:
             for mismatch in mismatches:
                 print(f"docs-contracts: recorded state differs: {mismatch}", file=sys.stderr)
