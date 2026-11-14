@@ -28,9 +28,15 @@ A request record is metadata, not content:
 A prompt or response body is never stored in a record.
 
 The ring is not the only copy of a request: when a runtime store is attached,
-`Stats` reloads committed usage rows into its running totals, and the store
-serves paged history to the UI, so a restart loses the recent view but not the
-usage history (`crates/zroutery-core/src/stats.rs::Stats::attach_store`,
+`Stats` adopts the store's durable usage summary — one aggregate row kept in
+step with every usage write inside the same transaction and paired with the
+revision it describes — and re-adds only the records that are not durable yet.
+A summary that a foreign writer left behind is rebuilt from the table once and
+stored back; the store serves paged history to the UI, so a restart loses the
+recent view but not the usage history
+(`crates/zroutery-core/src/stats.rs::Stats::attach_store`,
+`crates/zroutery-core/src/stats.rs::Stats::refresh_history`,
+`crates/zroutery-core/src/runtime_store.rs::RuntimeStore::usage_snapshot`,
 `crates/zroutery-core/src/runtime_store/history.rs::query_usage`).
 
 ## Health and latency
@@ -120,6 +126,8 @@ closed failure class, impact bits and HTTP status cross the boundary. The
 - `crates/zroutery-core/src/stats.rs::StatsSummary`
 - `crates/zroutery-core/src/stats.rs::Stats::clear_history`
 - `crates/zroutery-core/src/stats.rs::Stats::attach_store`
+- `crates/zroutery-core/src/stats.rs::Stats::refresh_history`
+- `crates/zroutery-core/src/runtime_store.rs::RuntimeStore::usage_snapshot`
 - `crates/zroutery-core/src/runtime_store/history.rs::query_usage`
 - `crates/zroutery-core/src/stats_ext.rs::StatsStore`
 - `crates/zroutery-core/src/stats_ext.rs::Ewma`

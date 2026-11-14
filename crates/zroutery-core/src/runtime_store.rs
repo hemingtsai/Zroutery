@@ -8,7 +8,7 @@ use std::time::Duration;
 
 use rusqlite::{params, Connection, OptionalExtension};
 
-use crate::stats::RequestRecord;
+use crate::stats::{DurableTotals, RequestRecord};
 
 mod accounting;
 mod attempts;
@@ -28,6 +28,26 @@ pub use usage_reader::UsageReader;
 #[derive(Debug)]
 pub struct RuntimeStore {
     db: Mutex<Connection>,
+}
+
+/// What a stats refresh needs, read in one snapshot.
+///
+/// `Summary` is the steady state: the durable aggregate row plus the recent
+/// window replace the full-table scan that a growing history would otherwise
+/// pay on every poll. `Full` is the fallback that also (re)builds the summary
+/// row: a database written before the summary existed, an older binary that
+/// writes usage rows without it, or a clear that dropped it.
+pub(crate) enum UsageSnapshot {
+    Unchanged,
+    Summary {
+        revision: i64,
+        totals: DurableTotals,
+        recent: Vec<RequestRecord>,
+    },
+    Full {
+        revision: i64,
+        records: Vec<RequestRecord>,
+    },
 }
 
 impl RuntimeStore {
@@ -95,6 +115,10 @@ impl RuntimeStore {
 
     /// Revision and insert count from the same write transaction. Another
     /// instance importing the same ids cannot make in-memory totals count twice.
+    ///
+    /// Rows that were actually inserted are folded into the durable summary in
+    /// the same transaction, so the summary always describes exactly the
+    /// revision it is stored with.
     pub(crate) fn append_usage_versioned(
         &self,
         records: &[RequestRecord],
@@ -111,6 +135,7 @@ impl RuntimeStore {
             )
             .map_err(|e| e.to_string())?;
         let mut inserted = 0;
+        let mut committed: Vec<RequestRecord> = Vec::new();
         for record in records {
             // Errors can quote a remote body, and decision traces contain more
             // than accounting needs. The durable form deliberately omits both.
@@ -118,7 +143,7 @@ impl RuntimeStore {
             safe.error = None;
             safe.routing_decision = None;
             let json = serde_json::to_string(&safe).map_err(|e| e.to_string())?;
-            inserted += tx
+            let written = tx
                 .execute(
                     "INSERT OR IGNORE INTO usage(id, client, at, record) VALUES (?1, ?2, ?3, ?4)",
                     params![
@@ -129,6 +154,10 @@ impl RuntimeStore {
                     ],
                 )
                 .map_err(|e| e.to_string())?;
+            if written == 1 {
+                inserted += 1;
+                committed.push(safe);
+            }
         }
         let after: i64 = tx
             .query_row(
@@ -137,6 +166,9 @@ impl RuntimeStore {
                 |row| row.get(0),
             )
             .map_err(|e| e.to_string())?;
+        if !committed.is_empty() {
+            advance_usage_summary(&tx, before, after, &committed)?;
+        }
         tx.commit().map_err(|e| e.to_string())?;
         Ok((before, after, inserted))
     }
@@ -144,6 +176,102 @@ impl RuntimeStore {
     pub fn usage(&self) -> Result<Vec<RequestRecord>, String> {
         self.usage_since(None)
             .map(|snapshot| snapshot.expect("a full snapshot was requested").1)
+    }
+
+    /// Read the revision and the projection inputs in one snapshot so a
+    /// concurrent clear/import can never pair old totals with a newer revision.
+    ///
+    /// Unchanged reads are O(1). When the durable summary row describes the
+    /// current revision, the read is one row plus the recent window; a full
+    /// table scan remains only the fallback that also (re)builds that summary,
+    /// so a history that grows with the life of the process is never re-read on
+    /// a poll.
+    pub(crate) fn usage_snapshot(
+        &self,
+        known: Option<i64>,
+        recent_limit: usize,
+    ) -> Result<UsageSnapshot, String> {
+        let mut db = crate::sync::lock(&self.db);
+        let tx = db.transaction().map_err(|e| e.to_string())?;
+        let current = tx
+            .query_row(
+                "SELECT revision FROM usage_revision WHERE id = 1",
+                [],
+                |row| row.get::<_, i64>(0),
+            )
+            .map_err(|e| e.to_string())?;
+        if known == Some(current) {
+            return Ok(UsageSnapshot::Unchanged);
+        }
+        if let Some((revision, totals)) = read_usage_summary(&tx)? {
+            if revision == current {
+                let limit = i64::try_from(recent_limit.max(1)).unwrap_or(i64::MAX);
+                let mut statement = tx
+                    .prepare("SELECT record FROM usage ORDER BY at DESC, id DESC LIMIT ?1")
+                    .map_err(|e| e.to_string())?;
+                let rows = statement
+                    .query_map([limit], |row| row.get::<_, String>(0))
+                    .map_err(|e| e.to_string())?;
+                let mut recent = rows
+                    .map(|row| {
+                        let json = row.map_err(|e| e.to_string())?;
+                        serde_json::from_str(&json).map_err(|e| e.to_string())
+                    })
+                    .collect::<Result<Vec<_>, String>>()?;
+                // A full scan visits oldest first, and the ring expects that order.
+                recent.reverse();
+                return Ok(UsageSnapshot::Summary {
+                    revision,
+                    totals,
+                    recent,
+                });
+            }
+        }
+        let mut statement = tx
+            .prepare("SELECT record FROM usage ORDER BY at, id")
+            .map_err(|e| e.to_string())?;
+        let rows = statement
+            .query_map([], |row| row.get::<_, String>(0))
+            .map_err(|e| e.to_string())?;
+        let records = rows
+            .map(|row| {
+                let json = row.map_err(|e| e.to_string())?;
+                serde_json::from_str(&json).map_err(|e| e.to_string())
+            })
+            .collect::<Result<Vec<_>, String>>()?;
+        Ok(UsageSnapshot::Full {
+            revision: current,
+            records,
+        })
+    }
+
+    /// Store the durable aggregate for `revision` in its own transaction.
+    ///
+    /// A summary is only written when the revision still matches what the
+    /// caller read: a stale summary must never be paired with a revision it
+    /// does not describe, and a write that lost the race is simply retried by
+    /// the next refresh that finds the summary missing or behind.
+    pub(crate) fn save_usage_summary(
+        &self,
+        revision: i64,
+        totals: &DurableTotals,
+    ) -> Result<(), String> {
+        let mut db = crate::sync::lock(&self.db);
+        let tx = db
+            .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
+            .map_err(|e| e.to_string())?;
+        let current: i64 = tx
+            .query_row(
+                "SELECT revision FROM usage_revision WHERE id = 1",
+                [],
+                |row| row.get(0),
+            )
+            .map_err(|e| e.to_string())?;
+        if current != revision {
+            return Ok(());
+        }
+        write_usage_summary(&tx, revision, totals)?;
+        tx.commit().map_err(|e| e.to_string())
     }
 
     /// Read the revision and rows in one snapshot so a concurrent clear/import
@@ -180,12 +308,24 @@ impl RuntimeStore {
     }
 
     pub fn clear_usage(&self, client: Option<&str>) -> Result<usize, String> {
-        let db = crate::sync::lock(&self.db);
-        match client {
-            Some(client) => db.execute("DELETE FROM usage WHERE client = ?1", [client]),
-            None => db.execute("DELETE FROM usage", []),
-        }
-        .map_err(|e| e.to_string())
+        let mut db = crate::sync::lock(&self.db);
+        let tx = db
+            .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
+            .map_err(|e| e.to_string())?;
+        let deleted = match client {
+            Some(client) => tx
+                .execute("DELETE FROM usage WHERE client = ?1", [client])
+                .map_err(|e| e.to_string())?,
+            None => tx
+                .execute("DELETE FROM usage", [])
+                .map_err(|e| e.to_string())?,
+        };
+        // The aggregate described rows that no longer exist. Dropping it makes
+        // the next read rebuild from what remains and store a fresh summary.
+        tx.execute("DELETE FROM usage_summary", [])
+            .map_err(|e| e.to_string())?;
+        tx.commit().map_err(|e| e.to_string())?;
+        Ok(deleted)
     }
 
     pub fn hold_wallet(&self, scope: &str, json: &str) -> Result<(), String> {
@@ -263,6 +403,68 @@ impl RuntimeStore {
 /// The original RFC3339 spelling remains untouched inside historical records.
 fn usage_timestamp(at: &chrono::DateTime<chrono::Utc>) -> String {
     at.to_rfc3339_opts(chrono::SecondsFormat::Nanos, true)
+}
+
+/// The durable summary row, `None` when it has never been built.
+pub(super) fn read_usage_summary(
+    tx: &rusqlite::Transaction<'_>,
+) -> Result<Option<(i64, DurableTotals)>, String> {
+    let row: Option<(i64, String)> = tx
+        .query_row(
+            "SELECT revision, summary FROM usage_summary WHERE id = 1",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .optional()
+        .map_err(|e| e.to_string())?;
+    row.map(|(revision, json)| {
+        serde_json::from_str(&json)
+            .map(|totals| (revision, totals))
+            .map_err(|e| e.to_string())
+    })
+    .transpose()
+}
+
+/// Write the durable summary inside the caller's transaction, so the row
+/// always describes exactly the revision it is stored with.
+pub(super) fn write_usage_summary(
+    tx: &rusqlite::Transaction<'_>,
+    revision: i64,
+    totals: &DurableTotals,
+) -> Result<(), String> {
+    let json = serde_json::to_string(totals).map_err(|e| e.to_string())?;
+    tx.execute(
+        "INSERT INTO usage_summary(id, revision, summary) VALUES (1, ?1, ?2)
+         ON CONFLICT(id) DO UPDATE SET revision = ?1, summary = ?2",
+        params![revision, json],
+    )
+    .map(|_| ())
+    .map_err(|e| e.to_string())
+}
+
+/// Fold newly committed rows into the durable summary, inside the caller's
+/// transaction.
+///
+/// A summary that does not describe `before` — another binary wrote usage
+/// without maintaining it — is left alone: a stale revision makes the next
+/// read rebuild from the table, which is the only way to absorb rows this
+/// process never saw. A missing summary stays missing for the same reason.
+pub(super) fn advance_usage_summary(
+    tx: &rusqlite::Transaction<'_>,
+    before: i64,
+    after: i64,
+    inserted: &[RequestRecord],
+) -> Result<(), String> {
+    let Some((revision, mut totals)) = read_usage_summary(tx)? else {
+        return Ok(());
+    };
+    if revision != before {
+        return Ok(());
+    }
+    for record in inserted {
+        totals.observe(record);
+    }
+    write_usage_summary(tx, after, &totals)
 }
 
 #[cfg(test)]

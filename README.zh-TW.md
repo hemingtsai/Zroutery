@@ -154,6 +154,6 @@ MIT（見 `Cargo.toml` 的 `license`）。
 - 打包目標：`src-tauri/tauri.conf.json::bundle`。
 - 設定檔與閘道 token：`src-tauri/src/store.rs::FILE_NAME`、`src-tauri/src/store.rs::generate_token`。
 - Linux 憑證相依：`src-tauri/Cargo.toml::keyring`。
-- 資料位置：`src-tauri/src/platform.rs::default_config_dir`、`crates/zroutery-core/src/runtime_store.rs::RuntimeStore`。
+- 資料位置：`src-tauri/src/platform.rs::default_config_dir`、`crates/zroutery-core/src/runtime_store.rs::RuntimeStore`、`crates/zroutery-core/src/runtime_store.rs::RuntimeStore::usage_snapshot`。
 
 每個重複事實的權威歸屬：[config.md](docs/development/reference/config.md) 負責監聽位址/連接埠，[protocol.md](docs/development/reference/protocol.md) 負責協定，[routing-data.md](docs/development/reference/routing-data.md) 負責資料位置。本指南只是指標；衝突時以 reference 為準。
