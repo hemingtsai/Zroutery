@@ -20,6 +20,7 @@ use crate::ir::{Dialect, Usage};
 use crate::outcome::Outcome;
 use crate::policy::{DecisionReason, RouteDecision};
 use crate::query::RequestKind;
+use crate::runtime_store::UsageSnapshot;
 
 mod history;
 pub use history::{UsageHistoryPage, UsageHistoryQuery};
@@ -467,6 +468,26 @@ impl UsageDay {
     }
 }
 
+impl From<&DurableTotals> for StatsSummary {
+    fn from(totals: &DurableTotals) -> Self {
+        StatsSummary {
+            since: totals.since,
+            requests: totals.requests,
+            failures: totals.failures,
+            input_tokens: totals.input_tokens,
+            output_tokens: totals.output_tokens,
+            cache_read_tokens: totals.cache_read_tokens,
+            cache_write_tokens: totals.cache_write_tokens,
+            unpriced_requests: totals.unpriced_requests,
+            cost: totals.cost.clone(),
+            per_model: totals.per_model.values().cloned().collect(),
+            per_kind: totals.per_kind.values().cloned().collect(),
+            per_client: totals.per_client.values().cloned().collect(),
+            attribution: totals.attribution.clone(),
+        }
+    }
+}
+
 /// Add imported days to this device's series, one row per local day.
 ///
 /// A day the imported store never covered is not created: silence from another
@@ -483,6 +504,321 @@ pub fn merge_imported_days(mut local: Vec<UsageDay>, imported: Vec<UsageDay>) ->
     }
     local.sort_by(|left, right| left.day.cmp(&right.day));
     local
+}
+
+/// The durable aggregate of every committed usage row.
+///
+/// [`crate::runtime_store::RuntimeStore`] keeps one serialized copy of this
+/// value in the `usage_summary` table and updates it inside the same
+/// transaction as every usage insert, settlement replace and clear. A refresh
+/// therefore reads one row plus the recent window instead of re-reading the
+/// whole usage table, whose size grows with the life of the process. The
+/// in-memory projection adopts this value wholesale and re-adds the records
+/// that are not durable yet, which is what a rebuild from scratch would have
+/// produced.
+///
+/// [`Self::unobserve`] is the exact inverse of [`Self::observe`]: every field
+/// is a counter or a running average carried with its count, so a settlement
+/// that replaces a row can subtract the row it replaces. Floating-point
+/// averages may drift by an ulp from a from-scratch rebuild; integer counters
+/// never do.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub(crate) struct DurableTotals {
+    pub since: DateTime<Utc>,
+    pub requests: u64,
+    pub failures: u64,
+    pub input_tokens: u64,
+    pub output_tokens: u64,
+    pub cache_read_tokens: u64,
+    pub cache_write_tokens: u64,
+    pub unpriced_requests: u64,
+    pub cost: CostTotals,
+    pub per_model: BTreeMap<String, ModelTotals>,
+    pub per_kind: BTreeMap<String, KindTotals>,
+    pub per_client: BTreeMap<String, ClientTotals>,
+    pub attribution: AttributionSummary,
+}
+
+impl Default for DurableTotals {
+    fn default() -> Self {
+        Self::empty()
+    }
+}
+
+impl DurableTotals {
+    /// An empty aggregate whose window opens now, the same anchor a fresh
+    /// [`Stats`] and a projection reset use.
+    pub(crate) fn empty() -> Self {
+        Self {
+            since: Utc::now(),
+            requests: 0,
+            failures: 0,
+            input_tokens: 0,
+            output_tokens: 0,
+            cache_read_tokens: 0,
+            cache_write_tokens: 0,
+            unpriced_requests: 0,
+            cost: CostTotals::default(),
+            per_model: BTreeMap::new(),
+            per_kind: BTreeMap::new(),
+            per_client: BTreeMap::new(),
+            attribution: AttributionSummary::default(),
+        }
+    }
+
+    /// Fold one record into the aggregate. The same arithmetic
+    /// [`Stats::accumulate`] has always applied, minus the request ring.
+    pub(crate) fn observe(&mut self, record: &RequestRecord) {
+        self.since = self.since.min(record.at);
+        self.requests += 1;
+        if !record.ok {
+            self.failures += 1;
+        }
+        let usage = record.observed_usage();
+        self.input_tokens += usage.input_tokens;
+        self.output_tokens += usage.output_tokens;
+        self.cache_read_tokens += usage.cache_read_tokens;
+        self.cache_write_tokens += usage.cache_write_tokens;
+        self.unpriced_requests += u64::from(record.unpriced());
+        record.add_known_cost(&mut self.cost);
+
+        // Only a model that actually resolved earns its own permanent
+        // dimension. An unresolved request still counts towards the totals and
+        // failures below, but it shares one bucket: the requested name is
+        // caller-chosen text, not a bounded set this table can grow into.
+        let key = record
+            .resolved_model
+            .clone()
+            .unwrap_or_else(|| UNRESOLVED_MODEL_KEY.to_string());
+        let totals = self
+            .per_model
+            .entry(key.clone())
+            .or_insert_with(|| ModelTotals {
+                model_id: key,
+                ..ModelTotals::default()
+            });
+        totals.requests += 1;
+        if !record.ok {
+            totals.failures += 1;
+        }
+        totals.input_tokens += usage.input_tokens;
+        totals.output_tokens += usage.output_tokens;
+        totals.reasoning_tokens += usage.reasoning_tokens;
+        totals.cached_tokens += usage.cache_read_tokens;
+        record.add_known_cost(&mut totals.cost);
+        let n = totals.requests as f64;
+        totals.avg_latency_ms += (record.latency_ms as f64 - totals.avg_latency_ms) / n;
+
+        self.per_kind
+            .entry(record.kind.as_str().to_string())
+            .or_insert_with(|| KindTotals {
+                kind: record.kind.as_str().to_string(),
+                ..KindTotals::default()
+            })
+            .observe(record);
+
+        // The client bucket is the id actually stored on the record, not the
+        // registry's canonical form re-derived here. They agree by
+        // construction, and re-deriving would break the moment a caller folded
+        // a high-cardinality id into the overflow bucket: the record would say
+        // `unknown-agent-4417` while the aggregate said `custom-other`, and the
+        // two totals would look like they did not match.
+        let client_key = record.client.client_id.as_str().to_string();
+        self.per_client
+            .entry(client_key.clone())
+            .or_insert_with(|| ClientTotals {
+                client_id: client_key,
+                client_name: client_display_name(&record.client),
+                family: record.client.family.as_str().to_string(),
+                source: record.client.source.as_str().to_string(),
+                confidence: record.client.confidence.as_str().to_string(),
+                ..ClientTotals::default()
+            })
+            .observe(record);
+
+        match record.client.confidence {
+            Confidence::Strong | Confidence::Probable => self.attribution.recognised += 1,
+            Confidence::Weak => self.attribution.weak += 1,
+            Confidence::Unknown => self.attribution.unknown += 1,
+        }
+    }
+
+    /// Remove one record's contribution: the exact inverse of [`Self::observe`].
+    ///
+    /// Used when a durable settlement replaces a row the summary already
+    /// counted. Sums and counters subtract; running averages reverse through
+    /// their counts. `since` is left alone: a replacement carries its row's own
+    /// timestamp unchanged, so the floor survives, and a real inconsistency
+    /// self-corrects at the next rebuild from the table. A currency or
+    /// dimension that falls back to zero is dropped, keeping the shape a
+    /// from-scratch rebuild would have produced.
+    pub(crate) fn unobserve(&mut self, record: &RequestRecord) {
+        self.requests = self.requests.saturating_sub(1);
+        if !record.ok {
+            self.failures = self.failures.saturating_sub(1);
+        }
+        let usage = record.observed_usage();
+        self.input_tokens = self.input_tokens.saturating_sub(usage.input_tokens);
+        self.output_tokens = self.output_tokens.saturating_sub(usage.output_tokens);
+        self.cache_read_tokens = self
+            .cache_read_tokens
+            .saturating_sub(usage.cache_read_tokens);
+        self.cache_write_tokens = self
+            .cache_write_tokens
+            .saturating_sub(usage.cache_write_tokens);
+        self.unpriced_requests = self
+            .unpriced_requests
+            .saturating_sub(u64::from(record.unpriced()));
+        subtract_known_cost(&mut self.cost, record);
+
+        let key = record
+            .resolved_model
+            .clone()
+            .unwrap_or_else(|| UNRESOLVED_MODEL_KEY.to_string());
+        let drop_model = self
+            .per_model
+            .get_mut(&key)
+            .is_none_or(|totals| unobserve_model_totals(totals, record));
+        if drop_model {
+            self.per_model.remove(&key);
+        }
+        let drop_kind = self
+            .per_kind
+            .get_mut(record.kind.as_str())
+            .is_none_or(|totals| unobserve_kind_totals(totals, record));
+        if drop_kind {
+            self.per_kind.remove(record.kind.as_str());
+        }
+        let client_key = record.client.client_id.as_str().to_string();
+        let drop_client = self
+            .per_client
+            .get_mut(&client_key)
+            .is_none_or(|totals| unobserve_client_totals(totals, record));
+        if drop_client {
+            self.per_client.remove(&client_key);
+        }
+
+        match record.client.confidence {
+            Confidence::Strong | Confidence::Probable => {
+                self.attribution.recognised = self.attribution.recognised.saturating_sub(1)
+            }
+            Confidence::Weak => self.attribution.weak = self.attribution.weak.saturating_sub(1),
+            Confidence::Unknown => {
+                self.attribution.unknown = self.attribution.unknown.saturating_sub(1)
+            }
+        }
+    }
+}
+
+/// Mirror of [`RequestRecord::add_known_cost`] for taking a row back out.
+fn subtract_known_cost(totals: &mut CostTotals, record: &RequestRecord) {
+    let mut subtract = |currency: &str, amount: f64| {
+        let remaining = totals.0.get(currency).copied().unwrap_or(0.0) - amount;
+        // Floating-point residue from many add/subtract pairs can leave dust
+        // behind where a from-scratch rebuild would have no row at all.
+        if remaining == 0.0 || remaining.abs() < 1e-9 {
+            totals.0.remove(currency);
+        } else {
+            totals.0.insert(currency.to_string(), remaining);
+        }
+    };
+    if let Some(accounting) = &record.accounting {
+        for (currency, amount) in &accounting.known_cost.0 {
+            subtract(currency, *amount);
+        }
+    } else if let Some(cost) = &record.cost {
+        subtract(&cost.currency, cost.amount);
+    }
+}
+
+/// Fold one record out of a model bucket. Returns true when the bucket is
+/// empty and must be dropped, the way a from-scratch rebuild would.
+fn unobserve_model_totals(totals: &mut ModelTotals, record: &RequestRecord) -> bool {
+    let usage = record.observed_usage();
+    if totals.requests > 0 {
+        let n = totals.requests as f64;
+        if totals.requests >= 2 {
+            totals.avg_latency_ms =
+                (totals.avg_latency_ms * n - record.latency_ms as f64) / (n - 1.0);
+        } else {
+            totals.avg_latency_ms = 0.0;
+        }
+        totals.requests -= 1;
+    }
+    totals.failures = totals.failures.saturating_sub(u64::from(!record.ok));
+    totals.input_tokens = totals.input_tokens.saturating_sub(usage.input_tokens);
+    totals.output_tokens = totals.output_tokens.saturating_sub(usage.output_tokens);
+    totals.reasoning_tokens = totals
+        .reasoning_tokens
+        .saturating_sub(usage.reasoning_tokens);
+    totals.cached_tokens = totals.cached_tokens.saturating_sub(usage.cache_read_tokens);
+    subtract_known_cost(&mut totals.cost, record);
+    totals.requests == 0
+}
+
+/// Fold one record out of a kind bucket, as [`KindTotals::observe`] built it.
+fn unobserve_kind_totals(totals: &mut KindTotals, record: &RequestRecord) -> bool {
+    let usage = record.observed_usage();
+    if totals.requests > 0 {
+        let n = totals.requests as f64;
+        if totals.requests >= 2 {
+            totals.avg_latency_ms =
+                (totals.avg_latency_ms * n - record.latency_ms as f64) / (n - 1.0);
+        } else {
+            totals.avg_latency_ms = 0.0;
+        }
+        totals.requests -= 1;
+    }
+    totals.failures = totals.failures.saturating_sub(u64::from(!record.ok));
+    totals.input_tokens = totals.input_tokens.saturating_sub(usage.input_tokens);
+    totals.output_tokens = totals.output_tokens.saturating_sub(usage.output_tokens);
+    totals.requests == 0
+}
+
+/// Fold one record out of a client bucket, as [`ClientTotals::observe`] built
+/// it. Returns true when the bucket is empty and must be dropped.
+fn unobserve_client_totals(totals: &mut ClientTotals, record: &RequestRecord) -> bool {
+    let usage = record.observed_usage();
+    if totals.requests > 0 {
+        let n = totals.requests as f64;
+        if totals.requests >= 2 {
+            totals.avg_latency_ms =
+                (totals.avg_latency_ms * n - record.latency_ms as f64) / (n - 1.0);
+        } else {
+            totals.avg_latency_ms = 0.0;
+        }
+        totals.requests -= 1;
+    }
+    totals.failures = totals.failures.saturating_sub(u64::from(!record.ok));
+    totals.input_tokens = totals.input_tokens.saturating_sub(usage.input_tokens);
+    totals.output_tokens = totals.output_tokens.saturating_sub(usage.output_tokens);
+    totals.cache_read_tokens = totals
+        .cache_read_tokens
+        .saturating_sub(usage.cache_read_tokens);
+    totals.cache_write_tokens = totals
+        .cache_write_tokens
+        .saturating_sub(usage.cache_write_tokens);
+    totals.reasoning_tokens = totals
+        .reasoning_tokens
+        .saturating_sub(usage.reasoning_tokens);
+    subtract_known_cost(&mut totals.cost, record);
+    if let Some(ttft) = record.ttft_ms {
+        // observe() folded the first token in as the seen-th streamed request;
+        // take it back out through the same running average.
+        let seen = totals.streamed;
+        if seen > 0 {
+            totals.streamed -= 1;
+            totals.avg_ttft_ms = if seen == 1 {
+                None
+            } else {
+                Some(
+                    (totals.avg_ttft_ms.unwrap_or(0.0) * seen as f64 - ttft as f64)
+                        / (seen as f64 - 1.0),
+                )
+            };
+        }
+    }
+    totals.requests == 0
 }
 
 /// How much of the traffic could be attributed to a client.
@@ -550,20 +886,10 @@ const UNRESOLVED_MODEL_KEY: &str = "unresolved";
 #[derive(Debug)]
 struct Inner {
     limit: usize,
-    since: DateTime<Utc>,
     records: VecDeque<RequestRecord>,
-    per_model: BTreeMap<String, ModelTotals>,
-    per_kind: BTreeMap<String, KindTotals>,
-    per_client: BTreeMap<String, ClientTotals>,
-    attribution: AttributionSummary,
-    requests: u64,
-    failures: u64,
-    input_tokens: u64,
-    output_tokens: u64,
-    cache_read_tokens: u64,
-    cache_write_tokens: u64,
-    unpriced_requests: u64,
-    cost: CostTotals,
+    /// Every aggregate the summary reports. Held as one value so a refresh can
+    /// adopt a durable aggregate wholesale, exactly as a rebuild would leave it.
+    totals: DurableTotals,
     store: Option<Arc<crate::runtime_store::RuntimeStore>>,
     pending: Vec<RequestRecord>,
     settlement_pending: BTreeMap<String, RequestRecord>,
@@ -577,20 +903,8 @@ impl Stats {
         Stats {
             inner: Mutex::new(Inner {
                 limit: limit.max(1),
-                since: Utc::now(),
                 records: VecDeque::new(),
-                per_model: BTreeMap::new(),
-                per_kind: BTreeMap::new(),
-                per_client: BTreeMap::new(),
-                attribution: AttributionSummary::default(),
-                requests: 0,
-                failures: 0,
-                input_tokens: 0,
-                output_tokens: 0,
-                cache_read_tokens: 0,
-                cache_write_tokens: 0,
-                unpriced_requests: 0,
-                cost: CostTotals::default(),
+                totals: DurableTotals::default(),
                 store: None,
                 pending: Vec::new(),
                 settlement_pending: BTreeMap::new(),
@@ -651,6 +965,14 @@ impl Stats {
 
     /// A transaction already committed usage **and** spend. Do not queue a
     /// second independent usage write. Normal local commits update in O(1).
+    ///
+    /// `inserted` means the settlement (and therefore its usage row) was newly
+    /// committed by this call; a re-settled request changed nothing durable.
+    /// The durable summary carries the committed row, so the projection only
+    /// has to keep its own copy current: the record's pending copy, if the
+    /// completion queued one, is dropped because the summary now counts it.
+    /// When the revision chain holds, the in-memory aggregate is already
+    /// right; when it does not, the next refresh adopts the summary in O(1).
     pub(crate) fn record_committed(
         &self,
         record: RequestRecord,
@@ -660,6 +982,9 @@ impl Stats {
     ) {
         let mut inner = crate::sync::lock(&self.inner);
         let was_pending = inner.settlement_pending.remove(&record.id).is_some();
+        if inserted {
+            inner.pending.retain(|queued| queued.id != record.id);
+        }
         if inserted && !was_pending && inner.revision == Some(before) {
             Self::accumulate(&mut inner, record);
             inner.revision = Some(after);
@@ -689,81 +1014,22 @@ impl Stats {
 
     fn accumulate(inner: &mut Inner, record: RequestRecord) {
         inner.local_revision = inner.local_revision.saturating_add(1);
-        inner.since = inner.since.min(record.at);
-        inner.requests += 1;
-        if !record.ok {
-            inner.failures += 1;
+        inner.totals.observe(&record);
+        let limit = inner.limit;
+        inner.records.push_back(record);
+        while inner.records.len() > limit {
+            inner.records.pop_front();
         }
-        let usage = record.observed_usage();
-        inner.input_tokens += usage.input_tokens;
-        inner.output_tokens += usage.output_tokens;
-        inner.cache_read_tokens += usage.cache_read_tokens;
-        inner.cache_write_tokens += usage.cache_write_tokens;
-        inner.unpriced_requests += u64::from(record.unpriced());
-        record.add_known_cost(&mut inner.cost);
+    }
 
-        // Only a model that actually resolved earns its own permanent
-        // dimension. An unresolved request still counts towards the totals and
-        // failures below, but it shares one bucket: the requested name is
-        // caller-chosen text, not a bounded set this table can grow into.
-        let key = record
-            .resolved_model
-            .clone()
-            .unwrap_or_else(|| UNRESOLVED_MODEL_KEY.to_string());
-        let totals = inner
-            .per_model
-            .entry(key.clone())
-            .or_insert_with(|| ModelTotals {
-                model_id: key,
-                ..ModelTotals::default()
-            });
-        totals.requests += 1;
-        if !record.ok {
-            totals.failures += 1;
-        }
-        totals.input_tokens += usage.input_tokens;
-        totals.output_tokens += usage.output_tokens;
-        totals.reasoning_tokens += usage.reasoning_tokens;
-        totals.cached_tokens += usage.cache_read_tokens;
-        record.add_known_cost(&mut totals.cost);
-        let n = totals.requests as f64;
-        totals.avg_latency_ms += (record.latency_ms as f64 - totals.avg_latency_ms) / n;
-
-        inner
-            .per_kind
-            .entry(record.kind.as_str().to_string())
-            .or_insert_with(|| KindTotals {
-                kind: record.kind.as_str().to_string(),
-                ..KindTotals::default()
-            })
-            .observe(&record);
-
-        // The client bucket is the id actually stored on the record, not the
-        // registry's canonical form re-derived here. They agree by
-        // construction, and re-deriving would break the moment a caller folded
-        // a high-cardinality id into the overflow bucket: the record would say
-        // `unknown-agent-4417` while the aggregate said `custom-other`, and the
-        // two totals would look like they did not match.
-        let client_key = record.client.client_id.as_str().to_string();
-        inner
-            .per_client
-            .entry(client_key.clone())
-            .or_insert_with(|| ClientTotals {
-                client_id: client_key,
-                client_name: client_display_name(&record.client),
-                family: record.client.family.as_str().to_string(),
-                source: record.client.source.as_str().to_string(),
-                confidence: record.client.confidence.as_str().to_string(),
-                ..ClientTotals::default()
-            })
-            .observe(&record);
-
-        match record.client.confidence {
-            Confidence::Strong | Confidence::Probable => inner.attribution.recognised += 1,
-            Confidence::Weak => inner.attribution.weak += 1,
-            Confidence::Unknown => inner.attribution.unknown += 1,
-        }
-
+    /// Place a durable record in the ring without re-counting it.
+    ///
+    /// A refresh that adopted the durable summary already carries every
+    /// committed row's contribution; only the recent view needs the record
+    /// itself. The local revision still moves, so a non-durable history reader
+    /// sees the same change signal a rebuild would have given it.
+    fn project(inner: &mut Inner, record: RequestRecord) {
+        inner.local_revision = inner.local_revision.saturating_add(1);
         let limit = inner.limit;
         inner.records.push_back(record);
         while inner.records.len() > limit {
@@ -793,21 +1059,7 @@ impl Stats {
     pub fn summary(&self) -> StatsSummary {
         let mut inner = crate::sync::lock(&self.inner);
         Self::refresh_if_due(&mut inner);
-        StatsSummary {
-            since: inner.since,
-            requests: inner.requests,
-            failures: inner.failures,
-            input_tokens: inner.input_tokens,
-            output_tokens: inner.output_tokens,
-            cache_read_tokens: inner.cache_read_tokens,
-            cache_write_tokens: inner.cache_write_tokens,
-            unpriced_requests: inner.unpriced_requests,
-            cost: inner.cost.clone(),
-            per_model: inner.per_model.values().cloned().collect(),
-            per_kind: inner.per_kind.values().cloned().collect(),
-            per_client: inner.per_client.values().cloned().collect(),
-            attribution: inner.attribution.clone(),
-        }
+        StatsSummary::from(&inner.totals)
     }
 
     /// Refresh the durable projection immediately rather than waiting for its poll interval.
@@ -870,19 +1122,52 @@ impl Stats {
         &self,
         store: Arc<crate::runtime_store::RuntimeStore>,
     ) -> Result<(), String> {
-        let (revision, records) = store
-            .usage_since(None)?
-            .expect("a full snapshot was requested");
+        let limit = {
+            let inner = crate::sync::lock(&self.inner);
+            if inner.totals.requests != 0 {
+                return Err("usage storage must be attached before serving".into());
+            }
+            inner.limit
+        };
+        let snapshot = store.usage_snapshot(None, limit)?;
         let mut inner = crate::sync::lock(&self.inner);
-        if inner.requests != 0 {
+        if inner.totals.requests != 0 {
             return Err("usage storage must be attached before serving".into());
         }
-        for record in records {
-            Self::accumulate(&mut inner, record);
+        match snapshot {
+            UsageSnapshot::Unchanged => {}
+            UsageSnapshot::Summary {
+                revision,
+                totals,
+                recent,
+            } => {
+                // The durable aggregate describes the whole table; only the
+                // recent view has to be materialised.
+                inner.totals = totals;
+                for record in recent {
+                    Self::project(&mut inner, record);
+                }
+                inner.revision = Some(revision);
+                inner.synced = Some(Instant::now());
+            }
+            UsageSnapshot::Full { revision, records } => {
+                let mut durable = DurableTotals::default();
+                for record in &records {
+                    durable.observe(record);
+                }
+                // Best effort: a failed write leaves the summary absent and the
+                // next revision change rebuilds it again.
+                if let Err(error) = store.save_usage_summary(revision, &durable) {
+                    tracing::warn!(%error, "durable usage summary could not be written back");
+                }
+                for record in records {
+                    Self::accumulate(&mut inner, record);
+                }
+                inner.revision = Some(revision);
+                inner.synced = Some(Instant::now());
+            }
         }
         inner.store = Some(store);
-        inner.revision = Some(revision);
-        inner.synced = Some(Instant::now());
         Ok(())
     }
 
@@ -898,8 +1183,9 @@ impl Stats {
                 if inner.revision == Some(before) && inserted == inner.pending.len() {
                     inner.revision = Some(after);
                 } else {
-                    // Duplicate ids or another process changed history. Rebuild
-                    // from the committed rows instead of counting the attempted insert.
+                    // Duplicate ids or another process changed history. The
+                    // next refresh re-adopts the durable summary instead of
+                    // trusting the in-memory revision chain.
                     inner.revision = None;
                     inner.synced = None;
                 }
@@ -927,42 +1213,101 @@ impl Stats {
         let Some(store) = &inner.store else {
             return Ok(());
         };
-        if let Some((revision, records)) = store.usage_since(inner.revision)? {
-            // Keep live diagnostics in memory while durable accounting remains
-            // redacted. Pending requests are not on disk yet and must survive.
-            let mut live: std::collections::HashMap<_, _> = inner
-                .records
-                .iter()
-                .cloned()
-                .map(|record| (record.id.clone(), record))
-                .collect();
-            let ids: std::collections::HashSet<_> =
-                records.iter().map(|record| record.id.clone()).collect();
-            let pending = inner.pending.clone();
-            let unsettled: Vec<_> = inner.settlement_pending.values().cloned().collect();
-            Self::reset_totals(inner);
-            for mut record in records {
-                // Only ephemeral diagnostics come from the in-memory copy.
-                // A revised durable fact must replace old usage/cost/identity.
-                if let Some(previous) = live.remove(&record.id) {
-                    record.error = previous.error;
-                    record.routing_decision = previous.routing_decision;
+        let limit = inner.limit;
+        match store.usage_snapshot(inner.revision, limit)? {
+            UsageSnapshot::Unchanged => {}
+            UsageSnapshot::Summary {
+                revision,
+                totals,
+                recent,
+            } => {
+                // Keep live diagnostics in memory while durable accounting remains
+                // redacted. Pending requests are not on disk yet and must survive.
+                let mut live: std::collections::HashMap<_, _> = inner
+                    .records
+                    .iter()
+                    .cloned()
+                    .map(|record| (record.id.clone(), record))
+                    .collect();
+                let durable: std::collections::HashSet<_> =
+                    recent.iter().map(|record| record.id.clone()).collect();
+                let pending = inner.pending.clone();
+                let unsettled: Vec<_> = inner.settlement_pending.values().cloned().collect();
+                Self::reset_totals(inner);
+                inner.totals = totals;
+                for mut record in recent {
+                    // Only ephemeral diagnostics come from the in-memory copy.
+                    // A revised durable fact must replace old usage/cost/identity.
+                    if let Some(previous) = live.remove(&record.id) {
+                        record.error = previous.error;
+                        record.routing_decision = previous.routing_decision;
+                    }
+                    Self::project(inner, record);
                 }
-                Self::accumulate(inner, record);
+                for record in pending {
+                    if !durable.contains(&record.id) {
+                        Self::accumulate(inner, record);
+                    }
+                }
+                for record in unsettled {
+                    if !durable.contains(&record.id) {
+                        Self::accumulate(inner, record);
+                    }
+                }
+                inner.revision = Some(revision);
+                inner.synced = Some(Instant::now());
             }
-            for record in pending {
-                if !ids.contains(&record.id) {
+            UsageSnapshot::Full { revision, records } => {
+                /*
+                 * The summary row is missing or stale: a database written
+                 * before it existed, an older binary that writes usage without
+                 * it, or a clear that dropped it. Rebuild once from the table
+                 * and store the durable aggregate back, so every read after
+                 * this one is a row read rather than a table scan.
+                 */
+                let mut durable = DurableTotals::default();
+                for record in &records {
+                    durable.observe(record);
+                }
+                if let Err(error) = store.save_usage_summary(revision, &durable) {
+                    tracing::warn!(%error, "durable usage summary could not be written back");
+                }
+                // Keep live diagnostics in memory while durable accounting remains
+                // redacted. Pending requests are not on disk yet and must survive.
+                let mut live: std::collections::HashMap<_, _> = inner
+                    .records
+                    .iter()
+                    .cloned()
+                    .map(|record| (record.id.clone(), record))
+                    .collect();
+                let ids: std::collections::HashSet<_> =
+                    records.iter().map(|record| record.id.clone()).collect();
+                let pending = inner.pending.clone();
+                let unsettled: Vec<_> = inner.settlement_pending.values().cloned().collect();
+                Self::reset_totals(inner);
+                for mut record in records {
+                    // Only ephemeral diagnostics come from the in-memory copy.
+                    // A revised durable fact must replace old usage/cost/identity.
+                    if let Some(previous) = live.remove(&record.id) {
+                        record.error = previous.error;
+                        record.routing_decision = previous.routing_decision;
+                    }
                     Self::accumulate(inner, record);
                 }
-            }
-            for record in unsettled {
-                if !ids.contains(&record.id) {
-                    Self::accumulate(inner, record);
+                for record in pending {
+                    if !ids.contains(&record.id) {
+                        Self::accumulate(inner, record);
+                    }
                 }
+                for record in unsettled {
+                    if !ids.contains(&record.id) {
+                        Self::accumulate(inner, record);
+                    }
+                }
+                inner.revision = Some(revision);
+                inner.synced = Some(Instant::now());
             }
-            inner.revision = Some(revision);
         }
-        inner.synced = Some(Instant::now());
         Ok(())
     }
 
@@ -1079,19 +1424,7 @@ impl Stats {
     fn reset_totals(inner: &mut Inner) {
         inner.local_revision = inner.local_revision.saturating_add(1);
         inner.records.clear();
-        inner.per_model.clear();
-        inner.per_kind.clear();
-        inner.per_client.clear();
-        inner.attribution = AttributionSummary::default();
-        inner.requests = 0;
-        inner.failures = 0;
-        inner.input_tokens = 0;
-        inner.output_tokens = 0;
-        inner.cache_read_tokens = 0;
-        inner.cache_write_tokens = 0;
-        inner.unpriced_requests = 0;
-        inner.cost = CostTotals::default();
-        inner.since = Utc::now();
+        inner.totals = DurableTotals::default();
     }
 
     pub fn clear(&self) {
@@ -1522,6 +1855,189 @@ mod tests {
             .unwrap();
         assert!(mystery.cost.is_empty());
         assert!(stats.recent(1)[0].cost.is_none());
+    }
+
+    #[test]
+    fn observe_then_unobserve_restores_the_empty_aggregate() {
+        let pricing = crate::billing::Pricing::new("USD", 3.0, 15.0);
+        let mut builder = RecordBuilder::new(Dialect::OpenAI, "sonnet-class", false);
+        builder
+            .resolved("m", "DeepSeek")
+            .usage(Usage {
+                input_tokens: 1_000,
+                output_tokens: 40,
+                cache_read_tokens: 900,
+                cache_write_tokens: 10,
+                reasoning_tokens: 5,
+            })
+            .priced_with(Some(&pricing))
+            .attempt()
+            .ttft(120);
+        let streamed = builder.finish(800);
+        let failed = rec("m", false, 320, Usage::default());
+        let mut other = rec("other", true, 40, Usage::default());
+        other.kind = RequestKind::Side(crate::query::SideQueryKind::AutoMode);
+
+        let mut totals = DurableTotals::default();
+        for record in [&streamed, &failed, &other] {
+            totals.observe(record);
+        }
+        assert_eq!(totals.requests, 3);
+        assert_eq!(totals.failures, 1);
+        assert!(!totals.cost.is_empty());
+        assert_eq!(totals.per_model.len(), 2);
+        assert_eq!(totals.per_kind.len(), 2);
+        assert_eq!(totals.per_client.len(), 1);
+        assert_eq!(totals.attribution.unknown, 3);
+
+        for record in [&streamed, &failed, &other] {
+            totals.unobserve(record);
+        }
+        assert_eq!(totals.requests, 0);
+        assert_eq!(totals.failures, 0);
+        assert_eq!(totals.input_tokens, 0);
+        assert_eq!(totals.output_tokens, 0);
+        assert_eq!(totals.cache_read_tokens, 0);
+        assert_eq!(totals.cache_write_tokens, 0);
+        assert_eq!(totals.unpriced_requests, 0);
+        assert!(totals.cost.is_empty(), "reversed spend leaves no dust rows");
+        assert!(
+            totals.per_model.is_empty(),
+            "a bucket with no requests does not survive"
+        );
+        assert!(totals.per_kind.is_empty());
+        assert!(totals.per_client.is_empty());
+        assert_eq!(totals.attribution, AttributionSummary::default());
+    }
+
+    #[test]
+    fn unobserving_a_replacement_reflects_only_the_settled_row() {
+        // The settle path replaces a provisional row: out with the old
+        // contribution, in with the new, in one summary step.
+        let before = rec(
+            "m",
+            true,
+            100,
+            Usage {
+                input_tokens: 10,
+                output_tokens: 5,
+                ..Usage::default()
+            },
+        );
+        let after = rec(
+            "m",
+            true,
+            300,
+            Usage {
+                input_tokens: 1_000,
+                output_tokens: 50,
+                ..Usage::default()
+            },
+        );
+        let mut totals = DurableTotals::default();
+        totals.observe(&before);
+        totals.unobserve(&before);
+        totals.observe(&after);
+        assert_eq!(totals.requests, 1);
+        assert_eq!(totals.input_tokens, 1_000);
+        assert_eq!(totals.output_tokens, 50);
+        let model = &totals.per_model["m"];
+        assert_eq!(model.requests, 1);
+        assert!((model.avg_latency_ms - 300.0).abs() < 0.001);
+    }
+
+    #[test]
+    fn refresh_adopts_the_durable_summary_and_matches_the_rebuild() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("runtime.sqlite3");
+        let store = Arc::new(crate::runtime_store::RuntimeStore::open(&path).unwrap());
+
+        let stats = Stats::new(10);
+        stats.attach_store(Arc::clone(&store)).unwrap();
+
+        // The completion queues the record; the durable write publishes it.
+        // The append folds the row into the durable summary in its own
+        // transaction, and the flush's revision chain goes stale because the
+        // summary moved underneath it — the situation every poll runs into.
+        let record = rec(
+            "settled",
+            true,
+            100,
+            Usage {
+                input_tokens: 42,
+                output_tokens: 7,
+                ..Usage::default()
+            },
+        );
+        stats.record(record.clone());
+        store.append_usage(std::slice::from_ref(&record)).unwrap();
+        stats.flush().unwrap();
+        let fast = stats.summary();
+        assert_eq!(fast.requests, 1);
+
+        // A refresh that cannot trust its revision adopts the durable summary
+        // (one row plus the recent window) instead of re-reading the table.
+        // The totals and the recent view must not move.
+        {
+            let mut inner = crate::sync::lock(&stats.inner);
+            inner.revision = None;
+            Stats::refresh_inner(&mut inner).unwrap();
+        }
+        let refreshed = stats.summary();
+        assert_eq!(refreshed.requests, fast.requests);
+        assert_eq!(refreshed.input_tokens, fast.input_tokens);
+        assert_eq!(refreshed.output_tokens, fast.output_tokens);
+        let model = refreshed
+            .per_model
+            .iter()
+            .find(|m| m.model_id == "settled")
+            .unwrap();
+        assert!((model.avg_latency_ms - 100.0).abs() < 0.001);
+        assert_eq!(stats.recent(10).len(), 1);
+        assert_eq!(stats.recent(10)[0].id, record.id);
+    }
+
+    #[test]
+    fn a_committed_settlement_replaces_the_pending_copy() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("runtime.sqlite3");
+        let store = Arc::new(crate::runtime_store::RuntimeStore::open(&path).unwrap());
+        let stats = Stats::new(10);
+        stats.attach_store(Arc::clone(&store)).unwrap();
+
+        let record = rec(
+            "mixed",
+            true,
+            50,
+            Usage {
+                input_tokens: 20,
+                ..Usage::default()
+            },
+        );
+        stats.record(record.clone());
+        {
+            let inner = crate::sync::lock(&stats.inner);
+            assert_eq!(inner.pending.len(), 1);
+        }
+        // The durable write publishes the row and its summary contribution;
+        // the settlement commit callback then drops the queued copy, because
+        // the summary counts the durable row now.
+        store.append_usage(std::slice::from_ref(&record)).unwrap();
+        let after = store.usage_revision().unwrap();
+        stats.record_committed(record, after - 1, after, true);
+        {
+            let inner = crate::sync::lock(&stats.inner);
+            assert!(
+                inner.pending.is_empty(),
+                "a committed row must not stay queued for the next flush"
+            );
+        }
+        {
+            let mut inner = crate::sync::lock(&stats.inner);
+            inner.revision = None;
+            Stats::refresh_inner(&mut inner).unwrap();
+        }
+        assert_eq!(stats.summary().requests, 1);
     }
 
     #[test]

@@ -147,7 +147,7 @@ mod tests {
         drop(db);
 
         let store = RuntimeStore::open(&path).unwrap();
-        assert_eq!(super::super::SCHEMA_VERSION, 8);
+        assert_eq!(super::super::SCHEMA_VERSION, 9);
         store
             .journal_inference_publication(&publication("staged"))
             .unwrap();
@@ -156,7 +156,7 @@ mod tests {
         let version: i64 = crate::sync::lock(&store.db)
             .pragma_query_value(None, "user_version", |row| row.get(0))
             .unwrap();
-        assert_eq!(version, 8);
+        assert_eq!(version, 9);
         assert_eq!(store.usage_revision().unwrap(), 41, "history is preserved");
 
         let mut old_writer = rusqlite::Connection::open(&path).unwrap();
