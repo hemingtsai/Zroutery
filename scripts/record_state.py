@@ -70,6 +70,8 @@ def main(argv: list[str] | None = None) -> int:
     ran_at = dt.datetime.now(dt.timezone.utc).isoformat(timespec="seconds")
     commit = subprocess.run(["git", "rev-parse", "--short", "HEAD"], cwd=ROOT, text=True, capture_output=True).stdout.strip()
     for item in doc_results:
+        if item["gate"] == "documentation impact (range)":
+            continue
         gate = gates.get(item["gate"])
         if gate is None:
             gate = {"name": item["gate"], "command": ""}
@@ -82,14 +84,11 @@ def main(argv: list[str] | None = None) -> int:
         gate["ran_at"] = ran_at
         if commit:
             gate["commit"] = commit
-        if item["gate"] == "documentation impact (range)" and item["status"] == "unverified":
-            gate["detail"] = "CI-only: pass --base to verify the range"
 
-    local_gate = gates.get("documentation contracts (local)")
-    if local_gate is None:
-        local_gate = {"name": "documentation contracts (local)"}
-        state["gates"].append(local_gate)
-        gates["documentation contracts (local)"] = local_gate
+    state["gates"] = [gate for gate in state["gates"] if gate["name"] != "documentation contracts (local)"]
+    local_gate = {"name": "documentation contracts (local)"}
+    state["gates"].insert(0, local_gate)
+    gates["documentation contracts (local)"] = local_gate
     local_gate["status"] = local
     local_gate["command"] = "python3 -B scripts/docs_contracts.py"
     local_gate["detail"] = "all non-range documentation gates"
@@ -97,8 +96,11 @@ def main(argv: list[str] | None = None) -> int:
     if commit:
         local_gate["commit"] = commit
 
-    # Remove the old ambiguous aggregate if it is still present.
-    state["gates"] = [gate for gate in state["gates"] if gate["name"] != "documentation contracts"]
+    # Range belongs to CI, not to the local snapshot; drop the old declaration.
+    state["gates"] = [
+        gate for gate in state["gates"]
+        if gate["name"] not in {"documentation contracts", "documentation impact (range)"}
+    ]
 
     if args.dry_run:
         print(json.dumps({"local": local, "gates": doc_results}, indent=2))

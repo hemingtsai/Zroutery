@@ -8,22 +8,22 @@ as of `2026-11-14` · branch `dev` · verified code head `26d887f`
 
 | Gate | Status | Command | Detail |
 |---|---|---|---|
+| documentation contracts (local) | **pass** | `python3 -B scripts/docs_contracts.py` | all non-range documentation gates |
 | fmt | **unverified** | `cargo fmt --all -- --check` | ran on local rustc 1.98.0; the CI-resolved toolchain was not available, so this is not a CI-toolchain pass |
 | clippy (workspace, all targets, all features) | **unverified** | `cargo clippy --workspace --all-targets --all-features --locked -- -D warnings` | ran on local rustc 1.98.0; the CI-resolved toolchain was not available, so this is not a CI-toolchain pass |
 | tests (workspace, all features) | **unverified** | `cargo test --workspace --all-features --locked` | 3478 passed, 0 failed, 22 ignored, 110 suites; ran on local rustc 1.98.0; the CI-resolved toolchain was not available, so this is not a CI-toolchain pass |
 | frontend build | **pass** | `pnpm --dir ui build` |  |
 | frontend tests | **pass** | `pnpm --dir ui test` | 86 passed |
 | command surface | **pass** | `python3 -B scripts/command_surface_test.py` | 90 interface commands, 254 registered |
-| documentation impact (range) | **unverified** | `python3 -B scripts/docs_contracts.py --base <base> --head HEAD` | CI-only: pass --base to verify the range |
-| documentation sources | **pass** | `python3 -B scripts/docs_sources.py --check` | docs-sources: 798 anchor(s) resolved in 36 active document(s) (e216dfa) |
-| markdown structure | **pass** | `python3 -B scripts/markdown_check.py` | markdown-check: fenced blocks and tables are well formed (e216dfa) |
-| documentation check | **pass** | `python3 -B scripts/docs_check.py` | docs-check: 47 active document(s), 0 pending, 0 warning(s), all checks passed (e216dfa) |
+| documentation sources | **pass** | `python3 -B scripts/docs_sources.py --check` | docs-sources: 798 anchor(s) resolved in 36 active document(s) (7f1b5c6) |
+| markdown structure | **pass** | `python3 -B scripts/markdown_check.py` | markdown-check: fenced blocks and tables are well formed (7f1b5c6) |
+| documentation check | **pass** | `python3 -B scripts/docs_check.py` | docs-check: 47 active document(s), 0 pending, 0 warning(s), all checks passed (7f1b5c6) |
 | documentation impact self-test | **pass** | `python3 -B scripts/docs_impact.py --base <base> --head HEAD` | the self-test passes; the range check is enforced in CI with --base/--head |
-| documentation parity | **pass** | `python3 -B scripts/docs_parity.py --check` | docs-parity: the three READMEs have matching headings, fences, images and source anchors (e216dfa) |
-| module coverage | **pass** | `python3 -B scripts/coverage_check.py` | coverage-check: 37 top-level modules (36 owned, 1 covered elsewhere, 0 unowned) (e216dfa) |
-| rendered state | **pass** | `python3 -B scripts/current_state.py --check` | current-state: clean (e216dfa) |
-| invariant evidence | **pass** | `python3 -B scripts/invariant_check.py` | invariant-check: 15 invariants, 13 with test anchors, 2 explicitly untested (e216dfa) |
-| state schema | **pass** | `python3 -B scripts/state_check.py` | state-check: 27 gates, 4 blockers; schema and blockers valid (e216dfa) |
+| documentation parity | **pass** | `python3 -B scripts/docs_parity.py --check` | docs-parity: the three READMEs have matching headings, fences, images and source anchors (7f1b5c6) |
+| module coverage | **pass** | `python3 -B scripts/coverage_check.py` | coverage-check: 37 top-level modules (36 owned, 1 covered elsewhere, 0 unowned) (7f1b5c6) |
+| rendered state | **pass** | `python3 -B scripts/current_state.py --check` | current-state: clean (7f1b5c6) |
+| invariant evidence | **pass** | `python3 -B scripts/invariant_check.py` | invariant-check: 15 invariants, 13 with test anchors, 2 explicitly untested (7f1b5c6) |
+| state schema | **pass** | `python3 -B scripts/state_check.py` | state-check: 26 gates, 4 blockers; schema and blockers valid (7f1b5c6) |
 | whitespace | **pass** | `git diff --check` | no trailing whitespace damage |
 | orchestration docs (legacy) | **retired** | `scripts/orch_docs_test.py (not run)` | legacy node and evidence records are archived; validation retired |
 | UI budget | **pass** | `python3 -B scripts/ui_budget_test.py` | 734,994 B JS of 742,000 |
@@ -32,9 +32,8 @@ as of `2026-11-14` · branch `dev` · verified code head `26d887f`
 | UI interaction | **unrun** | `python3 -B scripts/ui_interaction_test.py` | timed out after 900s on Helium 0.21.2; not a pass and not a product failure (quarantined) |
 | Rust advisories | **fail** | `cargo audit --file Cargo.lock` | 5 vulnerabilities, 18 warnings |
 | frontend advisories | **pass** | `pnpm audit --prod` |  |
-| freshness | **pass** | `python3 -B scripts/freshness_report.py --check` | freshness: 33 documents; no source changed after its review commit (e216dfa) |
-| rules registry | **pass** | `python3 -B scripts/docs_rules.py` | docs-rules: 15 rules; 14 machine, 11 executed gates covered (e216dfa) |
-| documentation contracts (local) | **pass** | `python3 -B scripts/docs_contracts.py` | all non-range documentation gates |
+| freshness | **pass** | `python3 -B scripts/freshness_report.py --check` | freshness: 33 documents; no source changed after its review commit (7f1b5c6) |
+| rules registry | **pass** | `python3 -B scripts/docs_rules.py` | docs-rules: 15 rules; 14 machine, 11 executed gates covered (7f1b5c6) |
 
 ## Blockers
 

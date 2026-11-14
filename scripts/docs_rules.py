@@ -7,6 +7,7 @@ import argparse
 import json
 import re
 import sys
+import tempfile
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -39,7 +40,7 @@ def files_errors(root: Path) -> list[str]:
         errors.append("pre-commit hook is missing or not executable")
     else:
         text = hook.read_text(encoding="utf-8")
-        for script in ("scripts/docs_contracts.py", "scripts/record_state.py"):
+        for script in ("scripts/docs_contracts.py",):
             if script not in text:
                 errors.append(f"pre-commit hook does not invoke {script}")
     ci = root / ".github" / "workflows" / "ci.yml"
@@ -111,7 +112,32 @@ def self_test() -> int:
     if not validate(bad, {"gate", "other"}):
         print("docs-rules self-test: unregistered step was NOT caught", file=sys.stderr)
         return 1
-    print("docs-rules: self-test passed (accepts full coverage, rejects an unregistered step)")
+    with tempfile.TemporaryDirectory(prefix="zr-rules-") as temporary:
+        root = Path(temporary)
+        hook = root / ".githooks" / "pre-commit"
+        hook.parent.mkdir(parents=True)
+        hook.write_text("python3 scripts/docs_contracts.py\n", encoding="utf-8")
+        hook.chmod(0o755)
+        ci = root / ".github" / "workflows" / "ci.yml"
+        ci.parent.mkdir(parents=True)
+        ci.write_text("jobs:\n  docs:\n    steps:\n      - run: python3 scripts/docs_contracts.py\n", encoding="utf-8")
+        page = root / "docs" / "development" / "reference" / "documentation-rules.md"
+        page.parent.mkdir(parents=True)
+        page.write_text("| ID | Rule | Enforced by | Type |\n|---|---|---|---|\n| DOC-01 | Rule | gate | machine |\n", encoding="utf-8")
+        data = {"rules": [{"id": "DOC-01", "rule": "Rule", "type": "machine", "enforced_by": ["gate"]}]}
+        if validate(data, {"gate"}, root):
+            print("docs-rules self-test: valid page/hook/CI rejected", file=sys.stderr)
+            return 1
+        hook.write_text("# empty hook\n", encoding="utf-8")
+        if not files_errors(root):
+            print("docs-rules self-test: empty hook was NOT caught", file=sys.stderr)
+            return 1
+        hook.write_text("python3 scripts/docs_contracts.py\n", encoding="utf-8")
+        ci.write_text("jobs:\n  docs:\n    steps:\n      # - run: python3 scripts/docs_contracts.py\n", encoding="utf-8")
+        if not files_errors(root):
+            print("docs-rules self-test: commented-out CI step was NOT caught", file=sys.stderr)
+            return 1
+    print("docs-rules: self-test passed (coverage, page rows, hook content, active CI step)")
     return 0
 
 
