@@ -513,6 +513,20 @@
       "status": "active",
       "owner": "docs",
       "summary": "Module-to-reference map and the areas that are covered elsewhere."
+    },
+    {
+      "path": "docs/development/reference/implementation-contracts.md",
+      "title": "Implementation Contracts Reference",
+      "type": "reference",
+      "authority": "reference",
+      "audience": [
+        "human",
+        "agent"
+      ],
+      "status": "active",
+      "owner": "backend",
+      "summary": "Module, IPC, lifecycle, takeover, platform and UI boundaries that AGENTS delegates here.",
+      "max_lines": 250
     }
   ],
   "pending": [],

@@ -63,6 +63,7 @@ This file is generated from `docs/docs.manifest.json`. Do not edit it.
 | [docs/development/reference/request-purpose.md](development/reference/request-purpose.md) | reference | reference | backend | Main versus side queries, shape-based detection, confidence and fail-closed verdicts. |
 | [docs/development/reference/client-attribution.md](development/reference/client-attribution.md) | reference | reference | backend | Reporting attribution ladder, confidence, canonical ids and the bounded registry. |
 | [docs/development/reference/README.md](development/reference/README.md) | index | index | docs | Module-to-reference map and the areas that are covered elsewhere. |
+| [docs/development/reference/implementation-contracts.md](development/reference/implementation-contracts.md) | reference | reference | backend | Module, IPC, lifecycle, takeover, platform and UI boundaries that AGENTS delegates here. |
 
 ## Pending migration
 
@@ -80,9 +81,9 @@ Audits, findings, triage and risk discussions live in GitHub Issues. Use the `au
 
 ## Health
 
-- active documents: 44
-- source-anchored (non-ADR): 31
-- hash-ledgered: 31
+- active documents: 45
+- source-anchored (non-ADR): 32
+- hash-ledgered: 32
 - guides: 5
 - ADRs: 8 (5 with code anchors; decision records, not machine-verified)
 - generated/index: 5

@@ -554,5 +554,36 @@
       "cargo test --workspace --all-features --locked"
     ],
     "note": "Reporting attribution is separate from routing identity; only a credential binding is Strong."
+  },
+  "docs/development/reference/implementation-contracts.md": {
+    "verified_at": "2026-11-14",
+    "sources": {
+      "crates/zroutery-core/Cargo.toml": "sha256:efc7be54b370a29abac18ed08f3a75d5b0863195949d22a1b55fbebbf9004ba6",
+      "src-tauri/Cargo.toml": "sha256:026dc0aedd8b657559ac6e1cfa61011f588917bf3164a3bb42966d7bfbc40783",
+      "ui/src/api.ts": "sha256:11544c2669498ecc507b019a75aa3694c63ce21ae1625cb13339df08027de789",
+      "src-tauri/src/lib.rs": "sha256:66c822292eb5c1a87874606746c5d5b154239284954656a0a892a7b2f811840a",
+      "src-tauri/build.rs": "sha256:bfcdc780b6631d9f6032cfc6021f654d7801d10290067b2ea5679e888ab3d323",
+      "src-tauri/capabilities/default.json": "sha256:16cc97d7b8f2068ebed1bf7fae50843dea4793c8981f63146a89ce4a6db43257",
+      "crates/zroutery-core/src/config/app.rs": "sha256:3d76faa31c6686927e6ba1010c0b5085b8dcd29205c938945b10f741ee15b5f1",
+      "crates/zroutery-core/src/observation.rs": "sha256:64a4ecd593bf0940e79a41664f9784f7603a3f5711c95f5003215af93e80ed5b",
+      "src-tauri/src/secrets.rs": "sha256:183e0588a948e896b2eb368895cbde309cb8b0818e06a0105a04a4749616fdf5",
+      "crates/zroutery-core/src/server/pipeline/lifecycle.rs": "sha256:d09be55d5471810747ae16ab614d1e406642b509d1a66c439d9873311bd4fbbb",
+      "crates/zroutery-core/src/outcome/mod.rs": "sha256:e50c59304ab0dc529ed4c9ce7e2b1d18e67ece8df1b1ffb988b7ee4f819745b3",
+      "crates/zroutery-core/src/accounting.rs": "sha256:3569d4043744bf2ea5e570280110e0c47b9184a8f80db15ba2da01e2daef423e",
+      "crates/zroutery-core/src/outcome/attempt.rs": "sha256:3f86dac2157c604d3a4331772675ac6753b9af367f7a6fdc1d0ac111367f585d",
+      "crates/zroutery-core/src/ir/mod.rs": "sha256:8ce5ac6f85259c3c2265ebdf1f91e306857b9d053b14317e487b4b4f1c85ab0a",
+      "crates/zroutery-core/src/billing.rs": "sha256:56e93b1bad31236f842e1f134677c34e261dfcf2c472ac1dc72603087c3ed538",
+      "crates/zroutery-core/src/protocol/reasoning_bridge.rs": "sha256:09730b423ea2f8e23cf5e8ea7ca7614148ced37ee2df34944778bb6870a82a1d",
+      "crates/zroutery-core/src/agent_takeover/ownership.rs": "sha256:29be578e89eaa58afa7f343f8aeffb5980bbfc6d882499ddf4bc57996e9cd594",
+      "crates/zroutery-core/src/file_transaction.rs": "sha256:5d6516c3cf37977cbb92a17bc8c7ddec8efc41d3a2b6e9e7c8f3025128257212",
+      "ui/src/i18n.tsx": "sha256:3020ad8c7e3c1fe921c0ded9308534527a6a02abadc8957e668359793586a424",
+      "ui/src/i18n/en.ts": "sha256:75cca3166b00abb50e9710f150e609e11c8e931e021770a3ad87fff51ed6913e",
+      "ui/src/i18n/zh.ts": "sha256:ee0f9045fe5a9194c04e5ff51bea3ef494849baa25a6f5070215061f4bbc491e",
+      "ui/src/i18n.zhTW.ts": "sha256:db80720e7a75943e574ee329e004031611b8b5e26010c9475d64d8a2b6fb7962"
+    },
+    "commands": [
+      "cargo test --workspace --all-features --locked"
+    ],
+    "note": "AGENTS routes here; the contracts are anchored to the modules that enforce them."
   }
 }
