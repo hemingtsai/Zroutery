@@ -112,15 +112,59 @@ def check(root: Path) -> tuple[list[str], int, int]:
             problem = docs_sources.check_citation(root, path, symbol, None, None)
             if problem:
                 errors.append(f"{ARCH}: invariant {number}: {problem}")
+            elif not is_test(root, path, symbol):
+                errors.append(f"{ARCH}: invariant {number}: `{anchor}` is not a test")
         tested += 1
     return errors, tested, untested
+
+
+def self_test() -> int:
+    import tempfile
+
+    with tempfile.TemporaryDirectory(prefix="zr-invariant-") as temporary:
+        root = Path(temporary)
+        (root / "docs" / "development").mkdir(parents=True)
+        (root / "crates" / "sample").mkdir(parents=True)
+        (root / "crates" / "sample" / "model.rs").write_text("pub fn boundary() -> u8 { 1 }\n", encoding="utf-8")
+        (root / "crates" / "sample" / "model_tests.rs").write_text(
+            "#[test]\nfn boundary_holds() { assert_eq!(1, 1); }\n", encoding="utf-8"
+        )
+        table = """### Invariant evidence
+
+| # | Invariant | Test evidence |
+|---|---|---|
+| 1 | Boundary exists | `crates/sample/model.rs::boundary` |
+| 2 | Tested boundary | `crates/sample/model_tests.rs::boundary_holds` |
+"""
+        prefix = """## 3. Invariants
+
+1. **First invariant**
+2. **Second invariant**
+
+"""
+        architecture = prefix + table
+        (root / ARCH).write_text(architecture, encoding="utf-8")
+        errors, tested, untested = check(root)
+        if tested != 2 or untested != 0 or not any("is not a test" in error for error in errors):
+            print(f"invariant-check self-test: non-test anchor was NOT caught ({errors})", file=sys.stderr)
+            return 1
+        (root / ARCH).write_text(architecture.replace("| 1 | Boundary exists | `crates/sample/model.rs::boundary` |", "| 1 | Boundary exists | untested — no executable proof |"), encoding="utf-8")
+        errors, tested, untested = check(root)
+        if errors or tested != 1 or untested != 1:
+            print(f"invariant-check self-test: untested row rejected ({errors})", file=sys.stderr)
+            return 1
+        print("invariant-check: self-test passed (accepts test anchors and untested rows; rejects a non-test anchor)")
+        return 0
 
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--check", action="store_true")
+    parser.add_argument("--self-test", action="store_true")
     parser.add_argument("--root", default=str(ROOT))
     args = parser.parse_args(argv)
+    if args.self_test:
+        return self_test()
     errors, tested, untested = check(Path(args.root))
     if errors:
         for error in errors:

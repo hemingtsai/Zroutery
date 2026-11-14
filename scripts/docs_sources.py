@@ -81,6 +81,32 @@ def _int(value: str | None) -> int | None:
     return int(value) if value is not None else None
 
 
+def symbol_defined(text: str, segment: str) -> bool:
+    """Require a definition-shaped occurrence, not an arbitrary substring."""
+    escaped = re.escape(segment)
+    definition = re.search(
+        rf"\b(?:fn|struct|enum|trait|impl|const|static|type|mod|union|class|interface|function|def|let|macro_rules!)\s+{escaped}\b",
+        text,
+    )
+    if definition:
+        return True
+    if re.search(rf"(?:\b{escaped}\s*[:=]|[\"']{escaped}[\"']\s*:)", text):
+        return True
+    if re.search(rf"(?:^|[^\w-]){escaped}\s*[:=]", text):
+        return True
+    if re.search(rf"^\s*\[{escaped}\]", text, re.MULTILINE):
+        return True
+    if re.search(rf"\b{escaped}\s*!", text):
+        return True
+    if re.search(rf"uses:\s*\S*{escaped}", text):
+        return True
+    if re.search(rf"^\s*{escaped}\s*=", text, re.MULTILINE):
+        return True
+    if re.search(rf"\b{escaped}\s*,", text):
+        return True
+    return False
+
+
 def check_citation(root: Path, path: str, symbol: str | None, start: int | None, end: int | None) -> str | None:
     target = root / path
     if not target.is_file():
@@ -97,8 +123,8 @@ def check_citation(root: Path, path: str, symbol: str | None, start: int | None,
             return f"`{path}` line range {start}-{end} is outside 1-{lines}"
     if symbol:
         for segment in symbol.split("::"):
-            if segment not in text:
-                return f"symbol `{segment}` not found in `{path}`"
+            if not symbol_defined(text, segment):
+                return f"symbol `{segment}` is not defined in `{path}`"
     return None
 
 
@@ -147,7 +173,8 @@ def self_test() -> int:
         source.write_text("pub struct Sample {}\nimpl Sample { pub fn value(&self) -> u8 { 1 } }\n", encoding="utf-8")
         (root / "docs").mkdir()
         (root / "docs" / "docs.manifest.json").write_text(
-            json.dumps({"docs": [{"path": "docs/good.md"}, {"path": "docs/bad.md"}]}), encoding="utf-8"
+            json.dumps({"docs": [{"path": "docs/good.md"}, {"path": "docs/bad.md"}, {"path": "docs/notdef.md"}]}),
+            encoding="utf-8",
         )
         (root / "docs" / "good.md").write_text(
             "`crates/sample.rs::Sample::value`\n", encoding="utf-8"
@@ -155,14 +182,18 @@ def self_test() -> int:
         (root / "docs" / "bad.md").write_text(
             "`crates/sample.rs::Sample::missing`\n", encoding="utf-8"
         )
+        (root / "docs" / "notdef.md").write_text(
+            "`crates/sample.rs::pub::fn`\n", encoding="utf-8"
+        )
         problems = []
         problems += check_document(root, root / "docs" / "good.md")
         problems += check_document(root, root / "docs" / "bad.md")
-        if len(problems) != 1 or "missing" not in problems[0]:
+        problems += check_document(root, root / "docs" / "notdef.md")
+        if len(problems) != 2 or "missing" not in problems[0] or "not defined" not in problems[1]:
             print(f"docs-sources self-test: FAILED ({problems})", file=sys.stderr)
             return 1
         index = reverse_index(root)
-        if index.get("crates/sample.rs") != ["docs/bad.md", "docs/good.md"]:
+        if index.get("crates/sample.rs") != ["docs/bad.md", "docs/good.md", "docs/notdef.md"]:
             print(f"docs-sources self-test: index mismatch ({index})", file=sys.stderr)
             return 1
         print("docs-sources: self-test passed (resolves anchors, rejects missing symbols, builds the reverse index)")

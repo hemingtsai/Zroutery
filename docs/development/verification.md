@@ -154,12 +154,21 @@ Consequences, stated rather than discovered:
   `all passed`. An ADR `Date` must equal the file's first
   commit date (`git log --diff-filter=A --format=%cs`); `## Sources` needs at
   least one existing path or `path::symbol`.
-- `invariant_check.py` requires every architecture invariant to name a test anchor
-  or an explicit `untested` reason.
+- `invariant_check.py` requires every architecture invariant to name a real
+  test anchor or an explicit `untested` reason; its self-test covers a non-test
+  anchor. `current_state.py --self-test` rejects a hand edit.
 - `current_state.py --check` fails when `current-state.md` is not the render of
   `state.json`; hand edits are not a source.
 - `new_adr.py` creates the next ADR skeleton with the enforced header and
   sections; it is a generator, not a gate.
+- `docs_sources.py` resolves definition-shaped symbols (fn/struct/enum/impl/
+  const/mod, TOML/YAML keys, CSS custom properties, macro invocations), not
+  arbitrary substrings.
+- `docs_verified.py` derives the cited source set and hashes into
+  `docs/verified.json`; `--check` requires exact coverage and current hashes.
+- `docs_review.py` records `reviewed_by`, `reviewed_at` and a deterministic
+  3-5 sentence `sample` per verified document; a reviewer equal to the last
+  author fails.
 - `docs_rules.py` checks that every `docs/rules.json` machine rule names an
   executed `docs_contracts.py` step, and that every gated step is registered.
 - `record_state.py` runs `docs_contracts.py --json` and writes the documentation

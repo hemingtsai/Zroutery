@@ -76,12 +76,46 @@ def load_state(root: Path) -> dict:
     return json.loads(path.read_text(encoding="utf-8"))
 
 
+def self_test() -> int:
+    import tempfile
+
+    with tempfile.TemporaryDirectory(prefix="zr-state-") as temporary:
+        root = Path(temporary)
+        (root / STATE).parent.mkdir(parents=True)
+        state = {
+            "as_of": "2026-11-14",
+            "branch": "test",
+            "head": "abc1234",
+            "gates": [{"name": "demo", "status": "pass", "command": "true", "detail": "ok"}],
+            "blockers": [],
+            "flaky": [],
+            "last_full_green": None,
+        }
+        (root / STATE).write_text(json.dumps(state), encoding="utf-8")
+        if main(["--root", str(root), "--write"]) != 0:
+            print("current-state self-test: write failed", file=sys.stderr)
+            return 1
+        if main(["--root", str(root), "--check"]) != 0:
+            print("current-state self-test: fresh render rejected", file=sys.stderr)
+            return 1
+        target = root / TARGET
+        target.write_text(target.read_text(encoding="utf-8") + "hand edit\n", encoding="utf-8")
+        if main(["--root", str(root), "--check"]) == 0:
+            print("current-state self-test: hand edit was NOT caught", file=sys.stderr)
+            return 1
+        print("current-state: self-test passed (writes, accepts its render, rejects a hand edit)")
+        return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--root", default=str(ROOT))
     parser.add_argument("--write", action="store_true")
     parser.add_argument("--check", action="store_true")
+    parser.add_argument("--self-test", action="store_true")
     args = parser.parse_args(argv)
+    if args.self_test:
+        return self_test()
     root = Path(args.root)
     try:
         state = load_state(root)

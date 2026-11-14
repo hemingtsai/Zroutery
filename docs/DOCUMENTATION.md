@@ -114,6 +114,7 @@ The default body limit is 32 MiB (`crates/zroutery-core/src/config/server.rs::Se
 - `scripts/docs_check.py` compares the source content hashes recorded in
   `docs/verified.json` with the current files. A changed source means the
   document must be re-read and re-verified. Strict mode: CI blocks.
+- `scripts/docs_verified.py --write` derives cited sources; `--check` rejects missing, stale or extra entries.
 
 ## Findings and decisions
 
@@ -193,3 +194,6 @@ The machine-readable rule registry is
 - Mechanical checks prove anchors resolve, links exist, sizes fit and sources did
   not move. They cannot prove an interpretation is correct. Every rewrite is
   spot-checked by a second reader on 3-5 factual sentences.
+- `docs/verified.json` records `reviewed_by`, `reviewed_at` and a 3-5 sentence
+  `sample`; `scripts/docs_review.py --plan` produces the deterministic sample.
+  A reviewer equal to the last author fails.

@@ -85,7 +85,7 @@ Findings are reported to the user in the conversation. GitHub Issues are opened 
 
 - active documents: 47
 - source-anchored (non-ADR): 32
-- hash-ledgered: 33
+- hash-ledgered: 32
 - guides: 5
 - ADRs: 9 (6 with code anchors; decision records, not machine-verified)
 - entry: 1

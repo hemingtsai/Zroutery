@@ -118,6 +118,22 @@
       "rule": "Reference prose matches code",
       "type": "manual",
       "manual": "second-reader sample of three sentences"
+    },
+    {
+      "id": "DOC-16",
+      "rule": "Verified ledger covers every cited source",
+      "type": "machine",
+      "enforced_by": [
+        "verified ledger"
+      ]
+    },
+    {
+      "id": "DOC-17",
+      "rule": "Review evidence is recorded and not self-authored",
+      "type": "machine",
+      "enforced_by": [
+        "review evidence"
+      ]
     }
   ]
 }
