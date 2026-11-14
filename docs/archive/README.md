@@ -11,6 +11,15 @@ evidence registry. They are kept for provenance only.
 are in [`docs/DOCUMENTATION.md`](../DOCUMENTATION.md). Audits and findings are
 discussed in GitHub Issues, not here.
 
+## Links inside archived documents
+
+Archived prose is not edited. When a link target also moved, only the link target
+is retargeted to the archived copy; the evidence and wording stay as they were.
+A code span that names a document removed from the repository (not archived)
+stays as history and is not rewritten. `docs_check.py` resolves every Markdown
+link in this directory, so a link that is neither present nor redirected fails
+CI.
+
 ## Criteria
 
 | Code | Meaning |

@@ -4,7 +4,7 @@ Frozen for M0 on 2026-10-30. These contracts implement the agreed revision of
 the **Zroutery 升级总计划（三份计划整合）**, not an alternative roadmap. The
 source plan is `C:\Users\InfinityNeko\.config\openchamber\projects\path_RTovWnJvdXRlcnk\plans\1793340247479-zroutery.md`.
 Implementation and verification are recorded separately in
-[upgrade-execution.md](upgrade-execution.md). Unknown facts remain unknown.
+[upgrade-execution.md](../records/upgrade-execution.md). Unknown facts remain unknown.
 
 ## Task architecture and migration
 

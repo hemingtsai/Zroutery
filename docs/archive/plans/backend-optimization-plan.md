@@ -1,8 +1,8 @@
 # 后端优化计划（GPT 6.1 SOL 执行）
 
-> 与 [`ui-optimization-plan.md`](ui-optimization-plan.md) 同一战役的后端面；前端面与协作约定（契约流程、验收流水线、设计系统守护）都在那边，此处不重复。范围来源：[`upgrade-master-plan.md`](upgrade-master-plan.md)。研究依据：[`cc-switch-design-notes.md`](cc-switch-design-notes.md)。
+> 与 [`ui-optimization-plan.md`](ui-optimization-plan.md) 同一战役的后端面；前端面与协作约定（契约流程、验收流水线、设计系统守护）都在那边，此处不重复。范围来源：[`upgrade-master-plan.md`](upgrade-master-plan.md)。研究依据：[`cc-switch-design-notes.md`](../records/cc-switch-design-notes.md)。
 
-> 2026-11-01 状态对账（只读核对，`dev` HEAD/origin/dev=`4075a54`，工作区大量未提交改动）：本文件已更正 B4 的 Gemini 入口精度、B5/B6 的 UI 接线状态与 B7 的 DWM 字节序。E-192 的 3,238 全量绿是 2026-10-31 的带日期记录；其后新增工作由 E-196~E-203 的聚焦门禁覆盖，不得读作当前全量绿。剩余后端项的源码定位见 [`backend-optimization-execution.md`](backend-optimization-execution.md) 的对账节。
+> 2026-11-01 状态对账（只读核对，`dev` HEAD/origin/dev=`4075a54`，工作区大量未提交改动）：本文件已更正 B4 的 Gemini 入口精度、B5/B6 的 UI 接线状态与 B7 的 DWM 字节序。E-192 的 3,238 全量绿是 2026-10-31 的带日期记录；其后新增工作由 E-196~E-203 的聚焦门禁覆盖，不得读作当前全量绿。剩余后端项的源码定位见 [`backend-optimization-execution.md`](../records/backend-optimization-execution.md) 的对账节。
 
 ## T · 托盘快切面板 🔄（Rust 窗口/ACL/命令已交付，前端面板与真机交互待验）
 

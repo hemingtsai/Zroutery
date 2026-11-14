@@ -5,9 +5,9 @@
 This roadmap is a recoverable view of the repository audit, not a forecast
 that silently upgrades work. The canonical machine-readable records are in
 `docs/development/node-status/`; the graph is in
-[`dependency-dag.md`](dependency-dag.md), and gate provenance is in
-[`evidence-registry.md`](evidence-registry.md). The audit input remains
-[`repository-audit-2026-09-25.md`](repository-audit-2026-09-25.md).
+[`dependency-dag.md`](../history/dependency-dag.md), and gate provenance is in
+[`evidence-registry.md`](../history/evidence-registry.md). The audit input remains
+[`repository-audit-2026-09-25.md`](../audits/repository-audit-2026-09-25.md).
 
 Only these states are used: `QUEUED`, `READY`, `RUNNING`, `VALIDATING`, `DONE`,
 `PARTIAL`, `BLOCKED`, `FAILED`, and `REVALIDATE`. A historical tag or commit
@@ -390,22 +390,22 @@ model activation is authorized by this roadmap.
 
 ## Unresolved decisions
 
-- [ADR-0001](decisions/0001-recoverable-node-records.md): approve or revise
+- [ADR-0001](../../development/decisions/0001-recoverable-node-records.md): approve or revise
   the versioned node-record schema and ownership rules.
-- [ADR-0002](decisions/0002-production-ml-boundary.md): choose the future
+- [ADR-0002](../../development/decisions/0002-production-ml-boundary.md): choose the future
   deployment boundary for online ML and activation.
-- [ADR-0003](decisions/0003-capability-media-fail-closed.md): accepted for the
+- [ADR-0003](../../development/decisions/0003-capability-media-fail-closed.md): accepted for the
   Core P1 capability/media boundary; revisit only with new evidence.
-- [ADR-0004](decisions/0004-failure-outcome-authority.md): accepted for the
+- [ADR-0004](../../development/decisions/0004-failure-outcome-authority.md): accepted for the
   Core P1 failure/Outcome boundary; revisit only with new evidence.
-- [ADR-0005](decisions/0005-core-p1-node-boundaries.md): accepted for the
+- [ADR-0005](../../development/decisions/0005-core-p1-node-boundaries.md): accepted for the
   current dispatch split and sole pipeline ownership rule.
-- [ADR-0006](decisions/0006-ml-closed-loop.md): accepted; supersedes ADR-0002 and
+- [ADR-0006](../../development/decisions/0006-ml-closed-loop.md): accepted; supersedes ADR-0002 and
   answers its deployment question. ML reaches the routing path in-process,
   behind a gate, with a fallback and a rollback.
-- [ADR-0007](decisions/0007-ml-operator-surface.md): accepted; builds on ADR-0006.
+- [ADR-0007](../../development/decisions/0007-ml-operator-surface.md): accepted; builds on ADR-0006.
   The loop is legible to an operator and reversible.
-- [ADR-0008](decisions/0008-nothing-random-decides.md): accepted; builds on
+- [ADR-0008](../../development/decisions/0008-nothing-random-decides.md): accepted; builds on
   ADR-0006 and ADR-0007. No coin, clock, or hash decides a split, a verdict, or
   a served model.
 

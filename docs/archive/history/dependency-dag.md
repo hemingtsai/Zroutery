@@ -200,8 +200,8 @@ UI-LAYOUT ─> UI-UX-M1 (simple and geek modes)
 ```
 
 These seven nodes carry the frontend queue from
-[`ui-optimization-plan.md`](ui-optimization-plan.md) (batches U, M, P) and its
-design inputs from [`cc-switch-design-notes.md`](cc-switch-design-notes.md).
+[`ui-optimization-plan.md`](../plans/ui-optimization-plan.md) (batches U, M, P) and its
+design inputs from [`cc-switch-design-notes.md`](../records/cc-switch-design-notes.md).
 Their edges are data dependencies only — the **execution order** (U10 → U3 →
 U7 → U12 → U6 → P2 baseline, M1 last because it restyles every surface) is
 maintained by the frontend owner and is deliberately not encoded as graph

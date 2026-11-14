@@ -1,7 +1,7 @@
 # Upgrade execution
 
 Implements the agreed 2026-10-30 master plan. The canonical plan is the
-OpenChamber Markdown file named in [upgrade-contracts.md](upgrade-contracts.md);
+OpenChamber Markdown file named in [upgrade-contracts.md](../history/upgrade-contracts.md);
 only its coarse checkboxes are changed when the corresponding gates close.
 This record does not replace existing node evidence or claim a release.
 

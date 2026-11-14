@@ -3,8 +3,8 @@
 > **历史草稿，不是实施入口。** 本文原内容保留用于追溯；用户已同意的
 > 2026-10-30 修订本源为
 > `C:\Users\InfinityNeko\.config\openchamber\projects\path_RTovWnJvdXRlcnk\plans\1793340247479-zroutery.md`。
-> 实施合同见 [upgrade-contracts.md](upgrade-contracts.md)，当前验证与交付记录见
-> [upgrade-execution.md](upgrade-execution.md)。以下旧排序、待确认措辞和完成状态
+> 实施合同见 [upgrade-contracts.md](../history/upgrade-contracts.md)，当前验证与交付记录见
+> [upgrade-execution.md](../records/upgrade-execution.md)。以下旧排序、待确认措辞和完成状态
 > 不覆盖修订本源，也不构成当前验收证据。
 
 ## Steps

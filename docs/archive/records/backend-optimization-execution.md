@@ -1,7 +1,7 @@
 # Backend optimization execution
 
-Implements the backend slice of [backend-optimization-plan.md](backend-optimization-plan.md).
-The accepted master constraints remain in [upgrade-contracts.md](upgrade-contracts.md).
+Implements the backend slice of [backend-optimization-plan.md](../plans/backend-optimization-plan.md).
+The accepted master constraints remain in [upgrade-contracts.md](../history/upgrade-contracts.md).
 Frontend pages belong to ZCode; the user explicitly authorized this execution to
 synchronize only `ui/src/api.ts` and `ui/mock-bridge.ts`. All delegated work uses
 `zroutery/agentrouter-gpt-5.6-sol`, as requested.
