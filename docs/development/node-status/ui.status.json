@@ -51,7 +51,7 @@
     "ui/src/pages/Providers.tsx",
     "ui/src/pages/Models.tsx",
     "ui/src/pages/Routing.tsx",
-    "ui/src/pages/MlRouting.tsx",
+    "ui/src/pages/routing/ml/MlRouting.tsx",
     "ui/src/pages/Activity.tsx",
     "ui/src/pages/Settings.tsx",
     "package.json"

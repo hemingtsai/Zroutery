@@ -21,7 +21,7 @@
     "E-180"
   ],
   "source_references": [
-    "ui/src/components.tsx",
+    "ui/src/components/toast.tsx",
     "docs/development/cc-switch-design-notes.md"
   ],
   "notes": [

@@ -455,12 +455,12 @@ mod tests {
         let f = extract_features(&ctx);
         // All task/candidate/observation/stats features should be UNKNOWN
         // except F_PRIORITY which is always computed.
-        for i in 0..FEATURE_DIMENSION {
+        for (i, value) in f.values.iter().enumerate() {
             if i == F_PRIORITY {
                 // priority=0 -> 1.0 - 0/100 = 1.0
-                assert_eq!(f.values[i], 1.0);
+                assert_eq!(*value, 1.0);
             } else {
-                assert_eq!(f.values[i], UNKNOWN, "index {i} should be UNKNOWN");
+                assert_eq!(*value, UNKNOWN, "index {i} should be UNKNOWN");
             }
         }
     }
