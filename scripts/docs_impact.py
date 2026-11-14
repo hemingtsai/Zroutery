@@ -37,8 +37,8 @@ def changed_files(root: Path, base: str, head: str, include_staged: bool = False
         raise RuntimeError(result.stderr.strip() or "git diff failed")
     changed = [line for line in result.stdout.splitlines() if line.strip()]
     if include_staged:
-        staged = git(root, "diff", "--cached", "--name-only")
-        changed.extend(line for line in staged.stdout.splitlines() if line.strip())
+        staged = git(root, "diff", "--cached", "--name-only", base)
+        changed = [line for line in staged.stdout.splitlines() if line.strip()]
     return sorted(set(changed))
 
 

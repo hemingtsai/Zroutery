@@ -94,7 +94,7 @@ python3 -B scripts/docs_impact.py --base <start> --head HEAD
 ```
 
 - The affected set is computed from the documents' own source anchors and the
-  manifest triggers (`scripts/docs_impact.py::main`).
+  manifest triggers (`scripts/docs_impact.py`).
 - There is no `none` escape. If a trigger is wrong, fix the manifest or the
   citation in the same change.
 - Every factual sentence added to a normative or reference document cites a

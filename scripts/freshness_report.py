@@ -18,7 +18,7 @@ def git(*args: str) -> subprocess.CompletedProcess:
 
 
 def changed_since(commit: str, sources: list[str]) -> list[str]:
-    result = git("diff", "--name-only", f"{commit}..HEAD", "--", *sources)
+    result = git("diff", "--name-only", commit, "--", *sources)
     if result.returncode != 0:
         return [f"git diff failed: {result.stderr.strip()}"]
     return [line for line in result.stdout.splitlines() if line]

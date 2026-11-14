@@ -128,6 +128,21 @@ def main(argv: list[str] | None = None) -> int:
     if args.json:
         print(json.dumps({"base": base, "head": args.head, "results": results}, indent=2))
         return 1 if failed else 0
+
+    state_path = ROOT / "docs" / "development" / "state.json"
+    if state_path.is_file():
+        state = json.loads(state_path.read_text(encoding="utf-8"))
+        gates = {gate["name"]: gate for gate in state.get("gates", [])}
+        mismatches = [
+            f"{item['gate']}: state={gates.get(item['gate'], {}).get('status', 'missing')} run={item['status']}"
+            for item in results
+            if item.get("gate") and item["gate"] != "documentation impact (range)" and gates.get(item["gate"], {}).get("status") != item["status"]
+        ]
+        if mismatches:
+            for mismatch in mismatches:
+                print(f"docs-contracts: recorded state differs: {mismatch}", file=sys.stderr)
+            print("fix: run `python3 -B scripts/record_state.py --no-range` and commit the state change", file=sys.stderr)
+            return 1
     if failed:
         print("docs-contracts: FAILED", file=sys.stderr)
         print("fix: update the affected document or trigger, then re-run the same command", file=sys.stderr)

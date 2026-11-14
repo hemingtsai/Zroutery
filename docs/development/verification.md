@@ -146,8 +146,9 @@ Consequences, stated rather than discovered:
   elsewhere, or explicitly unowned with a reason.
 - `docs_check.py` requires an ADR header (`Status`, `Date`, `Supersedes`), the
   `Context`/`Decision`/`Consequences`/`Sources` sections, and a resolvable
-  `manifest.canonical[].home` anchor. CI also runs `record_state.py --check
-  --no-range`; a state file that disagrees with the executed local gates fails. An ADR `Date` must equal the file's first
+  `manifest.canonical[].home` anchor. `docs_contracts.py` also compares the
+  executed step statuses with `state.json`; a state file that disagrees fails
+  with the `record_state.py --no-range` repair command. An ADR `Date` must equal the file's first
   commit date (`git log --diff-filter=A --format=%cs`); `## Sources` needs at
   least one existing path or `path::symbol`.
 - `invariant_check.py` requires every architecture invariant to name a test anchor
