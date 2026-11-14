@@ -11,6 +11,7 @@ export function Button({
   type = "button",
   ariaLabel,
   buttonRef,
+  autoFocus,
   "aria-pressed": ariaPressed,
 }: {
   children: ReactNode;
@@ -21,6 +22,8 @@ export function Button({
   type?: "button" | "submit";
   ariaLabel?: string;
   buttonRef?: React.Ref<HTMLButtonElement>;
+  /** Focus on mount — the confirm dialog's deliberate default choice. */
+  autoFocus?: boolean;
   "aria-pressed"?: boolean;
 }) {
   return (
@@ -33,6 +36,7 @@ export function Button({
       title={title}
       aria-label={ariaLabel}
       aria-pressed={ariaPressed}
+      autoFocus={autoFocus}
     >
       {children}
     </button>

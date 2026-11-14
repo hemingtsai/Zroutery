@@ -163,6 +163,7 @@ export const en = {
   "lang.en": "English",
   "action.hide": "Hide",
   "toast.copied": "Copied.",
+  "toast.region": "Notifications",
   "toast.queued_discarded":
     "The save failed, so edits queued behind it were dropped.",
   "toast.balances_refreshed": "Balances refreshed.",

@@ -60,7 +60,16 @@ DEFAULT_DIST = os.path.join(REPO, "ui", "dist")
 # 726,000 -> 742,000: M2b imported history browse/manage (Activity drawer):
 # query/paging filters, fact table, filtered export, scoped/all clear controls,
 # and synced i18n. Measured at 733,590 B after this slice.
-JS_TOTAL_MAX = 742_000
+# 742,000 -> 848,000: the interactive components' behaviour layer moved to
+# Radix primitives (dialog, dropdown-menu, popover, toast, tabs, toggle-group),
+# replacing the hand-rolled focus traps, keyboard nav and overlay stack;
+# confirm/drawer/menu/toast/tabs/segment keep their classes and public props,
+# and the theme packs still own every visual via the ThemeV1 compiler. The
+# deleted hand-rolled logic did not offset the primitives. Measured at
+# 830,381 B with the Radix set installed; react-select 2.3.7 -> 2.4.1 (the
+# in-Dialog keyboard fix) brought the final build to 799,803 B. CSS and
+# largest-chunk ceilings are unchanged.
+JS_TOTAL_MAX = 848_000
 CSS_TOTAL_MAX = 180_000
 LARGEST_CHUNK_MAX = 320_000
 

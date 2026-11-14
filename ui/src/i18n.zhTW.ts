@@ -163,6 +163,7 @@ export const zhTW: Dict = {
   "lang.en": "English",
   "action.hide": "隱藏",
   "toast.copied": "已複製",
+  "toast.region": "通知",
   "toast.queued_discarded": "儲存失敗，排隊中的修改已丟棄。",
   "toast.balances_refreshed": "餘額已重新整理。",
   "toast.balances_refresh_failed": "餘額重新整理失敗，仍顯示上次取得的數值",

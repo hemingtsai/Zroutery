@@ -1,8 +1,18 @@
 /**
  * A small anchored menu: the desktop pattern for global, infrequent controls.
  * Opens under its trigger, closes on outside click or Escape.
+ *
+ * The menu behaviour — arrow keys that wrap, Home/End, typeahead, outside
+ * click, Escape, focus moving in on open and back to the trigger on close —
+ * is Radix's (@radix-ui/react-dropdown-menu). A role is a promise about the
+ * behaviour, and the arrow keys are the behaviour; hand-rolling them a second
+ * time next to the select's was drift waiting to happen. What this file keeps
+ * is the surface's own classes (`bar-action` / `popover` / `menu-item`) and
+ * the collision-safe positioning Radix adds for free (a menu inside a narrow
+ * page column flips instead of clipping).
  */
-import { useEffect, useId, useRef, useState, type ReactNode } from "react";
+import { useCallback, useState, type ReactNode } from "react";
+import * as MenuPrimitive from "@radix-ui/react-dropdown-menu";
 
 export function Popover({
   trigger,
@@ -16,110 +26,30 @@ export function Popover({
   children: ReactNode | ((close: () => void) => ReactNode);
 }) {
   const [open, setOpen] = useState(false);
-  const anchor = useRef<HTMLDivElement>(null);
-  const menuRef = useRef<HTMLDivElement>(null);
-  const triggerRef = useRef<HTMLButtonElement>(null);
-  const wasOpen = useRef(false);
-  const titleId = useId();
-
-  /*
-   * A menu has to behave like a menu.
-   *
-   * This popover claimed `role="menu"` with `role="menuitem"` children and
-   * nothing else: a screen reader announced "menu" and then the arrow keys did
-   * what arrow keys do everywhere else, which is move the page. A role is a
-   * promise about the behaviour, and the arrow keys are the behaviour.
-   *
-   * So the arrow keys are here now: Down and Up move between items and wrap,
-   * Home and End jump to the ends, Escape closes and gives focus back to the
-   * trigger that opened it, and Tab leaves the menu rather than walking
-   * through it. Focus moves into the menu when it opens, because a menu that
-   * opens with the focus still on its trigger is a menu the keyboard cannot
-   * reach.
-   */
-  useEffect(() => {
-    if (open) {
-      if (!wasOpen.current) {
-        wasOpen.current = true;
-        const first = menuRef.current?.querySelector<HTMLElement>('[role="menuitem"]');
-        (first ?? triggerRef.current)?.focus();
-      }
-    } else if (wasOpen.current) {
-      wasOpen.current = false;
-      // Only when the menu closes by itself. A click on a menu item moves
-      // focus to whatever that item did, and yanking it back to the trigger
-      // would undo that.
-      if (document.activeElement === document.body) triggerRef.current?.focus();
-    }
-  }, [open]);
-
-  useEffect(() => {
-    if (!open) return;
-    const onDown = (e: MouseEvent) => {
-      if (!anchor.current?.contains(e.target as Node)) setOpen(false);
-    };
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") {
-        setOpen(false);
-        return;
-      }
-      if (e.key === "Tab") {
-        // Tabbing out of a menu closes it, which is what every other menu
-        // does. The menu does not trap the keyboard.
-        setOpen(false);
-        return;
-      }
-      if (!["ArrowDown", "ArrowUp", "Home", "End"].includes(e.key)) return;
-      const items = Array.from(
-        menuRef.current?.querySelectorAll<HTMLElement>('[role="menuitem"]') ?? [],
-      );
-      if (items.length === 0) return;
-      e.preventDefault();
-      const active = document.activeElement;
-      const at = items.indexOf(active as HTMLElement);
-      let next: number;
-      if (e.key === "Home") next = 0;
-      else if (e.key === "End") next = items.length - 1;
-      else if (e.key === "ArrowDown") next = at < 0 ? 0 : (at + 1) % items.length;
-      else next = at < 0 ? items.length - 1 : (at - 1 + items.length) % items.length;
-      items[next].focus();
-    };
-    document.addEventListener("mousedown", onDown);
-    document.addEventListener("keydown", onKey);
-    return () => {
-      document.removeEventListener("mousedown", onDown);
-      document.removeEventListener("keydown", onKey);
-    };
-  }, [open]);
+  const close = useCallback(() => setOpen(false), []);
 
   return (
-    <div className="popover-anchor" ref={anchor}>
-      <button type="button"
-        ref={triggerRef}
-        className="bar-action"
-        aria-expanded={open}
-        aria-haspopup="menu"
-        aria-label={ariaLabel}
-        onClick={() => setOpen(!open)}
-      >
+    <MenuPrimitive.Root open={open} onOpenChange={setOpen}>
+      <MenuPrimitive.Trigger type="button" className="bar-action" aria-label={ariaLabel}>
         {trigger}
-      </button>
-      {open && (
-        <div
+      </MenuPrimitive.Trigger>
+      <MenuPrimitive.Portal>
+        <MenuPrimitive.Content
           className="popover"
-          ref={menuRef}
-          role="menu"
-          aria-labelledby={title ? titleId : undefined}
+          side="bottom"
+          align="end"
+          sideOffset={6}
+          aria-label={title === undefined && ariaLabel !== undefined ? ariaLabel : undefined}
         >
           {title && (
-            <div className="menu-title" id={titleId} role="none">
+            <div className="menu-title" role="none">
               {title}
             </div>
           )}
-          {typeof children === "function" ? children(() => setOpen(false)) : children}
-        </div>
-      )}
-    </div>
+          {typeof children === "function" ? children(close) : children}
+        </MenuPrimitive.Content>
+      </MenuPrimitive.Portal>
+    </MenuPrimitive.Root>
   );
 }
 
@@ -129,7 +59,9 @@ export function Popover({
  * A row that marks a choice is a `menuitemradio`, and it says so with
  * `aria-checked`. A `menuitem` with a dot beside it announces as an ordinary
  * item: the current theme in the Appearance menu was chosen by a mark nobody
- * could hear and by a text colour nobody could see.
+ * could hear and by a text colour nobody could see. The dot itself is the
+ * `.menu-radio` span the theme compiler keys its `menu.radio` part on; the
+ * `active` class keeps the host stylesheet's mark working unchanged.
  */
 export function MenuItem({
   active,
@@ -141,14 +73,14 @@ export function MenuItem({
   children: ReactNode;
 }) {
   return (
-    <button type="button"
+    <MenuPrimitive.Item
       className={`menu-item ${active ? "active" : ""}`}
       role={active === undefined ? "menuitem" : "menuitemradio"}
       aria-checked={active === undefined ? undefined : active}
-      onClick={onClick}
+      onSelect={onClick}
     >
       <span className="menu-radio" aria-hidden />
       {children}
-    </button>
+    </MenuPrimitive.Item>
   );
 }

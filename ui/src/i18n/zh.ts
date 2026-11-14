@@ -157,6 +157,7 @@ export const zh: Dict = {
   "lang.en": "English",
   "action.hide": "隐藏",
   "toast.copied": "已复制",
+  "toast.region": "通知",
   "toast.queued_discarded": "保存失败，排队中的修改已丢弃。",
   "toast.balances_refreshed": "余额已刷新。",
   "toast.balances_refresh_failed": "余额刷新失败，仍显示上次获取的数值",
