@@ -17,7 +17,7 @@ Clients can speak Anthropic, OpenAI Chat, OpenAI Responses, or Gemini; Claude Co
 
 ## Features
 
-- **Multi-protocol**: supports Anthropic, OpenAI Chat, OpenAI Responses, and Gemini client protocols; upstream providers currently support Anthropic and OpenAI-compatible.
+- **Multi-protocol**: supports Anthropic, OpenAI Chat, OpenAI Responses, and Gemini client protocols; upstream providers speak Anthropic, OpenAI-compatible (Chat Completions or Responses), and the OpenCode Zen/Console kinds.
 - **Model tiers**: models are grouped into fast / standard / reasoning / frontier; clients just request `standard-class`, and the model actually used is decided by your priority order, routing policy, and upstream health.
 - **Failover**: errors are classified to decide between retrying and switching models; repeated failures trip a per-model circuit breaker, and half-open probes detect recovery. Failover and breaker parameters are configurable.
 - **Budgets**: daily / monthly limits per total, provider, or tier; over-budget requests can be rejected or downgraded to a cheaper tier. Ledgers persist across restarts.
@@ -50,7 +50,7 @@ In headless mode, keys are read from environment variables, e.g. `ZROUTERY_KEY_P
 
 ## Setup
 
-1. Add an upstream on the **Providers** page: name, protocol (OpenAI-compatible or Anthropic), Base URL, and API key. Keys go straight into the system credential store, not the config file. Bulk import from CC Switch is supported.
+1. Add an upstream on the **Providers** page: name, protocol (Anthropic, OpenAI-compatible, OpenCode Zen/Console, or a Decision model), Base URL, and API key. Keys go straight into the system credential store, not the config file. Bulk import from CC Switch is supported.
 
    ![Providers](docs/images/providers.png)
 
@@ -108,7 +108,7 @@ export OPENAI_API_KEY=<paste token>
 - **macOS 11+**: ships `.app` and `.dmg`; menu bar resident; launch-at-login via LaunchAgent. Ad-hoc signing, no notarization.
 - **Windows**: ships `.msi` and NSIS installers; CI installs, reinstalls, and uninstalls them nightly to verify the installers.
 - **Linux**: not a supported release target. There is no Linux packaging target; the credential-store dependency for Linux is compiled in `src-tauri/Cargo.toml`, so a source build may run, but it is not tested or shipped.
-- **Upstream**: Anthropic and OpenAI-compatible only for now; Gemini and Responses are client-entry protocols only, not upstreams yet.
+- **Upstream**: Anthropic, OpenAI-compatible (Chat Completions or Responses), OpenCode Zen/Console, and Decision models (typed questions, not chat); Gemini is a client-entry protocol only, not an upstream.
 
 ## Statistics
 
@@ -148,6 +148,7 @@ MIT (see the `license` field in `Cargo.toml`).
 - Rust minimum and Node/pnpm pins: `Cargo.toml::rust-version`, `package.json::packageManager`, `package.json::scripts`, `.github/workflows/ci.yml::setup-node`.
 - Default bind address, port and body limit: `crates/zroutery-core/src/config/server.rs::ServerConfig`.
 - HTTP routes: `crates/zroutery-core/src/server/handlers.rs::build_app`.
+- Upstream protocol kinds and surfaces: `crates/zroutery-core/src/config/provider.rs::ProviderKind`, `crates/zroutery-core/src/config/provider.rs::ApiSurface`, `crates/zroutery-core/src/config/provider.rs::ProviderKind::is_decision`, `crates/zroutery-core/src/config/registry.rs::ProviderConfig::dialect`.
 - Bundle targets: `src-tauri/tauri.conf.json::bundle`.
 - Config file and gateway token: `src-tauri/src/store.rs::FILE_NAME`, `src-tauri/src/store.rs::generate_token`.
 - Linux credential dependency: `src-tauri/Cargo.toml::keyring`.

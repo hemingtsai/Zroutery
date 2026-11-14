@@ -17,7 +17,7 @@ Zroutery 是一个本地 LLM 网关：把多家模型供应商接到同一个本
 
 ## 功能
 
-- **多协议**：支持 Anthropic、OpenAI Chat、OpenAI Responses、Gemini 四种客户端协议；上游目前支持 Anthropic 和 OpenAI 兼容两种。
+- **多协议**：支持 Anthropic、OpenAI Chat、OpenAI Responses、Gemini 四种客户端协议；上游支持 Anthropic、OpenAI 兼容（Chat Completions 或 Responses）以及 OpenCode Zen/Console。
 - **模型分档**：模型分为 fast / standard / reasoning / frontier 四档，客户端只写 `standard-class`，由优先级、路由策略和上游健康状态决定实际使用的模型。
 - **失败转移**：按错误类型决定重试或切换模型；模型连续失败触发熔断，熔断期间通过半开探针探测恢复，失败转移次数和熔断参数均可配置。
 - **预算控制**：按总量、供应商或档位设置日 / 月上限，超限后可拒绝请求或自动降级到更便宜的档位；账本落盘，重启不丢。
@@ -50,7 +50,7 @@ cargo run -p zroutery-headless
 
 ## 配置
 
-1. **供应商**页添加上游：填名字、协议（OpenAI 兼容或 Anthropic）、Base URL，粘贴 API key。key 直接存入系统凭据库，不进配置文件。支持从 CC Switch 批量导入。
+1. **供应商**页添加上游：填名字、协议（Anthropic、OpenAI 兼容、OpenCode Zen/Console 或决策模型）、Base URL，粘贴 API key。key 直接存入系统凭据库，不进配置文件。支持从 CC Switch 批量导入。
 
    ![供应商](docs/images/providers.png)
 
@@ -108,7 +108,7 @@ export OPENAI_API_KEY=<粘贴 token>
 - **macOS 11+**：提供 `.app` 和 `.dmg`；常驻菜单栏；开机启动通过 LaunchAgent 实现。签名是 ad-hoc，没有公证。
 - **Windows**：提供 `.msi` 和 NSIS 安装器；CI 每晚会实际安装、重装、卸载一次安装器来验证。
 - **Linux**：不是支持的发布目标。没有 Linux 打包配置；`src-tauri/Cargo.toml` 中确实包含 Linux 凭据库依赖，因此源码构建或许能运行，但未经验证、也不随版本发布。
-- **上游**：目前只有 Anthropic 和 OpenAI 兼容两种类型；Gemini 和 Responses 只能作为客户端入口协议，还不能作为上游。
+- **上游**：Anthropic、OpenAI 兼容（Chat Completions 或 Responses）、OpenCode Zen/Console，以及只回答判定问题、不做对话的决策模型；Gemini 只能作为客户端入口协议，不能作为上游。
 
 ## 统计
 
@@ -148,6 +148,7 @@ MIT（见 `Cargo.toml` 的 `license`）。
 - Rust 最低版本与 Node/pnpm 固定版本：`Cargo.toml::rust-version`、`package.json::packageManager`、`package.json::scripts`、`.github/workflows/ci.yml::setup-node`。
 - 默认监听地址、端口与请求体上限：`crates/zroutery-core/src/config/server.rs::ServerConfig`。
 - HTTP 路由：`crates/zroutery-core/src/server/handlers.rs::build_app`。
+- 上游协议类型与 API 端面：`crates/zroutery-core/src/config/provider.rs::ProviderKind`、`crates/zroutery-core/src/config/provider.rs::ApiSurface`、`crates/zroutery-core/src/config/provider.rs::ProviderKind::is_decision`、`crates/zroutery-core/src/config/registry.rs::ProviderConfig::dialect`。
 - 打包目标：`src-tauri/tauri.conf.json::bundle`。
 - 配置文件与网关 token：`src-tauri/src/store.rs::FILE_NAME`、`src-tauri/src/store.rs::generate_token`。
 - Linux 凭据依赖：`src-tauri/Cargo.toml::keyring`。
