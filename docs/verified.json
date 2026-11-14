@@ -524,5 +524,15 @@
       "cargo test --workspace --all-features --locked"
     ],
     "note": "Detection is shape-based and fail-closed; the model name is never used as evidence."
+  },
+  "docs/development/reference/client-attribution.md": {
+    "verified_at": "2026-11-14",
+    "sources": {
+      "crates/zroutery-core/src/client.rs": "sha256:02513d9aa84f738106f768381aedaa163808a0743d1e205e11c68e762baa460c"
+    },
+    "commands": [
+      "cargo test --workspace --all-features --locked"
+    ],
+    "note": "Reporting attribution is separate from routing identity; only a credential binding is Strong."
   }
 }

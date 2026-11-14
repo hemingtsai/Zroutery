@@ -487,6 +487,20 @@
       "owner": "backend",
       "summary": "Main versus side queries, shape-based detection, confidence and fail-closed verdicts.",
       "max_lines": 300
+    },
+    {
+      "path": "docs/development/reference/client-attribution.md",
+      "title": "Client Attribution Reference",
+      "type": "reference",
+      "authority": "reference",
+      "audience": [
+        "human",
+        "agent"
+      ],
+      "status": "active",
+      "owner": "backend",
+      "summary": "Reporting attribution ladder, confidence, canonical ids and the bounded registry.",
+      "max_lines": 250
     }
   ],
   "pending": [],
