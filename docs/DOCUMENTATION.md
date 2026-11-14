@@ -36,7 +36,7 @@ Exactly one type per document. The type decides the required sections.
 | Type | Purpose | Required sections | Forbidden |
 |---|---|---|---|
 | `entry` | agent entry | current state, non-negotiables, implementation contracts, documentation sync, verification pointer, stop conditions | background essays |
-| `fact` | current facts, generated | gates, open issues, blockers, flaky, last green | hand editing |
+| `fact` | current facts, generated | gates, blockers, flaky, last green | hand editing |
 | `normative` | rules and boundaries | scope, rules, canonical commands, change log, see also | unsourced facts, narrative |
 | `guide` | onboarding and runbook | audience, prerequisites, steps, verify, troubleshoot, pointers | restating normative rules |
 | `reference` | one subsystem | what it does, failure modes (or boundaries), not implemented (or boundaries), sources | plans and roadmaps |
@@ -91,17 +91,15 @@ The default body limit is 32 MiB (`crates/zroutery-core/src/config/server.rs::Se
   `docs/verified.json` with the current files. A changed source means the
   document must be re-read and re-verified. Strict mode: CI blocks.
 
-## Audits and findings live in issues
+## Findings and decisions
 
-- Findings are reported to the user; GitHub Issues are opened only on explicit
-  request, not proactively. Audits, reviews and risk discussions are not files under
-  `docs/`.
-- An audit that produces a decision writes an ADR; an audit that produces a
-  durable fact updates a `reference` or `normative` document. Everything else
-  stays in the issue.
-- `current-state.md` links open issues; it never copies their findings.
-- If an agent cannot read the issue tracker, it asks the user for the issue
-  body. It does not guess a finding.
+- Findings are reported to the user. GitHub Issues are opened only on explicit
+  request, never proactively; there is no Issue tracker in the default workflow.
+- An audit that produces a decision writes an ADR; one that produces a durable
+  fact updates a `reference` or `normative` document. Everything else stays in
+  the conversation.
+- A durable blocker may be projected into `state.json` as one line and rendered
+  by `current-state.md`; the projection does not link or copy an Issue.
 
 ## Writing rules
 

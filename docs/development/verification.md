@@ -52,8 +52,7 @@ does not leave them green is not ready.
 | frontend build | `pnpm --dir ui build` | `tsc --noEmit` plus the production bundle |
 | frontend tests | `pnpm --dir ui test` | component and helper behaviour |
 | command surface | `python3 -B scripts/command_surface_test.py` | `api.ts` ↔ Rust ↔ capabilities (`scripts/command_surface_test.py::main`) |
-| documentation | `python3 -B scripts/docs_sources.py --check`, `python3 -B scripts/docs_check.py`, `python3 -B scripts/docs_parity.py --check` | anchors, links, sizes, freshness, three-language shape |
-| docs impact | `python3 -B scripts/docs_impact.py --base <base> --head HEAD` | every affected document changed |
+| documentation | `python3 -B scripts/docs_contracts.py --base <base> --head HEAD` | every documentation contract, including freshness and state |
 | whitespace | `git diff --check` | trailing damage |
 
 The `core` CI job runs clippy and tests for `zroutery-core` only
@@ -128,6 +127,8 @@ Consequences, stated rather than discovered:
 
 ## Documentation gates
 
+- `docs_contracts.py` is the single entry point: it runs every documentation
+  contract below, including `freshness_report.py --check`.
 - `markdown_check.py` enforces fenced-code closure and table structure without
   a third-party parser.
 - `docs_sources.py --check` resolves every `path::symbol` and `path#Lx` anchor in
@@ -151,6 +152,8 @@ Consequences, stated rather than discovered:
   images and source anchors; prose may differ, shape may not.
 - `docs_check.py` compares `docs/verified.json` source content hashes with
   the current tree. A moved source means the document must be re-read.
+- `freshness_report.py --check` fails when a cited source changed after the
+  document's `reviewed_commit`; the review point must be advanced.
 - `docs_impact.py` fails when a changed source file is cited by a document that
   did not change. There is no bypass flag.
 

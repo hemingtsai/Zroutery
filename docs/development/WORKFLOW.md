@@ -6,6 +6,13 @@ This document defines how a commit and its evidence are formed. The toolchain an
 every gate live in [verification.md](verification.md); current status lives in
 [current-state.md](current-state.md); audits and findings live in GitHub Issues.
 
+## Freshness
+
+A document's `reviewed_commit` is the commit at which its sources were last
+read. When a source changes, commit the source first, then commit the document
+with `reviewed_commit` pointing at that source commit. `freshness_report.py
+--check` fails until the point is advanced; do not update only the hash.
+
 ## Commit content
 
 - One commit is one intention, independently understandable and buildable.

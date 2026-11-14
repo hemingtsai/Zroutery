@@ -14,6 +14,7 @@ as of `2026-11-14` · branch `dev` · verified code head `26d887f`
 | frontend build | **pass** | `pnpm --dir ui build` |  |
 | frontend tests | **pass** | `pnpm --dir ui test` | 86 passed |
 | command surface | **pass** | `python3 -B scripts/command_surface_test.py` | 90 interface commands, 254 registered |
+| documentation contracts | **pass** | `python3 -B scripts/docs_contracts.py` | all docs gates, including freshness and state |
 | documentation sources | **pass** | `python3 -B scripts/docs_sources.py --check` |  |
 | markdown structure | **pass** | `python3 -B scripts/markdown_check.py` | fenced blocks and tables well formed |
 | documentation check | **pass** | `python3 -B scripts/docs_check.py` | 45 active, 0 pending, 0 warnings |
@@ -22,7 +23,7 @@ as of `2026-11-14` · branch `dev` · verified code head `26d887f`
 | module coverage | **pass** | `python3 -B scripts/coverage_check.py` | 37 modules: 36 owned, 1 covered elsewhere |
 | rendered state | **pass** | `python3 -B scripts/current_state.py --check` | current-state.md is the render of state.json |
 | invariant evidence | **pass** | `python3 -B scripts/invariant_check.py` | 15 invariants, 13 test-backed, 2 explicitly untested |
-| state schema | **pass** | `python3 -B scripts/state_check.py` | schema, enums, issue links, blocker graph and head ancestry |
+| state schema | **pass** | `python3 -B scripts/state_check.py` | schema, enums, blocker graph and head ancestry |
 | whitespace | **pass** | `git diff --check` | no trailing whitespace damage |
 | orchestration docs (legacy) | **retired** | `scripts/orch_docs_test.py (not run)` | legacy node and evidence records are archived; validation retired |
 | UI budget | **pass** | `python3 -B scripts/ui_budget_test.py` | 734,994 B JS of 742,000 |

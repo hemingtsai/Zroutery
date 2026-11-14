@@ -26,7 +26,7 @@ This file is generated from `docs/docs.manifest.json`. Do not edit it.
 | [docs/DOCUMENTATION.md](DOCUMENTATION.md) | normative | normative | docs | Document types, authority, source verification, sizes, archive and change synchronization. |
 | [docs/INDEX.md](INDEX.md) | index | index | docs | Generated map of active, pending and archived documents plus the external issue entry points. |
 | [docs/development/README.md](development/README.md) | index | index | docs | Short signpost into the development records. |
-| [docs/development/current-state.md](development/current-state.md) | fact | fact | docs | Generated snapshot: gates, open issues, blockers, flaky gates, last full green. |
+| [docs/development/current-state.md](development/current-state.md) | fact | fact | docs | Generated snapshot: gates, blockers, flaky gates, last full green. |
 | [docs/development/verification.md](development/verification.md) | normative | normative | backend | The only toolchain and gate definition, including what CI does and does not run. |
 | [docs/development/architecture.md](development/architecture.md) | normative | normative | backend | Layers, boundaries and invariants of Core, the desktop shell and the learning stack. |
 | [docs/development/WORKFLOW.md](development/WORKFLOW.md) | normative | normative | docs | Commit content, subject contract, evidence policy and documentation synchronization. |

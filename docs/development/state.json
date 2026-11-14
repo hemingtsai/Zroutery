@@ -39,6 +39,12 @@
       "detail": "90 interface commands, 254 registered"
     },
     {
+      "name": "documentation contracts",
+      "status": "pass",
+      "command": "python3 -B scripts/docs_contracts.py",
+      "detail": "all docs gates, including freshness and state"
+    },
+    {
       "name": "documentation sources",
       "status": "pass",
       "command": "python3 -B scripts/docs_sources.py --check"
@@ -89,7 +95,7 @@
       "name": "state schema",
       "status": "pass",
       "command": "python3 -B scripts/state_check.py",
-      "detail": "schema, enums, issue links, blocker graph and head ancestry"
+      "detail": "schema, enums, blocker graph and head ancestry"
     },
     {
       "name": "whitespace",
