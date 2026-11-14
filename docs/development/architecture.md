@@ -15,6 +15,7 @@ definitions (`verification.md`), or history (`archive/`); findings follow the
 | Desktop shell | `src-tauri/` | lifecycle, native integrations, credential store, IPC commands | protocol translation or routing decisions |
 | Headless | `crates/zroutery-headless/` | the same Core and desktop state without a GUI | a second implementation of the pipeline |
 | UI | `ui/` | presentation and the typed IPC contract | configuration authority or accounting |
+| Plugin runtime | `crates/zroutery-plugin-api/`, `crates/zroutery-plugin-host/`, `crates/zroutery-plugin-worker/` | declarative contracts, host grants and lifecycle, the restricted worker process | the request pipeline, credentials, or a second Core |
 
 Core is GUI-free: its manifest has no Tauri dependency
 (`crates/zroutery-core/Cargo.toml::dependencies`). The desktop crate composes it
@@ -25,6 +26,14 @@ state and then serves (`crates/zroutery-headless/src/main.rs::main`).
 The module boundary is declared once in
 `crates/zroutery-core/src/lib.rs::pub mod`; a new top-level module is an
 architecture change, not a private refactor.
+
+The plugin runtime stays outside the request path. `plugin-api` is declarative
+only (`crates/zroutery-plugin-api/src/lib.rs`); `plugin-host` owns grants and
+lifecycle (`crates/zroutery-plugin-host/src/lib.rs`); the worker is a separate
+restricted process (`crates/zroutery-plugin-worker/src/main.rs::main`). The Core
+bridge maps verified declarations onto the existing codecs, `Upstream` and
+settlement (`crates/zroutery-core/src/plugin/mod.rs`), and the shell is the
+broker (`src-tauri/src/plugins/mod.rs`).
 
 ## 2. Request path
 
@@ -136,7 +145,7 @@ evidence. `untested` is an explicit gap, not a pass.
 
 ## 4. Desktop surface
 
-The desktop shell is not a second Core. It owns four things:
+The desktop shell is not a second Core. It owns five things:
 
 - **Lifecycle.** The proxy runs while the window may be hidden; closing the
   window does not stop it (`src-tauri/src/lib.rs::run`).
@@ -151,6 +160,9 @@ The desktop shell is not a second Core. It owns four things:
   (`src-tauri/src/lib.rs::generate_handler`,
   `src-tauri/build.rs::APP_COMMANDS`,
   `src-tauri/capabilities/default.json::permissions`).
+- **Plugin broker.** The shell installs, activates, disables and rolls back
+  plugin packages, keeps their credentials scoped, and exposes safe appearance
+  as a recovery path (`src-tauri/src/plugins/mod.rs`).
 
 The webview is treated as a local administrator, not as a public client: the
 content security policy is restrictive
@@ -179,6 +191,11 @@ compiled but not requested stays inert.
   (`crates/zroutery-core/src/agent_takeover/ownership.rs::OwnershipManifest`).
 - **Response retention** (`ir`). The Responses lifecycle store is bounded and
   in-memory (`crates/zroutery-core/src/ir/response.rs::ResponseStore`).
+- **Plugins** (`plugin`). Declarations are data: a verified binding maps onto the
+  existing provider and transport paths, a package is content-digest addressed,
+  and the worker runs sandboxed and separate. Capability grants, the OS sandbox
+  and safe mode are the boundary (`crates/zroutery-plugin-host/src/lib.rs`,
+  `src-tauri/src/plugins/mod.rs`).
 
 ## 6. What this document is not
 

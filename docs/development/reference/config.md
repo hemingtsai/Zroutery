@@ -52,10 +52,14 @@ The document's `validate` method returns `ConfigIssue`s with a severity
 `crates/zroutery-core/src/config/validate.rs::IssueSeverity`).
 
 - An **error** blocks the save: an empty token with auth on, an impossible price
-  or budget, a duplicate or orphan id, a zero timeout.
+  or budget, a duplicate or orphan id, a zero timeout, a plugin instance conflict
+  or an invalid plugin binding
+  (`crates/zroutery-core/src/config/validate.rs::AppConfig::validate`,
+  `crates/zroutery-core/src/config/plugin.rs::PluginInstanceConfig`).
 - A **warning** is surfaced but does not block: a network-exposed bind, auth off,
   a wide-open CORS policy, a budget in a currency nothing bills, an
-  `extra_headers` key that overrides a managed header.
+  `extra_headers` key that overrides a managed header, or an orphan model whose
+  provider is a declared plugin instance.
 - `normalize` folds legacy ids, aliases and deprecated fields before validation
   (`crates/zroutery-core/src/config/validate.rs::AppConfig::normalize`).
 
@@ -68,9 +72,17 @@ auth header.
 - The save helper writes through a temporary file and a rename, so a crash cannot
   truncate the document; the temporary file is created owner-only
   (`src-tauri/src/store.rs::save`, `src-tauri/src/store.rs::create_private`).
-- A corrupt file is copied aside before defaults are loaded
-  (`src-tauri/src/store.rs::startup_load`); a failed backup leaves the original
-  untouched.
+- A corrupt legacy document is copied aside before defaults are loaded; a failed
+  backup leaves the original untouched. A document from a newer schema is not
+  copied aside: `startup_load` returns an error, keeps the original and disables
+  editing, and `save` refuses it
+  (`src-tauri/src/store.rs::startup_load`, `src-tauri/src/store.rs::save`).
+- `schema_version` is 2
+  (`crates/zroutery-core/src/config/plugin.rs::CONFIG_SCHEMA_VERSION`); a legacy
+  document omits it, a newer document is refused rather than migrated, and
+  plugin-backed providers are re-synthesized on load and never persisted
+  (`crates/zroutery-core/src/config/app.rs::AppConfig`,
+  `crates/zroutery-core/src/server/config_state.rs`).
 - `apply_config_locked` normalises and validates, refuses a blocking issue,
   probes a changed address, saves, and restores the previous document if the
   listener cannot move (`src-tauri/src/state/server.rs::apply_config_locked`).
@@ -86,8 +98,13 @@ provider key. `SecretStore` is the credential boundary
 - `zroutery-core` ships no default feature (`crates/zroutery-core/Cargo.toml::default`).
 - The desktop crate enables `ml`, `account`, `newapi`, `account-maint`,
   `opencode` and `plugin` by default (`src-tauri/Cargo.toml::default`).
-- A capability compiled by a feature is inert until configured; a capability not
-  compiled is absent from the command surface, not merely hidden.
+- A capability compiled by a feature is inert until configured. A capability the
+  build does not compile is still registered in the command surface and its
+  permission set; the command answers at runtime with its unavailable error (for
+  plugins: `unsupported_host_service`), so callers consult the snapshot state
+  rather than the build's feature list
+  (`src-tauri/src/lib.rs::generate_handler`,
+  `src-tauri/src/plugins/credentials.rs`).
 
 ## Failure modes
 
@@ -107,6 +124,8 @@ provider key. `SecretStore` is the credential boundary
 ## Sources
 
 - `crates/zroutery-core/src/config/app.rs::AppConfig`
+- `crates/zroutery-core/src/config/plugin.rs::PluginInstanceConfig`
+- `crates/zroutery-core/src/config/plugin.rs::CONFIG_SCHEMA_VERSION`
 - `crates/zroutery-core/src/config/registry.rs::ProviderConfig`
 - `crates/zroutery-core/src/config/registry.rs::ModelEntry`
 - `crates/zroutery-core/src/config/server.rs::ServerConfig`

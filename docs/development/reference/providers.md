@@ -7,6 +7,17 @@ upstream: NewAPI account panels, OpenCode Zen, and the CC Switch import. It does
 not claim real-panel acceptance; current status is in
 [current-state.md](../current-state.md).
 
+A plugin provider is a manifest operation (`host.protocol.*`) bound to a
+`PluginBinding`: it maps onto `Anthropic`/`OpenAICompatible` with the native
+client profile, carries the owned default slot's `plugin:<uuid>` `key_ref` in the
+synthesized provider (the snapshot projection clears it), is never enriched from
+models.dev,
+and exposes no Gemini or decision surface
+(`crates/zroutery-core/src/plugin/registry.rs::services`,
+`src-tauri/src/plugins/bindings.rs`, `crates/zroutery-core/src/upstream/json.rs`).
+`ProviderKind` remains the declaration for
+native providers.
+
 ## Provider kinds
 
 `ProviderKind` is the one declaration of what an upstream speaks
@@ -102,6 +113,9 @@ CC Switch is a client provider database, imported read-only.
   not a production acceptance.
 - No generic upstream support for a provider kind outside the table.
 - No write path to the CC Switch database.
+- No plugin TLS transport profile, no plugin account probing and no models.dev
+  enrichment for plugin providers (`src-tauri/src/plugins/bindings.rs`,
+  `crates/zroutery-core/src/upstream/json.rs`).
 
 ## Sources
 
@@ -110,6 +124,7 @@ CC Switch is a client provider database, imported read-only.
 - `crates/zroutery-core/src/config/binding.rs::panel_root`
 - `crates/zroutery-core/src/config/registry.rs::AccountConfig`
 - `crates/zroutery-core/src/account/adapters/newapi/mod.rs::NewApiAdapter`
+- `crates/zroutery-core/src/plugin/registry.rs::services`
 - `crates/zroutery-core/src/account/adapters/newapi/types.rs::NewApiStatus`
 - `crates/zroutery-core/src/opencode/mod.rs::request_id`
 - `crates/zroutery-core/src/opencode/console.rs::resolve`

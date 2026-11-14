@@ -54,6 +54,11 @@ That is the model; hiding the token from the same user is not a goal.
 - No view, diagnostic, fixture or report contains a token value; the token
   capture view has no field for it
   (`src-tauri/src/token_capture/mod.rs::TokenCaptureView`).
+- Plugin credentials are keyring-only: the native keyring refuses `plugin:` refs,
+  a plugin slot is readable only after an ownership and grant-epoch check, and
+  the snapshot clears plugin credential references
+  (`src-tauri/src/plugins/scoped_secrets.rs::verify_slot`,
+  `src-tauri/src/secrets.rs::KeychainSecrets`).
 
 ## Webview surface
 
@@ -66,6 +71,9 @@ That is the model; hiding the token from the same user is not a goal.
   (`src-tauri/tauri.conf.json::security`).
 - `scripts/command_surface_test.py` fails when a registered command has no grant
   or a grant names no command.
+- Plugin-contributed UI is rendered only through host components, and the tray
+  exposes safe appearance as a containment path
+  (`crates/zroutery-plugin-api/src/ui.rs`, `src-tauri/src/tray.rs`).
 
 ## Upstream and error boundary
 
@@ -78,6 +86,10 @@ That is the model; hiding the token from the same user is not a goal.
   (`crates/zroutery-core/src/error.rs::safe_message`).
 - Request and response bodies are not persisted; records carry metadata and
   traces carry features and outcomes.
+- Plugin traffic has its own egress path: https-only, no query or userinfo,
+  public-IP-only SSRF filter, DNS pinned per operation and retry, no proxy and no
+  redirects; a declared TLS transport profile is refused
+  (`crates/zroutery-core/src/upstream/transport.rs::request_for`).
 
 ## Failure modes
 
@@ -95,6 +107,12 @@ That is the model; hiding the token from the same user is not a goal.
 - No TLS on the loopback listener; it is a local socket.
 - No guarantee that a process running as the same user cannot read the token if
   it can read the config document.
+- Plugin packages are content-digest addressed without a publisher signature; the
+  OS sandbox is Windows-only; an unverified runtime-only package refuses
+  activation; the host does not render plugin UI (`render_plugin_ui` fails
+  closed) (`crates/zroutery-plugin-host/src/install.rs`,
+  `crates/zroutery-plugin-host/src/sandbox.rs::probe`,
+  `src-tauri/src/plugins/commands.rs::render_plugin_ui`).
 
 ## Sources
 
@@ -118,4 +136,9 @@ That is the model; hiding the token from the same user is not a goal.
 - `src-tauri/tauri.conf.json::security`
 - `crates/zroutery-core/src/upstream/http.rs::configure`
 - `crates/zroutery-core/src/error.rs::safe_message`
+- `src-tauri/src/plugins/scoped_secrets.rs::verify_slot`
+- `src-tauri/src/secrets.rs::KeychainSecrets::keyring_only`
+- `crates/zroutery-core/src/upstream/transport.rs::request_for`
+- `crates/zroutery-plugin-host/src/sandbox.rs::probe`
+- `src-tauri/src/plugins/commands.rs`
 - `crates/zroutery-core/src/upstream/errors.rs::truncate`

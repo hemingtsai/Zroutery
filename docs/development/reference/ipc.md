@@ -38,10 +38,16 @@ pair of files below and the command-surface gate.
 3. **Feature-gated commands are declared unconditionally.** `APP_COMMANDS` is the
    union over all features, not the current build; feature gates live in
    `lib.rs`, not in the permission list (`src-tauri/build.rs::APP_COMMANDS`).
-4. **The frontend guards a feature-gated call by an availability flag.** Snapshot
-   fields such as `ml_available`, `account_available` and
-   `token_capture_available` say whether this build serves the command
-   (`src-tauri/src/state/snapshot.rs::snapshot`).
+4. **A call that depends on a build capability is guarded by state, not by a
+   build flag.** Plugin commands are registered and granted unconditionally; the
+   plugin API and host are unconditional dependencies (`src-tauri/Cargo.toml`),
+   so a build without the `plugin` feature still lists and activates installed
+   packages. The plugin instance and credential commands answer
+   `unsupported_host_service` in that build, and per-installation availability
+   (`sandbox_available`, `diagnostic`) comes from `list_plugins`
+   (`src-tauri/src/plugins/credentials.rs`,
+   `src-tauri/src/plugins/views.rs::PluginInstallation`,
+   `src-tauri/src/plugins/commands.rs`).
 5. **Argument names keep their side.** JavaScript object keys are camelCase;
    Rust command parameters stay snake_case and Tauri maps between them. Do not
    rename one side without the other
@@ -64,6 +70,7 @@ pair of files below and the command-surface gate.
 | Accounts | `reconcile_accounts`, `set_account_key`, `set_account_inference_key` | feature `account`; panel token and inference keys are separate |
 | Check-in and token capture | `start_checkin`, `start_token_capture`, `complete_token_capture` | check-in needs `account-maint`; `api_checkin` also needs `newapi`; token capture needs `account-maint` + `account`; browser-driven |
 | Migration and takeover | `migration_previews`, `migration_apply`, `takeover_adopt` | file-writing; preview and fingerprint required |
+| Plugins | `list_plugins`, `inspect_plugin_package`, `install_plugin_package`, `activate_plugin`, `disable_plugin`, `remove_plugin`, `update_plugin`, `rollback_plugin`, `get_plugin_themes`, `render_plugin_ui`, `invoke_plugin_ui_action`, `enter_safe_appearance`, `instantiate_plugin_provider`, `store_plugin_credential`, `clear_plugin_credential`, `get_plugin_credential_status` | registered and granted unconditionally; lifecycle commands work without the `plugin` feature; the instance and credential commands in `credentials.rs` answer `unsupported_host_service` in that build (`src-tauri/src/plugins/credentials.rs`) |
 | Tray panel | `get_tray_snapshot`, `tray_set_gateway_running` | second capability file, minimal surface |
 
 ## Failure modes
@@ -96,3 +103,6 @@ pair of files below and the command-surface gate.
 - `ui/mock-bridge.ts::handlers`
 - `scripts/command_surface_test.py::main`
 - `src-tauri/src/state/snapshot.rs::snapshot`
+- `src-tauri/src/plugins/commands.rs`
+- `src-tauri/src/plugins/credentials.rs`
+- `src-tauri/src/plugins/views.rs`

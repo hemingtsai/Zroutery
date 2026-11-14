@@ -7,12 +7,15 @@ a reference, not a pixel specification; the shipped values are in the stylesheet
 
 ## Tokens and skins
 
-- The stylesheet is the source of truth for tokens
-  (`ui/src/styles.css`); `--control-h` is the control-height token and differs by
-  skin.
-- A theme preference is applied separately from a skin: `applyTheme` sets the
-  light/dark preference (`ui/src/theme.ts::applyTheme`); `applySkin` sets the
-  skin attribute (`ui/src/skin.ts::applySkin`).
+- The stylesheet entry is `ui/src/styles.css`; it imports the generated
+  `ui/src/industrial.css`, which carries the base tokens. ThemeV1 packs are
+  compiled per theme and override tokens — for example `--control-h` comes from
+  the pack's `metrics.control_height` (24-40px)
+  (`ui/src/themes/compiler.ts::compileTheme`, `ui/vite.config.ts`).
+- A theme preference is applied separately from a skin: `applyTheme` sets
+  `data-theme` (`ui/src/theme.ts::applyTheme`); `applyThemeRef` sets
+  `data-plugin-theme` and removes the legacy `data-skin`
+  (`ui/src/themes/registry.ts::applyThemeRef`).
 - The system accent is read from the desktop and applied as a CSS variable; a
   null accent leaves the skin's own accent
   (`ui/src/accent.ts::applySystemAccent`).
@@ -31,6 +34,10 @@ a reference, not a pixel specification; the shipped values are in the stylesheet
   (`ui/src/components/drawer.tsx::Drawer`).
 - Save feedback is carried by the save queue, not by a page-local spinner
   (`ui/src/saveQueue.ts::createSaveQueue`).
+- Plugin-contributed UI is data-only: the host renders declared components, and
+  privileged prompts are isolated under `[data-host-security]`
+  (`ui/src/styles.css`, `ui/src/components/confirm.tsx`,
+  `ui/src/plugins/renderer.tsx`).
 
 ## Language
 
@@ -55,6 +62,9 @@ a reference, not a pixel specification; the shipped values are in the stylesheet
   (`scripts/ui_interaction_test.py::main`); it is also local-only.
 - The overflow gate runs at the minimum window size
   (`scripts/ui_overflow_test.py::main`).
+- The theme baseline gate compares computed styles against the frozen v3.2
+  baseline (`scripts/plugin_theme_test.py::main`); it is local-only and is not a
+  pixel diff.
 
 ## Invariants
 
@@ -79,17 +89,23 @@ a reference, not a pixel specification; the shipped values are in the stylesheet
 
 ## Not implemented
 
-- No screenshot/visual-regression gate; layout and interaction are behavioural
-  checks, not pixel comparisons.
+- No pixel or screenshot regression gate; the theme baseline gate compares
+  computed styles, and the plugin UI renderer fails closed instead of rendering
+  untrusted components (`scripts/plugin_theme_test.py::main`,
+  `src-tauri/src/plugins/commands.rs::render_plugin_ui`).
 - Layout and interaction are not in CI; a green CI run does not cover them.
 - No icon set beyond the inline SVG/mark used by the shell.
 
 ## Sources
 
 - `ui/src/styles.css::--control-h`
+- `ui/src/industrial.css`
+- `ui/src/themes/compiler.ts::compileTheme`
+- `ui/src/themes/registry.ts::applyThemeRef`
 - `ui/src/theme.ts::applyTheme`
-- `ui/src/skin.ts::applySkin`
 - `ui/src/accent.ts::applySystemAccent`
+- `ui/src/plugins/renderer.tsx`
+- `scripts/plugin_theme_test.py::main`
 - `ui/src/shell/nav.ts::NAV`
 - `ui/src/components/tabs.tsx::Tabs`
 - `ui/src/components/drawer.tsx::Drawer`
