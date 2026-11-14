@@ -41,7 +41,7 @@ owns its facts; other documents link to it instead of restating it.
 |---|---|
 | headless entry and subcommands | [README.md](../../../README.md), [runbook.md](../runbook.md) |
 | lock helpers (`sync.rs`) | internal utility; no user-facing behaviour page |
-| `src-tauri` command groups (inference keys, history imports, logs, usage export, tray) | [ipc.md](ipc.md), [accounts.md](accounts.md), [routing-data.md](routing-data.md), [security.md](security.md) |
+| `src-tauri` command plumbing (history imports, logs, usage export, tray/shell) | the IPC pattern in [ipc.md](ipc.md); per-command behaviour has no dedicated page |
 | individual UI pages | [ui-design-system.md](ui-design-system.md), [ipc.md](ipc.md); page behaviour is not yet a dedicated reference |
 
 ## Rule
