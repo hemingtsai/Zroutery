@@ -50,7 +50,7 @@ does not leave them green is not ready.
 | frontend build | `pnpm --dir ui build` | `tsc --noEmit` plus the production bundle |
 | frontend tests | `pnpm --dir ui test` | component and helper behaviour |
 | command surface | `python3 -B scripts/command_surface_test.py` | `api.ts` ↔ Rust ↔ capabilities (`scripts/command_surface_test.py::main`) |
-| documentation | `python3 -B scripts/docs_sources.py --check` and `python3 -B scripts/docs_check.py` | anchors, links, sizes, freshness |
+| documentation | `python3 -B scripts/docs_sources.py --check`, `python3 -B scripts/docs_check.py`, `python3 -B scripts/docs_parity.py --check` | anchors, links, sizes, freshness, three-language shape |
 | docs impact | `python3 -B scripts/docs_impact.py --base <base> --head HEAD` | every affected document changed |
 | whitespace | `git diff --check` | trailing damage |
 

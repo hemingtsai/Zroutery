@@ -62,6 +62,12 @@
       "detail": "three READMEs have matching headings, fences, images and anchors"
     },
     {
+      "name": "whitespace",
+      "status": "pass",
+      "command": "git diff --check",
+      "detail": "no trailing whitespace damage"
+    },
+    {
       "name": "orchestration docs (legacy)",
       "status": "retired",
       "command": "scripts/orch_docs_test.py (not run)",
@@ -87,9 +93,9 @@
     },
     {
       "name": "UI interaction",
-      "status": "timeout",
+      "status": "unrun",
       "command": "python3 -B scripts/ui_interaction_test.py",
-      "detail": "exit 124 after 900s"
+      "detail": "timed out after 900s on Helium 0.21.2; not a pass and not a product failure"
     },
     {
       "name": "Rust advisories",
