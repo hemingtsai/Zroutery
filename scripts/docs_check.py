@@ -182,8 +182,8 @@ def check_active(root: Path, entry: dict, verified: dict, redirects: dict[str, s
     if type_ != "adr":
         errors.extend(docs_sources.check_document(root, path))
         anchors = len(docs_sources.citations(text))
-        if anchors == 0 and type_ in BANNER_TYPES | {"reference"}:
-            warnings.append(f"{entry['path']}: no source anchors yet (migration warning)")
+        if anchors == 0 and type_ in BANNER_TYPES:
+            errors.append(f"{entry['path']}: a normative or reference document must cite at least one source anchor")
         if type_ == "guide" and anchors == 0:
             errors.append(f"{entry['path']}: a guide must cite at least one source anchor")
         record = verified.get(entry["path"])
@@ -273,11 +273,41 @@ def render_index(root: Path, manifest: dict) -> str:
         "## Health",
         "",
     ]
+    try:
+        verified = json.loads((root / "docs" / "verified.json").read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        verified = {}
     active = len(docs)
+    anchored = adr_anchored = ledgered = 0
+    by_type: dict[str, int] = {}
+    unanchored: list[str] = []
+    for entry in docs:
+        type_ = entry.get("type", "reference")
+        by_type[type_] = by_type.get(type_, 0) + 1
+        try:
+            text = (root / entry["path"]).read_text(encoding="utf-8")
+            count = len(docs_sources.citations(text))
+        except OSError:
+            count = 0
+        if count:
+            if type_ == "adr":
+                adr_anchored += 1
+            else:
+                anchored += 1
+        if entry["path"] in verified:
+            ledgered += 1
+        if not count and type_ not in {"index", "fact", "adr"}:
+            unanchored.append(f"`{entry['path']}`")
     lines.append(f"- active documents: {active}")
+    lines.append(f"- source-anchored (non-ADR): {anchored}")
+    lines.append(f"- hash-ledgered: {ledgered}")
+    lines.append(f"- guides: {by_type.get('guide', 0)}")
+    lines.append(f"- ADRs: {by_type.get('adr', 0)} ({adr_anchored} with code anchors; decision records, not machine-verified)")
+    lines.append(f"- generated/index: {by_type.get('fact', 0) + by_type.get('index', 0)}")
     lines.append(f"- pending migration: {len(pending)}")
+    lines.append(f"- documents that must be anchored but are not: {', '.join(unanchored) if unanchored else 'none'}")
     lines.append("- source anchors are checked by `scripts/docs_sources.py`")
-    lines.append("- links, sizes and freshness are checked by `scripts/docs_check.py`")
+    lines.append("- links, sizes, freshness and code paths are checked by `scripts/docs_check.py`")
     return "\n".join(lines) + "\n"
 
 
