@@ -432,5 +432,31 @@
       "cargo test --workspace --all-features --locked"
     ],
     "note": "Defaults, validation and the save/apply path are the source; the document is declaration, not runtime state."
+  },
+  "docs/development/reference/security.md": {
+    "verified_at": "2026-11-14",
+    "sources": {
+      "crates/zroutery-core/src/server/handlers.rs": "sha256:fab479470870597d7be4b37a27948754140d49963d8ccf0d089b5dc514b27681",
+      "crates/zroutery-core/src/server/cors.rs": "sha256:26eeaaa8a30636a095384d4a3fbb152a3efd453b2d859231d48030f99c77719c",
+      "crates/zroutery-core/src/config/server.rs": "sha256:bee183e115f654014ef4c5a5c271d8561b33bda7fd55f88bcac1b37468d0d532",
+      "crates/zroutery-core/src/config/registry.rs": "sha256:0f18de17e1d49c2cb62ab81a611e2b2f41ac3257bd085ed0b2ae032a9c8d703f",
+      "crates/zroutery-core/src/config/validate.rs": "sha256:a7f2a2b1a6abdcd170c400843ec4dca3e815555cf2846049ca90434a144bb454",
+      "crates/zroutery-core/src/config/secrets.rs": "sha256:3fe88ed5037687627a011740b32a743957e87c6bb411dce93450c4b0d120b663",
+      "src-tauri/src/secrets.rs": "sha256:183e0588a948e896b2eb368895cbde309cb8b0818e06a0105a04a4749616fdf5",
+      "src-tauri/src/state/snapshot.rs": "sha256:ab1d6436df0c84e86476ce8acd4239571b42c8d60ca979c5f637a882a511744e",
+      "src-tauri/src/store.rs": "sha256:05701f3f4375c52e4ee1e4fd6d1c41566777992edcb0f12e72ac14d8f0dfd12c",
+      "src-tauri/src/token_capture/mod.rs": "sha256:b85091be81c04944ebb29009ce8e77b4abadf1d7c2b0014602f8bd1acd8aab68",
+      "src-tauri/build.rs": "sha256:bfcdc780b6631d9f6032cfc6021f654d7801d10290067b2ea5679e888ab3d323",
+      "src-tauri/capabilities/default.json": "sha256:16cc97d7b8f2068ebed1bf7fae50843dea4793c8981f63146a89ce4a6db43257",
+      "src-tauri/capabilities/tray-panel.json": "sha256:628aa6fd3246446c9cb242758a29850d8b814b66f86e67967dfc6e0b4d9330df",
+      "src-tauri/tauri.conf.json": "sha256:ba1bd4d259ff2a0fc355e3e5a075da8a2c3f64fd27ae289a9565942042c14782",
+      "crates/zroutery-core/src/upstream/http.rs": "sha256:ac5f3353f2e9dd922fee82faea9ee54001d9aa3b95397b9069865e42bd3f29db",
+      "crates/zroutery-core/src/error.rs": "sha256:81cc8c251bc9f6cba72b525fd7361979faf4425b0e32c323cee3c0b7da241c7d"
+    },
+    "commands": [
+      "cargo test --workspace --all-features --locked",
+      "python3 -B scripts/command_surface_test.py"
+    ],
+    "note": "The auth layer, capabilities and redaction are the source; the threat model is stated rather than implied."
   }
 }

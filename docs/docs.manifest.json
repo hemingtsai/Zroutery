@@ -403,6 +403,20 @@
       "owner": "backend",
       "summary": "Defaults, validation, normalisation, persistence, secret boundary and feature gates.",
       "max_lines": 300
+    },
+    {
+      "path": "docs/development/reference/security.md",
+      "title": "Security Reference",
+      "type": "reference",
+      "authority": "reference",
+      "audience": [
+        "human",
+        "agent"
+      ],
+      "status": "active",
+      "owner": "backend",
+      "summary": "Local trust boundary: auth, CORS, secrets, webview capabilities, redirects and error redaction.",
+      "max_lines": 300
     }
   ],
   "pending": [],

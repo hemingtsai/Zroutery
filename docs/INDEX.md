@@ -55,6 +55,7 @@ This file is generated from `docs/docs.manifest.json`. Do not edit it.
 | [docs/development/reference/failure.md](development/reference/failure.md) | reference | reference | backend | Failure classes, impact bits, retry/failover rules, safe wire messages and terminal states. |
 | [docs/development/reference/observability.md](development/reference/observability.md) | reference | reference | backend | Request records, health and latency state, activity projection and in-memory sessions. |
 | [docs/development/reference/config.md](development/reference/config.md) | reference | reference | backend | Defaults, validation, normalisation, persistence, secret boundary and feature gates. |
+| [docs/development/reference/security.md](development/reference/security.md) | reference | reference | backend | Local trust boundary: auth, CORS, secrets, webview capabilities, redirects and error redaction. |
 
 ## Pending migration
 
@@ -72,9 +73,9 @@ Audits, findings, triage and risk discussions live in GitHub Issues. Use the `au
 
 ## Health
 
-- active documents: 36
-- source-anchored (non-ADR): 24
-- hash-ledgered: 24
+- active documents: 37
+- source-anchored (non-ADR): 25
+- hash-ledgered: 25
 - guides: 5
 - ADRs: 8 (5 with code anchors; decision records, not machine-verified)
 - generated/index: 4
