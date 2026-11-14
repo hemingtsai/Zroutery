@@ -144,7 +144,9 @@ Consequences, stated rather than discovered:
   elsewhere, or explicitly unowned with a reason.
 - `docs_check.py` requires an ADR header (`Status`, `Date`, `Supersedes`), the
   `Context`/`Decision`/`Consequences`/`Sources` sections, and a resolvable
-  `manifest.canonical[].home` anchor.
+  `manifest.canonical[].home` anchor. An ADR `Date` must equal the file's first
+  commit date (`git log --diff-filter=A --format=%cs`); `## Sources` needs at
+  least one existing path or `path::symbol`.
 - `invariant_check.py` requires every architecture invariant to name a test anchor
   or an explicit `untested` reason.
 - `current_state.py --check` fails when `current-state.md` is not the render of

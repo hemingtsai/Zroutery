@@ -556,6 +556,33 @@ def self_test() -> int:
         if not adr_errors(root, {"path": str(adr.relative_to(root))}, adr.read_text()):
             print("docs-check self-test: an ADR without Sources was NOT caught", file=sys.stderr)
             return 1
+
+        # Date mismatch needs a real first commit: the checker reads git.
+        (root / "README.md").write_text("readme\n", encoding="utf-8")
+        valid = "# ADR-0001: Test\n\nStatus: accepted\nDate: 2026-11-14\nSupersedes: none\n\n## Context\n\n## Decision\n\n## Consequences\n\n## Sources\n\n- `README.md`\n"
+        adr.write_text(valid, encoding="utf-8")
+        subprocess.run(["git", "init", "-q"], cwd=root, check=True)
+        subprocess.run(["git", "config", "user.email", "docs@example.invalid"], cwd=root, check=True)
+        subprocess.run(["git", "config", "user.name", "docs"], cwd=root, check=True)
+        subprocess.run(["git", "add", "README.md", str(adr.relative_to(root))], cwd=root, check=True)
+        env = {**os.environ, "GIT_AUTHOR_DATE": "2026-09-25T12:00:00+0800", "GIT_COMMITTER_DATE": "2026-09-25T12:00:00+0800"}
+        subprocess.run(["git", "commit", "-q", "-m", "adr"], cwd=root, env=env, check=True)
+        if not any("differs from first commit" in error for error in adr_errors(root, {"path": str(adr.relative_to(root))}, adr.read_text())):
+            print("docs-check self-test: an ADR date mismatch was NOT caught", file=sys.stderr)
+            return 1
+
+        # Source and symbol checks run against the same first-commit date.
+        dated = valid.replace("Date: 2026-11-14", "Date: 2026-09-25")
+        adr.write_text(dated, encoding="utf-8")
+        adr.write_text(dated.replace("- `README.md`", ""), encoding="utf-8")
+        if not any("at least one" in error for error in adr_errors(root, {"path": str(adr.relative_to(root))}, adr.read_text())):
+            print("docs-check self-test: an empty Sources section was NOT caught", file=sys.stderr)
+            return 1
+        adr.write_text(dated.replace("- `README.md`", "- `src/sample.rs::missing`"), encoding="utf-8")
+        if not any("source" in error for error in adr_errors(root, {"path": str(adr.relative_to(root))}, adr.read_text())):
+            print("docs-check self-test: a broken path::symbol source was NOT caught", file=sys.stderr)
+            return 1
+
         (root / "docs" / "DOCUMENTATION.md").write_text("# Doc\n\n## Findings and decisions\n", encoding="utf-8")
         if not canonical_errors(root, {"canonical": [{"fact": "findings", "home": "docs/DOCUMENTATION.md#missing"}]}):
             print("docs-check self-test: a broken canonical anchor was NOT caught", file=sys.stderr)
@@ -563,7 +590,7 @@ def self_test() -> int:
         if resolve_redirect("docs/old/x.json", {"docs/old/*": "docs/new/*"}) != "docs/new/x.json":
             print("docs-check self-test: prefix redirect did not resolve", file=sys.stderr)
             return 1
-        print("docs-check: self-test passed (rejects a broken link, archived link, over-budget file, ADR without Sources and broken canonical anchor; resolves a prefix redirect)")
+        print("docs-check: self-test passed (rejects a broken link, archived link, over-budget file, ADR without Sources, ADR date drift, empty Sources, broken path::symbol and canonical anchor; resolves a prefix redirect)")
         return 0
 
 

@@ -68,7 +68,7 @@ Supersedes: none
 
 `Status` is `accepted`, `proposed`, or `superseded by ADR-XXXX`. `Date` is the
 date the decision was made, not the date the file was last edited; `docs_check.py`
-compares it with the file's first commit. `Supersedes` is `none` or
+compares it with the first commit's committer date (`%cs`). `Supersedes` is `none` or
 `ADR-XXXX`. `## Sources` needs at least one existing path or `path::symbol`.
 
 ## Metadata lives in one manifest

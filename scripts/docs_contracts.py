@@ -25,8 +25,9 @@ def run(args: list[str]) -> None:
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--base", default="")
+    parser.add_argument("--base", default=None)
     parser.add_argument("--head", default="HEAD")
+    parser.add_argument("--no-range", action="store_true")
     args = parser.parse_args(argv)
 
     run(["scripts/docs_sources.py", "--self-test"])
@@ -46,14 +47,29 @@ def main(argv: list[str] | None = None) -> int:
     run(["scripts/freshness_report.py", "--check"])
     run(["scripts/docs_impact.py", "--self-test"])
 
-    base = args.base.strip()
-    if not base or set(base) == {"0"}:
-        print("==> docs_impact: no base revision; range check skipped", flush=True)
-    else:
-        if subprocess.run(["git", "cat-file", "-e", f"{base}^{{commit}}"], cwd=ROOT).returncode != 0:
-            print(f"docs-contracts: base {base} is not a commit", file=sys.stderr)
-            return 1
-        run(["scripts/docs_impact.py", "--base", base, "--head", args.head])
+    base = (args.base or "").strip()
+    if args.no_range:
+        print("==> docs_impact: range check disabled with --no-range", flush=True)
+    elif args.base == "":
+        print("==> docs_impact: no base revision supplied; range check skipped", flush=True)
+    elif not base:
+        for candidate in ("origin/dev", "HEAD~1"):
+            result = subprocess.run(["git", "rev-parse", "--verify", candidate], cwd=ROOT, text=True, capture_output=True)
+            if result.returncode == 0:
+                base = result.stdout.strip()
+                print(f"==> docs_impact: default range {base[:12]}..{args.head}", flush=True)
+                break
+        if not base:
+            print("==> docs_impact: no default base; range check skipped", flush=True)
+    if base:
+        if set(base) == {"0"}:
+            print("==> docs_impact: zero base; range check skipped", flush=True)
+            base = ""
+        else:
+            if subprocess.run(["git", "cat-file", "-e", f"{base}^{{commit}}"], cwd=ROOT).returncode != 0:
+                print(f"docs-contracts: base {base} is not a commit", file=sys.stderr)
+                return 1
+            run(["scripts/docs_impact.py", "--base", base, "--head", args.head])
     print("docs-contracts: all documentation contracts passed", flush=True)
     return 0
 

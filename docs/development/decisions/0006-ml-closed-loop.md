@@ -4,7 +4,6 @@ Status: accepted
 Date: 2026-10-04
 Supersedes: ADR-0002
 
-
 ## Context
 
 The repository had a large, adversarially-specified ML infrastructure and no

@@ -42,7 +42,13 @@
       "name": "documentation contracts",
       "status": "pass",
       "command": "python3 -B scripts/docs_contracts.py",
-      "detail": "all docs gates; CI runs range impact with --base/--head"
+      "detail": "all docs gates; local default range origin/dev..HEAD; CI passes BASE_SHA"
+    },
+    {
+      "name": "documentation impact (range)",
+      "status": "unverified",
+      "command": "python3 -B scripts/docs_contracts.py --base <base> --head HEAD",
+      "detail": "not run in this snapshot; local default origin/dev..HEAD; CI passes BASE_SHA"
     },
     {
       "name": "documentation sources",
