@@ -6,35 +6,35 @@ as of `2026-11-14` · branch `dev` · verified code head `ebe8b1e`
 
 ## Gates
 
-| Gate | Status | Command | Detail |
-|---|---|---|---|
-| documentation contracts (local) | **pass** | `python3 -B scripts/docs_contracts.py` | all non-range documentation gates |
-| fmt | **unverified** | `cargo fmt --all -- --check` | ran on local rustc 1.98.0; the CI-resolved toolchain was not available, so this is not a CI-toolchain pass |
-| clippy (workspace, all targets, all features) | **unverified** | `cargo clippy --workspace --all-targets --all-features --locked -- -D warnings` | ran on local rustc 1.98.0; the CI-resolved toolchain was not available, so this is not a CI-toolchain pass |
-| tests (workspace, all features) | **unverified** | `cargo test --workspace --all-features --locked` | 3478 passed, 0 failed, 22 ignored, 110 suites; ran on local rustc 1.98.0; the CI-resolved toolchain was not available, so this is not a CI-toolchain pass |
-| frontend build | **pass** | `pnpm --dir ui build` |  |
-| frontend tests | **pass** | `pnpm --dir ui test` | 86 passed |
-| command surface | **pass** | `python3 -B scripts/command_surface_test.py` | 90 interface commands, 254 registered |
-| documentation sources | **pass** | `python3 -B scripts/docs_sources.py --check` | docs-sources: 801 anchor(s) resolved in 36 active document(s) (7875f71) |
-| markdown structure | **pass** | `python3 -B scripts/markdown_check.py` | markdown-check: fenced blocks and tables are well formed (7875f71) |
-| documentation check | **pass** | `python3 -B scripts/docs_check.py` | docs-check: 47 active document(s), 0 pending, 0 warning(s), all checks passed (7875f71) |
-| documentation parity | **pass** | `python3 -B scripts/docs_parity.py --check` | docs-parity: the three READMEs have matching headings, fences, images and source anchors (7875f71) |
-| module coverage | **pass** | `python3 -B scripts/coverage_check.py` | coverage-check: 37 top-level modules (36 owned, 1 covered elsewhere, 0 unowned) (7875f71) |
-| rendered state | **pass** | `python3 -B scripts/current_state.py --check` | current-state: clean (7875f71) |
-| invariant evidence | **pass** | `python3 -B scripts/invariant_check.py` | invariant-check: 15 invariants, 13 with test anchors, 2 explicitly untested (7875f71) |
-| state schema | **pass** | `python3 -B scripts/state_check.py` | state-check: 27 gates, 4 blockers; schema and blockers valid (7875f71) |
-| whitespace | **pass** | `git diff --check` | no trailing whitespace damage |
-| orchestration docs (legacy) | **retired** | `scripts/orch_docs_test.py (not run)` | legacy node and evidence records are archived; validation retired |
-| UI budget | **pass** | `python3 -B scripts/ui_budget_test.py` | 734,994 B JS of 742,000 |
-| UI layout | **pass** | `python3 -B scripts/ui_layout_test.py` | 12 surfaces, 79 controls |
-| UI overflow | **unrun** | `python3 -B scripts/ui_overflow_test.py` | routing tab timeout; lazy page stuck on Helium 0.21.2 (quarantined by frontend until 2026-11-21) |
-| UI interaction | **unrun** | `python3 -B scripts/ui_interaction_test.py` | timed out after 900s on Helium 0.21.2; not a pass and not a product failure (quarantined by frontend until 2026-11-21) |
-| Rust advisories | **fail** | `cargo audit --file Cargo.lock` | 5 vulnerabilities, 18 warnings |
-| frontend advisories | **pass** | `pnpm audit --prod` |  |
-| freshness | **pass** | `python3 -B scripts/freshness_report.py --check` | freshness: 32 documents; every post-review source change is covered by a same-change document edit (7875f71) |
-| rules registry | **pass** | `python3 -B scripts/docs_rules.py` | docs-rules: 17 rules; 16 machine, 13 executed gates covered (7875f71) |
-| verified ledger | **pass** | `python3 -B scripts/docs_verified.py --check` | docs-verified: ledger covers 32 document(s) (7875f71) |
-| review evidence | **pass** | `python3 -B scripts/docs_review.py --check` | docs-review: 32 document(s) have recorded review evidence (7875f71) |
+| Gate | Status | Source | Command | Detail |
+|---|---|---|---|---|
+| documentation contracts (local) | **pass** | recorded | `python3 -B scripts/docs_contracts.py` | all non-range documentation gates |
+| fmt | **unverified** | asserted | `cargo fmt --all -- --check` | ran on local rustc 1.98.0; the CI-resolved toolchain was not available, so this is not a CI-toolchain pass |
+| clippy (workspace, all targets, all features) | **unverified** | asserted | `cargo clippy --workspace --all-targets --all-features --locked -- -D warnings` | ran on local rustc 1.98.0; the CI-resolved toolchain was not available, so this is not a CI-toolchain pass |
+| tests (workspace, all features) | **unverified** | asserted | `cargo test --workspace --all-features --locked` | 3478 passed, 0 failed, 22 ignored, 110 suites; ran on local rustc 1.98.0; the CI-resolved toolchain was not available, so this is not a CI-toolchain pass |
+| frontend build | **pass** | asserted | `pnpm --dir ui build` |  |
+| frontend tests | **pass** | asserted | `pnpm --dir ui test` | 86 passed |
+| command surface | **pass** | asserted | `python3 -B scripts/command_surface_test.py` | 90 interface commands, 254 registered |
+| documentation sources | **pass** | recorded | `python3 -B scripts/docs_sources.py --check` | docs-sources: 801 anchor(s) resolved in 36 active document(s) (7875f71) |
+| markdown structure | **pass** | recorded | `python3 -B scripts/markdown_check.py` | markdown-check: fenced blocks and tables are well formed (7875f71) |
+| documentation check | **pass** | recorded | `python3 -B scripts/docs_check.py` | docs-check: 47 active document(s), 0 pending, 0 warning(s), all checks passed (7875f71) |
+| documentation parity | **pass** | recorded | `python3 -B scripts/docs_parity.py --check` | docs-parity: the three READMEs have matching headings, fences, images and source anchors (7875f71) |
+| module coverage | **pass** | recorded | `python3 -B scripts/coverage_check.py` | coverage-check: 37 top-level modules (36 owned, 1 covered elsewhere, 0 unowned) (7875f71) |
+| rendered state | **pass** | recorded | `python3 -B scripts/current_state.py --check` | current-state: clean (7875f71) |
+| invariant evidence | **pass** | recorded | `python3 -B scripts/invariant_check.py` | invariant-check: 15 invariants, 13 with test anchors, 2 explicitly untested (7875f71) |
+| state schema | **pass** | recorded | `python3 -B scripts/state_check.py` | state-check: 27 gates, 4 blockers; schema and blockers valid (7875f71) |
+| whitespace | **pass** | asserted | `git diff --check` | no trailing whitespace damage |
+| orchestration docs (legacy) | **retired** | asserted | `scripts/orch_docs_test.py (not run)` | legacy node and evidence records are archived; validation retired |
+| UI budget | **pass** | asserted | `python3 -B scripts/ui_budget_test.py` | 734,994 B JS of 742,000 |
+| UI layout | **pass** | asserted | `python3 -B scripts/ui_layout_test.py` | 12 surfaces, 79 controls |
+| UI overflow | **unrun** | asserted | `python3 -B scripts/ui_overflow_test.py` | routing tab timeout; lazy page stuck on Helium 0.21.2 (quarantined by frontend until 2026-11-21) |
+| UI interaction | **unrun** | asserted | `python3 -B scripts/ui_interaction_test.py` | timed out after 900s on Helium 0.21.2; not a pass and not a product failure (quarantined by frontend until 2026-11-21) |
+| Rust advisories | **fail** | asserted | `cargo audit --file Cargo.lock` | 5 vulnerabilities, 18 warnings |
+| frontend advisories | **pass** | asserted | `pnpm audit --prod` |  |
+| freshness | **pass** | recorded | `python3 -B scripts/freshness_report.py --check` | freshness: 32 documents; every post-review source change is covered by a same-change document edit (7875f71) |
+| rules registry | **pass** | recorded | `python3 -B scripts/docs_rules.py` | docs-rules: 17 rules; 16 machine, 13 executed gates covered (7875f71) |
+| verified ledger | **pass** | recorded | `python3 -B scripts/docs_verified.py --check` | docs-verified: ledger covers 32 document(s) (7875f71) |
+| review evidence | **pass** | recorded | `python3 -B scripts/docs_review.py --check` | docs-review: 32 document(s) have recorded review evidence (7875f71) |
 
 ## Blockers
 

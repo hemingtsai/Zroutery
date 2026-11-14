@@ -35,8 +35,8 @@ def render(state: dict) -> str:
         "",
         "## Gates",
         "",
-        "| Gate | Status | Command | Detail |",
-        "|---|---|---|---|",
+        "| Gate | Status | Source | Command | Detail |",
+        "|---|---|---|---|---|",
     ]
     for gate in state.get("gates", []):
         detail = gate.get("detail", "")
@@ -45,9 +45,10 @@ def render(state: dict) -> str:
             note = f"quarantined by {quarantine.get('owner', '?')} until {quarantine.get('review_by', '?')}"
             detail = f"{detail} ({note})" if detail else note
         lines.append(
-            "| {name} | **{status}** | `{command}` | {detail} |".format(
+            "| {name} | **{status}** | {source} | `{command}` | {detail} |".format(
                 name=gate.get("name", "?"),
                 status=gate.get("status", "unknown"),
+                source=gate.get("source", "unknown"),
                 command=gate.get("command", ""),
                 detail=detail,
             )

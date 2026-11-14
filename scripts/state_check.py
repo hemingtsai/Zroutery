@@ -24,7 +24,8 @@ DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 HEAD_RE = re.compile(r"^[0-9a-f]{7,40}$")
 STATUSES = {"pass", "fail", "unverified", "unrun", "retired"}
 BLOCKER_STATES = {"partial", "blocked", "ready", "done", "open"}
-GATE_KEYS = {"name", "status", "command", "detail", "quarantine", "ran_at", "commit"}
+SOURCES = {"recorded", "asserted"}
+GATE_KEYS = {"name", "status", "command", "source", "detail", "quarantine", "ran_at", "commit"}
 BLOCKER_KEYS = {"id", "status", "summary", "blocked_by", "owner", "ref", "review_by"}
 QUARANTINE_KEYS = {"owner", "review_by", "reason"}
 
@@ -40,6 +41,7 @@ def schema_consistency(schema: dict) -> list[str]:
     checks = [
         ("gate keys", GATE_KEYS, set(gates)),
         ("gate statuses", STATUSES, set(gates["status"]["enum"])),
+        ("gate sources", SOURCES, set(gates["source"]["enum"])),
         ("blocker keys", BLOCKER_KEYS, set(blockers)),
         ("blocker statuses", BLOCKER_STATES, set(blockers["status"]["enum"])),
     ]
@@ -104,6 +106,13 @@ def validate(state: dict, schema: dict, root: Path = ROOT, git_check: bool = Tru
         names.add(name)
         if gate.get("status") not in STATUSES:
             errors.append(f"gates[{index}]: status {gate.get('status')!r} is not {sorted(STATUSES)}")
+        source = gate.get("source")
+        if source not in SOURCES:
+            errors.append(f"gates[{index}]: source {source!r} is not {sorted(SOURCES)}")
+        elif source == "recorded":
+            for key in ("ran_at", "commit"):
+                if key not in gate:
+                    errors.append(f"gates[{index}]: recorded gate is missing `{key}`; use record_state.py")
         if not isinstance(gate.get("command"), str) or not gate["command"]:
             errors.append(f"gates[{index}]: command is empty")
         if "detail" in gate and not isinstance(gate["detail"], str):
@@ -218,7 +227,16 @@ def self_test() -> int:
         "as_of": dt.date.today().isoformat(),
         "head": "26d887f",
         "branch": "dev",
-        "gates": [{"name": "tests", "status": "pass", "command": "cargo test"}],
+        "gates": [
+            {
+                "name": "tests",
+                "status": "pass",
+                "command": "cargo test",
+                "source": "recorded",
+                "ran_at": "2026-11-14T00:00:00+00:00",
+                "commit": "26d887f",
+            }
+        ],
         "blockers": [{"id": "7F", "status": "partial", "summary": "x"}],
         "flaky": [],
         "last_full_green": None,
@@ -233,13 +251,23 @@ def self_test() -> int:
     if not validate(bad, schema, git_check=False, schema_check=False):
         print("state-check self-test: bad state was NOT caught", file=sys.stderr)
         return 1
+    no_source = json.loads(json.dumps(good))
+    del no_source["gates"][0]["source"]
+    if not any("source" in error for error in validate(no_source, schema, git_check=False, schema_check=False)):
+        print("state-check self-test: a gate without a source was NOT caught", file=sys.stderr)
+        return 1
+    no_ran_at = json.loads(json.dumps(good))
+    del no_ran_at["gates"][0]["ran_at"]
+    if not any("ran_at" in error for error in validate(no_ran_at, schema, git_check=False, schema_check=False)):
+        print("state-check self-test: a recorded gate without ran_at was NOT caught", file=sys.stderr)
+        return 1
     real = json.loads((ROOT / SCHEMA).read_text(encoding="utf-8"))
     drift = json.loads(json.dumps(real))
     drift["properties"]["gates"]["items"]["properties"]["status"]["enum"].append("green")
     if not schema_consistency(drift):
         print("state-check self-test: schema drift was NOT caught", file=sys.stderr)
         return 1
-    print("state-check: self-test passed (rejects an invalid enum, a missing dependency and schema drift)")
+    print("state-check: self-test passed (rejects an invalid enum, a missing dependency, a missing source and a recorded gate without ran_at, and schema drift)")
     return 0
 
 
@@ -257,7 +285,12 @@ def main(argv: list[str] | None = None) -> int:
         for error in errors:
             print(f"state-check: {error}", file=sys.stderr)
         return 1
-    print(f"state-check: {len(state['gates'])} gates, {len(state['blockers'])} blockers; schema and blockers valid")
+    recorded = sum(1 for gate in state["gates"] if gate.get("source") == "recorded")
+    asserted = len(state["gates"]) - recorded
+    print(
+        f"state-check: {len(state['gates'])} gates ({recorded} recorded, {asserted} asserted), "
+        f"{len(state['blockers'])} blockers; schema and blockers valid"
+    )
     return 0
 
 

@@ -87,6 +87,7 @@ def main(argv: list[str] | None = None) -> int:
             state["gates"].append(gate)
             gates[item["gate"]] = gate
         gate["status"] = item["status"]
+        gate["source"] = "recorded"
         gate["command"] = item.get("command", "python3 -B scripts/docs_contracts.py")
         last = item.get("output", "").strip().splitlines()
         gate["detail"] = (last[-1][:200] if last else item["name"]) + (f" ({commit})" if commit else "")
@@ -99,6 +100,7 @@ def main(argv: list[str] | None = None) -> int:
     state["gates"].insert(0, local_gate)
     gates["documentation contracts (local)"] = local_gate
     local_gate["status"] = local
+    local_gate["source"] = "recorded"
     local_gate["command"] = "python3 -B scripts/docs_contracts.py"
     local_gate["detail"] = "all non-range documentation gates"
     local_gate["ran_at"] = ran_at

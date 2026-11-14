@@ -40,7 +40,8 @@
         "required": [
           "name",
           "status",
-          "command"
+          "command",
+          "source"
         ],
         "properties": {
           "name": {
@@ -62,6 +63,13 @@
             "type": "string",
             "minLength": 1,
             "description": "Command used for this snapshot."
+          },
+          "source": {
+            "enum": [
+              "recorded",
+              "asserted"
+            ],
+            "description": "recorded: written by record_state.py from a run, with ran_at and commit. asserted: entered by hand and labelled as such."
           },
           "detail": {
             "type": "string",

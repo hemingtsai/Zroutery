@@ -262,7 +262,7 @@
       "`Documentation contracts`); a required status check keys on the job, not on a",
       "An ADR `Date` must equal the file's first"
     ],
-    "reviewed_sha": "sha256:0cb71e149b51942aed895af5d750ae7e91238dadf8f798d1a0bbb3ed26f20dd6"
+    "reviewed_sha": "sha256:f7ffcb98828269c39a48d3db0a77bb9e9a88775e744e96825ca67de56554b0d6"
   },
   "docs/development/reference/providers.md": {
     "verified_at": "2026-11-14",

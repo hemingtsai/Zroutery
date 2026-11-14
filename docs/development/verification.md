@@ -192,7 +192,10 @@ range.
   is an ancestor of HEAD, and that `ran_at` is an ISO timestamp.
 - `state_check.py` validates `state.json` against `state.schema.json`, including
   blocker dependencies/cycles and structured flaky/quarantine owner+review
-  deadlines; an expired review date fails.
+  deadlines; an expired review date fails. Each gate declares `source`:
+  `recorded` gates come from `record_state.py` and must carry `ran_at` and
+  `commit`; `asserted` gates are hand-entered and are labelled as such in
+  `current-state.md`.
 - `docs_parity.py` checks that the three READMEs have matching headings, fences,
   images and source anchors; prose may differ, shape may not.
 - `docs_check.py` compares `docs/verified.json` source content hashes with
