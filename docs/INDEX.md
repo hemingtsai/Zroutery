@@ -55,7 +55,6 @@ These documents are still in the legacy shape. Each is either archived or rewrit
 | [docs/development/backend-optimization-execution.md](development/backend-optimization-execution.md) |
 | [docs/development/backend-optimization-plan.md](development/backend-optimization-plan.md) |
 | [docs/development/cc-switch-design-notes.md](development/cc-switch-design-notes.md) |
-| [docs/development/client-attribution-takeover-audit.md](development/client-attribution-takeover-audit.md) |
 | [docs/development/codex-auto-rectifier.md](development/codex-auto-rectifier.md) |
 | [docs/development/dependency-dag.md](development/dependency-dag.md) |
 | [docs/development/evidence-registry.md](development/evidence-registry.md) |
@@ -66,14 +65,11 @@ These documents are still in the legacy shape. Each is either archived or rewrit
 | [docs/development/opencode-zen.md](development/opencode-zen.md) |
 | [docs/development/perf-baseline.md](development/perf-baseline.md) |
 | [docs/development/regression-ledger.md](development/regression-ledger.md) |
-| [docs/development/repository-audit-2026-09-25.md](development/repository-audit-2026-09-25.md) |
 | [docs/development/roadmap.md](development/roadmap.md) |
 | [docs/development/routing-data-collection-guide.md](development/routing-data-collection-guide.md) |
-| [docs/development/routing-learning-closure-audit.md](development/routing-learning-closure-audit.md) |
 | [docs/development/skin-spec-md3-fluent.md](development/skin-spec-md3-fluent.md) |
 | [docs/development/tag-remap.md](development/tag-remap.md) |
 | [docs/development/ui-optimization-plan.md](development/ui-optimization-plan.md) |
-| [docs/development/ui-reference-experience-review-2026-11-06.md](development/ui-reference-experience-review-2026-11-06.md) |
 | [docs/development/upgrade-contracts.md](development/upgrade-contracts.md) |
 | [docs/development/upgrade-execution.md](development/upgrade-execution.md) |
 | [docs/development/upgrade-master-plan.md](development/upgrade-master-plan.md) |
@@ -90,6 +86,6 @@ Audits, findings, triage and risk discussions live in GitHub Issues. Use the `au
 ## Health
 
 - active documents: 24
-- pending migration: 28
+- pending migration: 24
 - source anchors are checked by `scripts/docs_sources.py`
 - links, sizes and freshness are checked by `scripts/docs_check.py`
