@@ -20,6 +20,7 @@ ROOT = Path(__file__).resolve().parents[1]
 ARCH = Path("docs/development/architecture.md")
 ROW_RE = re.compile(r"^\|\s*(\d+)\s*\|")
 ANCHOR_RE = re.compile(r"`([^`]+::[^`]+)`")
+INVARIANT_RE = re.compile(r"^(\d+)\.\s+\*\*")
 
 
 def rows(text: str) -> list[tuple[int, str, str]]:
@@ -43,15 +44,56 @@ def rows(text: str) -> list[tuple[int, str, str]]:
     return parsed
 
 
+def numbered_invariants(text: str) -> list[int]:
+    numbers: list[int] = []
+    in_section = False
+    for line in text.splitlines():
+        if line.strip() == "## 3. Invariants":
+            in_section = True
+            continue
+        if in_section and line.startswith("### "):
+            break
+        if not in_section:
+            continue
+        match = INVARIANT_RE.match(line)
+        if match:
+            numbers.append(int(match.group(1)))
+    return numbers
+
+
+def is_test(root: Path, path: str, symbol: str) -> bool:
+    test_path = (
+        "/tests/" in path
+        or path.endswith("_test.rs")
+        or path.endswith("_tests.rs")
+        or Path(path).name == "tests.rs"
+    )
+    if test_path:
+        return True
+    target = root / path
+    if not target.is_file():
+        return False
+    lines = target.read_text(encoding="utf-8").splitlines()
+    pattern = re.compile(rf"\bfn\s+{re.escape(symbol)}\b")
+    for index, line in enumerate(lines):
+        if pattern.search(line):
+            for previous in lines[max(0, index - 6):index]:
+                if re.match(r"\s*#\[(tokio::)?test\]", previous):
+                    return True
+            return False
+    return False
+
+
 def check(root: Path) -> tuple[list[str], int, int]:
     text = (root / ARCH).read_text(encoding="utf-8")
     parsed = rows(text)
     errors: list[str] = []
-    if len(parsed) != 15:
-        errors.append(f"{ARCH}: expected 15 invariant rows, found {len(parsed)}")
+    expected = numbered_invariants(text)
+    if len(parsed) != len(expected):
+        errors.append(f"{ARCH}: {len(expected)} numbered invariants but {len(parsed)} evidence rows")
     numbers = [number for number, _, _ in parsed]
-    if numbers != list(range(1, 16)):
-        errors.append(f"{ARCH}: invariant numbers must be 1..15, found {numbers}")
+    if numbers != expected:
+        errors.append(f"{ARCH}: invariant numbers {numbers} do not match the section {expected}")
 
     tested = 0
     untested = 0
@@ -84,7 +126,7 @@ def main(argv: list[str] | None = None) -> int:
         for error in errors:
             print(f"invariant-check: {error}", file=sys.stderr)
         return 1
-    print(f"invariant-check: 15 invariants, {tested} with test anchors, {untested} explicitly untested")
+    print(f"invariant-check: {tested + untested} invariants, {tested} with test anchors, {untested} explicitly untested")
     return 0
 
 
