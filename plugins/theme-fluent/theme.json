@@ -1,0 +1,2386 @@
+{
+  "schema_version": 1,
+  "name": {
+    "en": "Fluent",
+    "zh-CN": "Fluent",
+    "zh-TW": "Fluent"
+  },
+  "modes": {
+    "light": {
+      "colors": {
+        "card-fill": {
+          "mix": [
+            {
+              "hex": "#ffffff"
+            },
+            {
+              "hex": "#00000000"
+            }
+          ],
+          "first_fraction": 0.7
+        },
+        "card-stroke": {
+          "mix": [
+            {
+              "hex": "#000000"
+            },
+            {
+              "hex": "#00000000"
+            }
+          ],
+          "first_fraction": 0.06
+        },
+        "subtle-secondary": {
+          "mix": [
+            {
+              "hex": "#000000"
+            },
+            {
+              "hex": "#00000000"
+            }
+          ],
+          "first_fraction": 0.035
+        },
+        "control-alt": {
+          "mix": [
+            {
+              "hex": "#000000"
+            },
+            {
+              "hex": "#00000000"
+            }
+          ],
+          "first_fraction": 0.024
+        },
+        "divider": {
+          "mix": [
+            {
+              "hex": "#000000"
+            },
+            {
+              "hex": "#00000000"
+            }
+          ],
+          "first_fraction": 0.06
+        },
+        "bg": {
+          "hex": "#f5f5f5"
+        },
+        "surface": {
+          "hex": "#ffffff"
+        },
+        "surface-muted": {
+          "hex": "#fafafa"
+        },
+        "hover": {
+          "hex": "#f5f5f5"
+        },
+        "selected": {
+          "hex": "#ebebeb"
+        },
+        "line": {
+          "hex": "#e0e0e0"
+        },
+        "line-muted": {
+          "hex": "#e0e0e0"
+        },
+        "control-line": {
+          "hex": "#8a8a8a"
+        },
+        "stroke-hover": {
+          "hex": "#6e6e6e"
+        },
+        "stroke-pressed": {
+          "hex": "#565656"
+        },
+        "border-primary": {
+          "role": "control-line"
+        },
+        "border-secondary": {
+          "role": "line-muted"
+        },
+        "text": {
+          "hex": "#242424"
+        },
+        "text-2": {
+          "hex": "#424242"
+        },
+        "muted": {
+          "hex": "#616161"
+        },
+        "primary": {
+          "system": "accent",
+          "fallback": {
+            "hex": "#0f6cbd"
+          }
+        },
+        "primary-hover": {
+          "mix": [
+            {
+              "system": "accent",
+              "fallback": {
+                "hex": "#0f6cbd"
+              }
+            },
+            {
+              "role": "text"
+            }
+          ],
+          "first_fraction": 0.85
+        },
+        "on-primary": {
+          "system": "accent_foreground",
+          "fallback": {
+            "hex": "#ffffff"
+          }
+        },
+        "ok": {
+          "hex": "#0e700e"
+        },
+        "ok-bg": {
+          "hex": "#f1faf1"
+        },
+        "warn": {
+          "hex": "#bc4b09"
+        },
+        "warn-bg": {
+          "hex": "#fff9f5"
+        },
+        "danger": {
+          "hex": "#b10e1c"
+        },
+        "danger-bg": {
+          "hex": "#fdf3f4"
+        },
+        "line-strong": {
+          "role": "line-muted"
+        },
+        "scrollbar-thumb": {
+          "hex": "#c6c6c6"
+        },
+        "scrollbar-thumb-hover": {
+          "hex": "#8f8f8f"
+        }
+      },
+      "recipes": [
+        {
+          "part": "shell.sidebar",
+          "when": {
+            "interaction": "rest"
+          },
+          "fill": {
+            "mix": [
+              {
+                "role": "bg"
+              },
+              {
+                "hex": "#00000000"
+              }
+            ],
+            "first_fraction": 0.78
+          },
+          "material": {
+            "kind": "acrylic",
+            "opacity": 0.78,
+            "blur": 24,
+            "saturation": 1.3
+          },
+          "stroke": {
+            "width": 1,
+            "color": {
+              "role": "divider"
+            }
+          },
+          "stroke_edge": "end"
+        },
+        {
+          "part": "button",
+          "when": {
+            "interaction": "rest"
+          },
+          "radius": 4.0
+        },
+        {
+          "part": "input",
+          "when": {
+            "interaction": "rest"
+          },
+          "radius": 4.0
+        },
+        {
+          "part": "select.trigger",
+          "when": {
+            "interaction": "rest"
+          },
+          "radius": 4.0
+        },
+        {
+          "part": "select.menu",
+          "when": {
+            "interaction": "rest"
+          },
+          "radius": 4.0
+        },
+        {
+          "part": "select.item",
+          "when": {
+            "interaction": "rest"
+          },
+          "radius": 4.0
+        },
+        {
+          "part": "navigation.item",
+          "when": {
+            "interaction": "rest"
+          },
+          "radius": 4.0,
+          "decoration": "indicator_anchor"
+        },
+        {
+          "part": "button",
+          "when": {
+            "interaction": "hover",
+            "disabled": false
+          },
+          "variant": "default",
+          "fill": {
+            "role": "hover"
+          },
+          "stroke_edge": "all",
+          "stroke_gradient": {
+            "width": 1,
+            "from": {
+              "hex": "#00000029"
+            },
+            "to": {
+              "hex": "#0000000f"
+            },
+            "angle": 180
+          }
+        },
+        {
+          "part": "navigation.item",
+          "when": {
+            "interaction": "hover"
+          },
+          "fill": {
+            "role": "subtle-secondary"
+          }
+        },
+        {
+          "part": "input",
+          "when": {
+            "interaction": "hover",
+            "focus_visible": false
+          },
+          "stroke": {
+            "width": 1,
+            "color": {
+              "role": "stroke-hover"
+            }
+          },
+          "stroke_edge": "all"
+        },
+        {
+          "part": "select.trigger",
+          "when": {
+            "interaction": "hover",
+            "focus_visible": false
+          },
+          "stroke": {
+            "width": 1,
+            "color": {
+              "role": "stroke-hover"
+            }
+          },
+          "stroke_edge": "all"
+        },
+        {
+          "part": "focus.target",
+          "when": {
+            "interaction": "rest"
+          },
+          "focus_rings": [
+            {
+              "width": 1.0,
+              "offset": 0.0,
+              "color": {
+                "role": "text"
+              }
+            }
+          ],
+          "shadow": [
+            {
+              "x": 0.0,
+              "y": 0.0,
+              "blur": 0.0,
+              "spread": 2.0,
+              "color": {
+                "role": "surface"
+              }
+            },
+            {
+              "x": 0.0,
+              "y": 0.0,
+              "blur": 0.0,
+              "spread": 4.0,
+              "color": {
+                "role": "primary"
+              }
+            }
+          ]
+        },
+        {
+          "part": "input",
+          "when": {
+            "interaction": "rest",
+            "focus_visible": true
+          },
+          "focus_rings": [],
+          "stroke": {
+            "width": 1,
+            "color": {
+              "role": "primary"
+            }
+          },
+          "stroke_edge": "all",
+          "shadow": [
+            {
+              "x": 0.0,
+              "y": -2.0,
+              "blur": 0.0,
+              "spread": 0.0,
+              "color": {
+                "role": "primary"
+              },
+              "inset": true
+            }
+          ]
+        },
+        {
+          "part": "select.trigger",
+          "when": {
+            "interaction": "rest",
+            "focus_visible": true
+          },
+          "focus_rings": [],
+          "stroke": {
+            "width": 1,
+            "color": {
+              "role": "primary"
+            }
+          },
+          "stroke_edge": "all",
+          "shadow": [
+            {
+              "x": 0.0,
+              "y": -2.0,
+              "blur": 0.0,
+              "spread": 0.0,
+              "color": {
+                "role": "primary"
+              },
+              "inset": true
+            }
+          ]
+        },
+        {
+          "part": "popover",
+          "when": {
+            "interaction": "rest"
+          },
+          "radius": 4.0,
+          "stroke": {
+            "width": 1,
+            "color": {
+              "hex": "#00000000"
+            }
+          },
+          "stroke_edge": "all",
+          "shadow": [
+            {
+              "x": 0.0,
+              "y": 0.0,
+              "blur": 2.0,
+              "spread": 0.0,
+              "color": {
+                "mix": [
+                  {
+                    "hex": "#000000"
+                  },
+                  {
+                    "hex": "#00000000"
+                  }
+                ],
+                "first_fraction": 0.12
+              }
+            },
+            {
+              "x": 0.0,
+              "y": 8.0,
+              "blur": 16.0,
+              "spread": 0.0,
+              "color": {
+                "mix": [
+                  {
+                    "hex": "#000000"
+                  },
+                  {
+                    "hex": "#00000000"
+                  }
+                ],
+                "first_fraction": 0.14
+              }
+            }
+          ],
+          "metrics": {
+            "padding_block": 4.0,
+            "padding_inline": 4.0
+          }
+        },
+        {
+          "part": "menu.item",
+          "when": {
+            "interaction": "rest"
+          },
+          "radius": 4.0
+        },
+        {
+          "part": "menu.item",
+          "when": {
+            "interaction": "rest",
+            "focus_visible": true
+          },
+          "focus_rings": [
+            {
+              "width": 2.0,
+              "offset": -2.0,
+              "color": {
+                "role": "primary"
+              }
+            }
+          ]
+        },
+        {
+          "part": "checkbox",
+          "when": {
+            "interaction": "rest"
+          },
+          "radius": 2.0
+        },
+        {
+          "part": "segment.item",
+          "when": {
+            "interaction": "rest"
+          },
+          "decoration": "indicator_anchor"
+        },
+        {
+          "part": "segment.item",
+          "when": {
+            "interaction": "rest",
+            "selected": true
+          },
+          "shadow": [],
+          "foreground": {
+            "role": "text"
+          }
+        },
+        {
+          "part": "segment.indicator",
+          "when": {
+            "interaction": "rest"
+          },
+          "decoration": "underline",
+          "radius": 999.0,
+          "fill": {
+            "role": "primary"
+          },
+          "metrics": {
+            "height": 3.0
+          }
+        },
+        {
+          "part": "drawer",
+          "when": {
+            "interaction": "rest"
+          },
+          "radius": 8.0,
+          "stroke": {
+            "width": 0,
+            "color": {
+              "hex": "#00000000"
+            }
+          },
+          "stroke_edge": "start",
+          "shadow": [
+            {
+              "x": 0.0,
+              "y": 0.0,
+              "blur": 2.0,
+              "spread": 0.0,
+              "color": {
+                "mix": [
+                  {
+                    "hex": "#000000"
+                  },
+                  {
+                    "hex": "#00000000"
+                  }
+                ],
+                "first_fraction": 0.12
+              }
+            },
+            {
+              "x": 0.0,
+              "y": 8.0,
+              "blur": 16.0,
+              "spread": 0.0,
+              "color": {
+                "mix": [
+                  {
+                    "hex": "#000000"
+                  },
+                  {
+                    "hex": "#00000000"
+                  }
+                ],
+                "first_fraction": 0.14
+              }
+            }
+          ]
+        },
+        {
+          "part": "toast",
+          "when": {
+            "interaction": "rest"
+          },
+          "radius": 4.0,
+          "stroke": {
+            "width": 1,
+            "color": {
+              "hex": "#00000000"
+            }
+          },
+          "stroke_edge": "all",
+          "shadow": [
+            {
+              "x": 0.0,
+              "y": 0.0,
+              "blur": 2.0,
+              "spread": 0.0,
+              "color": {
+                "mix": [
+                  {
+                    "hex": "#000000"
+                  },
+                  {
+                    "hex": "#00000000"
+                  }
+                ],
+                "first_fraction": 0.12
+              }
+            },
+            {
+              "x": 0.0,
+              "y": 4.0,
+              "blur": 8.0,
+              "spread": 0.0,
+              "color": {
+                "mix": [
+                  {
+                    "hex": "#000000"
+                  },
+                  {
+                    "hex": "#00000000"
+                  }
+                ],
+                "first_fraction": 0.14
+              }
+            }
+          ]
+        },
+        {
+          "part": "toast.marker",
+          "when": {
+            "interaction": "rest"
+          },
+          "decoration": "leading_indicator",
+          "radius": 2.0,
+          "metrics": {
+            "width": 3.0
+          }
+        },
+        {
+          "part": "dialog",
+          "when": {
+            "interaction": "rest"
+          },
+          "radius": 8.0,
+          "stroke": {
+            "width": 1,
+            "color": {
+              "hex": "#00000000"
+            }
+          },
+          "stroke_edge": "all",
+          "shadow": [
+            {
+              "x": 0.0,
+              "y": 0.0,
+              "blur": 8.0,
+              "spread": 0.0,
+              "color": {
+                "mix": [
+                  {
+                    "hex": "#000000"
+                  },
+                  {
+                    "hex": "#00000000"
+                  }
+                ],
+                "first_fraction": 0.12
+              }
+            },
+            {
+              "x": 0.0,
+              "y": 32.0,
+              "blur": 64.0,
+              "spread": 0.0,
+              "color": {
+                "mix": [
+                  {
+                    "hex": "#000000"
+                  },
+                  {
+                    "hex": "#00000000"
+                  }
+                ],
+                "first_fraction": 0.14
+              }
+            }
+          ]
+        },
+        {
+          "part": "banner",
+          "when": {
+            "interaction": "rest"
+          },
+          "radius": 4.0
+        },
+        {
+          "part": "badge",
+          "when": {
+            "interaction": "rest"
+          },
+          "radius": 4.0
+        },
+        {
+          "part": "chip",
+          "when": {
+            "interaction": "rest"
+          },
+          "radius": 4.0
+        },
+        {
+          "part": "scrollbar",
+          "when": {
+            "interaction": "rest"
+          },
+          "metrics": {
+            "width": 6.0,
+            "height": 6.0
+          }
+        },
+        {
+          "part": "scrollbar.thumb",
+          "when": {
+            "interaction": "rest"
+          },
+          "fill": {
+            "mix": [
+              {
+                "role": "text"
+              },
+              {
+                "hex": "#00000000"
+              }
+            ],
+            "first_fraction": 0.24
+          },
+          "stroke": {
+            "width": 1.0,
+            "color": {
+              "hex": "#00000000"
+            }
+          },
+          "stroke_edge": "all"
+        },
+        {
+          "part": "scrollbar.thumb",
+          "when": {
+            "interaction": "hover"
+          },
+          "fill": {
+            "mix": [
+              {
+                "role": "text"
+              },
+              {
+                "hex": "#00000000"
+              }
+            ],
+            "first_fraction": 0.4
+          }
+        },
+        {
+          "part": "scrollbar.thumb",
+          "when": {
+            "interaction": "pressed"
+          },
+          "fill": {
+            "mix": [
+              {
+                "role": "text"
+              },
+              {
+                "hex": "#00000000"
+              }
+            ],
+            "first_fraction": 0.55
+          }
+        },
+        {
+          "part": "kpi.row",
+          "when": {
+            "interaction": "rest"
+          },
+          "metrics": {
+            "column_gap": 12.0
+          }
+        },
+        {
+          "part": "kpi.cell",
+          "when": {
+            "interaction": "rest"
+          },
+          "stroke": {
+            "width": 0,
+            "color": {
+              "hex": "#00000000"
+            }
+          },
+          "stroke_edge": "start",
+          "radius": 4.0,
+          "fill": {
+            "role": "card-fill"
+          }
+        },
+        {
+          "part": "kpi.trigger",
+          "when": {
+            "interaction": "rest",
+            "selected": true
+          },
+          "stroke": {
+            "width": 2,
+            "color": {
+              "hex": "#00000000"
+            }
+          },
+          "stroke_edge": "bottom",
+          "fill": {
+            "role": "selected"
+          }
+        },
+        {
+          "part": "kpi.trigger",
+          "when": {
+            "interaction": "hover",
+            "selected": true
+          },
+          "fill": {
+            "role": "selected"
+          }
+        },
+        {
+          "part": "kpi.first",
+          "when": {
+            "interaction": "rest"
+          },
+          "metrics": {
+            "padding_start": 24.0
+          }
+        },
+        {
+          "part": "kpi.trigger",
+          "when": {
+            "interaction": "hover"
+          },
+          "shadow": [
+            {
+              "x": 0.0,
+              "y": 0.0,
+              "blur": 2.0,
+              "spread": 0.0,
+              "color": {
+                "mix": [
+                  {
+                    "hex": "#000000"
+                  },
+                  {
+                    "hex": "#00000000"
+                  }
+                ],
+                "first_fraction": 0.12
+              }
+            },
+            {
+              "x": 0.0,
+              "y": 4.0,
+              "blur": 8.0,
+              "spread": 0.0,
+              "color": {
+                "mix": [
+                  {
+                    "hex": "#000000"
+                  },
+                  {
+                    "hex": "#00000000"
+                  }
+                ],
+                "first_fraction": 0.14
+              }
+            }
+          ]
+        },
+        {
+          "part": "chart.card",
+          "when": {
+            "interaction": "rest"
+          },
+          "radius": 4.0,
+          "shadow": [
+            {
+              "x": 0.0,
+              "y": 0.0,
+              "blur": 2.0,
+              "spread": 0.0,
+              "color": {
+                "mix": [
+                  {
+                    "hex": "#000000"
+                  },
+                  {
+                    "hex": "#00000000"
+                  }
+                ],
+                "first_fraction": 0.12
+              }
+            },
+            {
+              "x": 0.0,
+              "y": 4.0,
+              "blur": 8.0,
+              "spread": 0.0,
+              "color": {
+                "mix": [
+                  {
+                    "hex": "#000000"
+                  },
+                  {
+                    "hex": "#00000000"
+                  }
+                ],
+                "first_fraction": 0.14
+              }
+            }
+          ]
+        },
+        {
+          "part": "menu.radio",
+          "when": {
+            "interaction": "rest"
+          },
+          "radius": 999,
+          "decoration": "circle"
+        },
+        {
+          "part": "switch.track",
+          "when": {
+            "interaction": "rest"
+          },
+          "radius": 999.0,
+          "stroke": {
+            "width": 1.0,
+            "color": {
+              "role": "control-line"
+            }
+          },
+          "stroke_edge": "all",
+          "fill": {
+            "role": "control-alt"
+          },
+          "metrics": {
+            "width": 40.0
+          }
+        },
+        {
+          "part": "switch.thumb",
+          "when": {
+            "interaction": "rest"
+          },
+          "radius": 999.0,
+          "fill": {
+            "role": "muted"
+          },
+          "metrics": {
+            "thumb_y": 3.0
+          }
+        },
+        {
+          "part": "switch.track",
+          "when": {
+            "interaction": "rest",
+            "checked": true
+          },
+          "fill": {
+            "role": "primary"
+          },
+          "stroke": {
+            "width": 1,
+            "color": {
+              "hex": "#00000000"
+            }
+          },
+          "stroke_edge": "all"
+        },
+        {
+          "part": "switch.thumb",
+          "when": {
+            "interaction": "rest",
+            "checked": true
+          },
+          "fill": {
+            "role": "on-primary"
+          },
+          "metrics": {
+            "thumb_x": 26.0,
+            "thumb_y": 3.0,
+            "width": 12.0,
+            "height": 12.0
+          }
+        },
+        {
+          "part": "section",
+          "when": {
+            "interaction": "rest"
+          },
+          "radius": 8.0,
+          "fill": {
+            "role": "card-fill"
+          },
+          "stroke": {
+            "width": 1.0,
+            "color": {
+              "role": "card-stroke"
+            }
+          },
+          "stroke_edge": "all",
+          "shadow": [
+            {
+              "x": 0.0,
+              "y": 2.0,
+              "blur": 4.0,
+              "spread": 0.0,
+              "color": {
+                "mix": [
+                  {
+                    "hex": "#000000"
+                  },
+                  {
+                    "hex": "#00000000"
+                  }
+                ],
+                "first_fraction": 0.04
+              }
+            }
+          ],
+          "metrics": {
+            "gap": 12.0,
+            "padding_block": 14.0,
+            "padding_inline": 16.0,
+            "padding_top": 14.0,
+            "padding_bottom": 16.0
+          }
+        },
+        {
+          "part": "tab.panel",
+          "when": {
+            "interaction": "rest"
+          },
+          "layout": "card_stack",
+          "metrics": {
+            "gap": 16.0
+          }
+        },
+        {
+          "part": "section.flat",
+          "when": {
+            "interaction": "rest",
+            "context": "nested_section"
+          },
+          "radius": 0.0,
+          "fill": {
+            "hex": "#00000000"
+          },
+          "stroke": {
+            "width": 1,
+            "color": {
+              "hex": "#00000000"
+            }
+          },
+          "stroke_edge": "all",
+          "shadow": [],
+          "layout": "flatten_nested",
+          "metrics": {
+            "gap": 16.0,
+            "padding_block": 0.0,
+            "padding_inline": 0.0
+          }
+        },
+        {
+          "part": "section.flat",
+          "when": {
+            "interaction": "rest",
+            "context": "overlay"
+          },
+          "radius": 0.0,
+          "fill": {
+            "hex": "#00000000"
+          },
+          "stroke": {
+            "width": 1,
+            "color": {
+              "hex": "#00000000"
+            }
+          },
+          "stroke_edge": "all",
+          "shadow": [],
+          "layout": "flatten_nested",
+          "metrics": {
+            "gap": 16.0,
+            "padding_block": 0.0,
+            "padding_inline": 0.0
+          }
+        },
+        {
+          "part": "list.row",
+          "when": {
+            "interaction": "rest"
+          },
+          "metrics": {
+            "padding_start": 12.0,
+            "padding_inline": 12.0
+          }
+        },
+        {
+          "part": "navigation.item",
+          "when": {
+            "interaction": "rest",
+            "selected": true
+          },
+          "fill": {
+            "role": "subtle-secondary"
+          }
+        },
+        {
+          "part": "navigation.indicator",
+          "when": {
+            "interaction": "rest"
+          },
+          "decoration": "leading_indicator",
+          "radius": 2.0,
+          "fill": {
+            "role": "primary"
+          },
+          "metrics": {
+            "width": 3.0,
+            "height": 16.0
+          }
+        },
+        {
+          "part": "shell.bar",
+          "when": {
+            "interaction": "rest"
+          },
+          "fill": {
+            "hex": "#00000000"
+          },
+          "stroke": {
+            "width": 1,
+            "color": {
+              "hex": "#00000000"
+            }
+          },
+          "stroke_edge": "bottom",
+          "metrics": {
+            "height": 48.0
+          }
+        },
+        {
+          "part": "shell.title",
+          "when": {
+            "interaction": "rest"
+          },
+          "foreground": {
+            "role": "text"
+          },
+          "decoration": "plain_title",
+          "metrics": {
+            "font_size": 20.0,
+            "font_weight": 600
+          }
+        },
+        {
+          "part": "select.menu",
+          "when": {
+            "interaction": "rest"
+          },
+          "shadow": [
+            {
+              "x": 0.0,
+              "y": 0.0,
+              "blur": 2.0,
+              "spread": 0.0,
+              "color": {
+                "mix": [
+                  {
+                    "hex": "#000000"
+                  },
+                  {
+                    "hex": "#00000000"
+                  }
+                ],
+                "first_fraction": 0.12
+              }
+            },
+            {
+              "x": 0.0,
+              "y": 8.0,
+              "blur": 16.0,
+              "spread": 0.0,
+              "color": {
+                "mix": [
+                  {
+                    "hex": "#000000"
+                  },
+                  {
+                    "hex": "#00000000"
+                  }
+                ],
+                "first_fraction": 0.14
+              }
+            }
+          ]
+        }
+      ]
+    },
+    "dark": {
+      "colors": {
+        "card-fill": {
+          "mix": [
+            {
+              "hex": "#ffffff"
+            },
+            {
+              "hex": "#00000000"
+            }
+          ],
+          "first_fraction": 0.05
+        },
+        "card-stroke": {
+          "mix": [
+            {
+              "hex": "#000000"
+            },
+            {
+              "hex": "#00000000"
+            }
+          ],
+          "first_fraction": 0.1
+        },
+        "subtle-secondary": {
+          "mix": [
+            {
+              "hex": "#ffffff"
+            },
+            {
+              "hex": "#00000000"
+            }
+          ],
+          "first_fraction": 0.06
+        },
+        "control-alt": {
+          "mix": [
+            {
+              "hex": "#000000"
+            },
+            {
+              "hex": "#00000000"
+            }
+          ],
+          "first_fraction": 0.1
+        },
+        "divider": {
+          "mix": [
+            {
+              "hex": "#ffffff"
+            },
+            {
+              "hex": "#00000000"
+            }
+          ],
+          "first_fraction": 0.08
+        },
+        "bg": {
+          "hex": "#202020"
+        },
+        "surface": {
+          "hex": "#292929"
+        },
+        "surface-muted": {
+          "hex": "#141414"
+        },
+        "hover": {
+          "mix": [
+            {
+              "hex": "#ffffff"
+            },
+            {
+              "hex": "#00000000"
+            }
+          ],
+          "first_fraction": 0.0605
+        },
+        "selected": {
+          "hex": "#383838"
+        },
+        "line": {
+          "hex": "#525252"
+        },
+        "line-muted": {
+          "hex": "#3d3d3d"
+        },
+        "control-line": {
+          "hex": "#808080"
+        },
+        "stroke-hover": {
+          "hex": "#999999"
+        },
+        "stroke-pressed": {
+          "hex": "#adadad"
+        },
+        "border-primary": {
+          "role": "control-line"
+        },
+        "border-secondary": {
+          "role": "line-muted"
+        },
+        "text": {
+          "hex": "#ffffff"
+        },
+        "text-2": {
+          "hex": "#d6d6d6"
+        },
+        "muted": {
+          "hex": "#adadad"
+        },
+        "primary": {
+          "mix": [
+            {
+              "system": "accent",
+              "fallback": {
+                "hex": "#0f6cbd"
+              }
+            },
+            {
+              "hex": "#ffffff"
+            }
+          ],
+          "first_fraction": 0.45
+        },
+        "primary-hover": {
+          "mix": [
+            {
+              "system": "accent",
+              "fallback": {
+                "hex": "#0f6cbd"
+              }
+            },
+            {
+              "hex": "#ffffff"
+            }
+          ],
+          "first_fraction": 0.4
+        },
+        "on-primary": {
+          "mix": [
+            {
+              "system": "accent",
+              "fallback": {
+                "hex": "#0f6cbd"
+              }
+            },
+            {
+              "hex": "#202020"
+            }
+          ],
+          "first_fraction": 0.15
+        },
+        "ok": {
+          "hex": "#54b054"
+        },
+        "ok-bg": {
+          "hex": "#052505"
+        },
+        "warn": {
+          "hex": "#faa06b"
+        },
+        "warn-bg": {
+          "hex": "#4a1e04"
+        },
+        "danger": {
+          "hex": "#dc626d"
+        },
+        "danger-bg": {
+          "hex": "#3b0509"
+        },
+        "line-strong": {
+          "role": "line-muted"
+        },
+        "scrollbar-thumb": {
+          "hex": "#c6c6c6"
+        },
+        "scrollbar-thumb-hover": {
+          "hex": "#8f8f8f"
+        }
+      },
+      "recipes": [
+        {
+          "part": "shell.sidebar",
+          "when": {
+            "interaction": "rest"
+          },
+          "fill": {
+            "mix": [
+              {
+                "role": "bg"
+              },
+              {
+                "hex": "#00000000"
+              }
+            ],
+            "first_fraction": 0.78
+          },
+          "material": {
+            "kind": "acrylic",
+            "opacity": 0.78,
+            "blur": 24,
+            "saturation": 1.3
+          },
+          "stroke": {
+            "width": 1,
+            "color": {
+              "role": "divider"
+            }
+          },
+          "stroke_edge": "end"
+        },
+        {
+          "part": "button",
+          "when": {
+            "interaction": "rest"
+          },
+          "radius": 4.0
+        },
+        {
+          "part": "input",
+          "when": {
+            "interaction": "rest"
+          },
+          "radius": 4.0
+        },
+        {
+          "part": "select.trigger",
+          "when": {
+            "interaction": "rest"
+          },
+          "radius": 4.0
+        },
+        {
+          "part": "select.menu",
+          "when": {
+            "interaction": "rest"
+          },
+          "radius": 4.0
+        },
+        {
+          "part": "select.item",
+          "when": {
+            "interaction": "rest"
+          },
+          "radius": 4.0
+        },
+        {
+          "part": "navigation.item",
+          "when": {
+            "interaction": "rest"
+          },
+          "radius": 4.0,
+          "decoration": "indicator_anchor"
+        },
+        {
+          "part": "button",
+          "when": {
+            "interaction": "hover",
+            "disabled": false
+          },
+          "variant": "default",
+          "fill": {
+            "role": "hover"
+          },
+          "stroke_edge": "all",
+          "stroke_gradient": {
+            "width": 1,
+            "from": {
+              "hex": "#ffffff12"
+            },
+            "to": {
+              "hex": "#ffffff18"
+            },
+            "angle": 180
+          }
+        },
+        {
+          "part": "navigation.item",
+          "when": {
+            "interaction": "hover"
+          },
+          "fill": {
+            "role": "subtle-secondary"
+          }
+        },
+        {
+          "part": "input",
+          "when": {
+            "interaction": "hover",
+            "focus_visible": false
+          },
+          "stroke": {
+            "width": 1,
+            "color": {
+              "role": "stroke-hover"
+            }
+          },
+          "stroke_edge": "all"
+        },
+        {
+          "part": "select.trigger",
+          "when": {
+            "interaction": "hover",
+            "focus_visible": false
+          },
+          "stroke": {
+            "width": 1,
+            "color": {
+              "role": "stroke-hover"
+            }
+          },
+          "stroke_edge": "all"
+        },
+        {
+          "part": "focus.target",
+          "when": {
+            "interaction": "rest"
+          },
+          "focus_rings": [
+            {
+              "width": 1.0,
+              "offset": 0.0,
+              "color": {
+                "role": "text"
+              }
+            }
+          ],
+          "shadow": [
+            {
+              "x": 0.0,
+              "y": 0.0,
+              "blur": 0.0,
+              "spread": 2.0,
+              "color": {
+                "role": "surface"
+              }
+            },
+            {
+              "x": 0.0,
+              "y": 0.0,
+              "blur": 0.0,
+              "spread": 4.0,
+              "color": {
+                "role": "primary"
+              }
+            }
+          ]
+        },
+        {
+          "part": "input",
+          "when": {
+            "interaction": "rest",
+            "focus_visible": true
+          },
+          "focus_rings": [],
+          "stroke": {
+            "width": 1,
+            "color": {
+              "role": "primary"
+            }
+          },
+          "stroke_edge": "all",
+          "shadow": [
+            {
+              "x": 0.0,
+              "y": -2.0,
+              "blur": 0.0,
+              "spread": 0.0,
+              "color": {
+                "role": "primary"
+              },
+              "inset": true
+            }
+          ]
+        },
+        {
+          "part": "select.trigger",
+          "when": {
+            "interaction": "rest",
+            "focus_visible": true
+          },
+          "focus_rings": [],
+          "stroke": {
+            "width": 1,
+            "color": {
+              "role": "primary"
+            }
+          },
+          "stroke_edge": "all",
+          "shadow": [
+            {
+              "x": 0.0,
+              "y": -2.0,
+              "blur": 0.0,
+              "spread": 0.0,
+              "color": {
+                "role": "primary"
+              },
+              "inset": true
+            }
+          ]
+        },
+        {
+          "part": "popover",
+          "when": {
+            "interaction": "rest"
+          },
+          "radius": 4.0,
+          "stroke": {
+            "width": 1,
+            "color": {
+              "hex": "#00000000"
+            }
+          },
+          "stroke_edge": "all",
+          "shadow": [
+            {
+              "x": 0.0,
+              "y": 0.0,
+              "blur": 2.0,
+              "spread": 0.0,
+              "color": {
+                "mix": [
+                  {
+                    "hex": "#000000"
+                  },
+                  {
+                    "hex": "#00000000"
+                  }
+                ],
+                "first_fraction": 0.24
+              }
+            },
+            {
+              "x": 0.0,
+              "y": 8.0,
+              "blur": 16.0,
+              "spread": 0.0,
+              "color": {
+                "mix": [
+                  {
+                    "hex": "#000000"
+                  },
+                  {
+                    "hex": "#00000000"
+                  }
+                ],
+                "first_fraction": 0.28
+              }
+            }
+          ],
+          "metrics": {
+            "padding_block": 4.0,
+            "padding_inline": 4.0
+          }
+        },
+        {
+          "part": "menu.item",
+          "when": {
+            "interaction": "rest"
+          },
+          "radius": 4.0
+        },
+        {
+          "part": "menu.item",
+          "when": {
+            "interaction": "rest",
+            "focus_visible": true
+          },
+          "focus_rings": [
+            {
+              "width": 2.0,
+              "offset": -2.0,
+              "color": {
+                "role": "primary"
+              }
+            }
+          ]
+        },
+        {
+          "part": "checkbox",
+          "when": {
+            "interaction": "rest"
+          },
+          "radius": 2.0
+        },
+        {
+          "part": "segment.item",
+          "when": {
+            "interaction": "rest"
+          },
+          "decoration": "indicator_anchor"
+        },
+        {
+          "part": "segment.item",
+          "when": {
+            "interaction": "rest",
+            "selected": true
+          },
+          "shadow": [],
+          "foreground": {
+            "role": "text"
+          }
+        },
+        {
+          "part": "segment.indicator",
+          "when": {
+            "interaction": "rest"
+          },
+          "decoration": "underline",
+          "radius": 999.0,
+          "fill": {
+            "role": "primary"
+          },
+          "metrics": {
+            "height": 3.0
+          }
+        },
+        {
+          "part": "drawer",
+          "when": {
+            "interaction": "rest"
+          },
+          "radius": 8.0,
+          "stroke": {
+            "width": 0,
+            "color": {
+              "hex": "#00000000"
+            }
+          },
+          "stroke_edge": "start",
+          "shadow": [
+            {
+              "x": 0.0,
+              "y": 0.0,
+              "blur": 2.0,
+              "spread": 0.0,
+              "color": {
+                "mix": [
+                  {
+                    "hex": "#000000"
+                  },
+                  {
+                    "hex": "#00000000"
+                  }
+                ],
+                "first_fraction": 0.24
+              }
+            },
+            {
+              "x": 0.0,
+              "y": 8.0,
+              "blur": 16.0,
+              "spread": 0.0,
+              "color": {
+                "mix": [
+                  {
+                    "hex": "#000000"
+                  },
+                  {
+                    "hex": "#00000000"
+                  }
+                ],
+                "first_fraction": 0.28
+              }
+            }
+          ]
+        },
+        {
+          "part": "toast",
+          "when": {
+            "interaction": "rest"
+          },
+          "radius": 4.0,
+          "stroke": {
+            "width": 1,
+            "color": {
+              "hex": "#00000000"
+            }
+          },
+          "stroke_edge": "all",
+          "shadow": [
+            {
+              "x": 0.0,
+              "y": 0.0,
+              "blur": 2.0,
+              "spread": 0.0,
+              "color": {
+                "mix": [
+                  {
+                    "hex": "#000000"
+                  },
+                  {
+                    "hex": "#00000000"
+                  }
+                ],
+                "first_fraction": 0.24
+              }
+            },
+            {
+              "x": 0.0,
+              "y": 4.0,
+              "blur": 8.0,
+              "spread": 0.0,
+              "color": {
+                "mix": [
+                  {
+                    "hex": "#000000"
+                  },
+                  {
+                    "hex": "#00000000"
+                  }
+                ],
+                "first_fraction": 0.28
+              }
+            }
+          ]
+        },
+        {
+          "part": "toast.marker",
+          "when": {
+            "interaction": "rest"
+          },
+          "decoration": "leading_indicator",
+          "radius": 2.0,
+          "metrics": {
+            "width": 3.0
+          }
+        },
+        {
+          "part": "dialog",
+          "when": {
+            "interaction": "rest"
+          },
+          "radius": 8.0,
+          "stroke": {
+            "width": 1,
+            "color": {
+              "hex": "#00000000"
+            }
+          },
+          "stroke_edge": "all",
+          "shadow": [
+            {
+              "x": 0.0,
+              "y": 0.0,
+              "blur": 8.0,
+              "spread": 0.0,
+              "color": {
+                "mix": [
+                  {
+                    "hex": "#000000"
+                  },
+                  {
+                    "hex": "#00000000"
+                  }
+                ],
+                "first_fraction": 0.24
+              }
+            },
+            {
+              "x": 0.0,
+              "y": 32.0,
+              "blur": 64.0,
+              "spread": 0.0,
+              "color": {
+                "mix": [
+                  {
+                    "hex": "#000000"
+                  },
+                  {
+                    "hex": "#00000000"
+                  }
+                ],
+                "first_fraction": 0.28
+              }
+            }
+          ]
+        },
+        {
+          "part": "banner",
+          "when": {
+            "interaction": "rest"
+          },
+          "radius": 4.0
+        },
+        {
+          "part": "badge",
+          "when": {
+            "interaction": "rest"
+          },
+          "radius": 4.0
+        },
+        {
+          "part": "chip",
+          "when": {
+            "interaction": "rest"
+          },
+          "radius": 4.0
+        },
+        {
+          "part": "scrollbar",
+          "when": {
+            "interaction": "rest"
+          },
+          "metrics": {
+            "width": 6.0,
+            "height": 6.0
+          }
+        },
+        {
+          "part": "scrollbar.thumb",
+          "when": {
+            "interaction": "rest"
+          },
+          "fill": {
+            "mix": [
+              {
+                "role": "text"
+              },
+              {
+                "hex": "#00000000"
+              }
+            ],
+            "first_fraction": 0.24
+          },
+          "stroke": {
+            "width": 1.0,
+            "color": {
+              "hex": "#00000000"
+            }
+          },
+          "stroke_edge": "all"
+        },
+        {
+          "part": "scrollbar.thumb",
+          "when": {
+            "interaction": "hover"
+          },
+          "fill": {
+            "mix": [
+              {
+                "role": "text"
+              },
+              {
+                "hex": "#00000000"
+              }
+            ],
+            "first_fraction": 0.4
+          }
+        },
+        {
+          "part": "scrollbar.thumb",
+          "when": {
+            "interaction": "pressed"
+          },
+          "fill": {
+            "mix": [
+              {
+                "role": "text"
+              },
+              {
+                "hex": "#00000000"
+              }
+            ],
+            "first_fraction": 0.55
+          }
+        },
+        {
+          "part": "kpi.row",
+          "when": {
+            "interaction": "rest"
+          },
+          "metrics": {
+            "column_gap": 12.0
+          }
+        },
+        {
+          "part": "kpi.cell",
+          "when": {
+            "interaction": "rest"
+          },
+          "stroke": {
+            "width": 0,
+            "color": {
+              "hex": "#00000000"
+            }
+          },
+          "stroke_edge": "start",
+          "radius": 4.0,
+          "fill": {
+            "role": "card-fill"
+          }
+        },
+        {
+          "part": "kpi.trigger",
+          "when": {
+            "interaction": "rest",
+            "selected": true
+          },
+          "stroke": {
+            "width": 2,
+            "color": {
+              "hex": "#00000000"
+            }
+          },
+          "stroke_edge": "bottom",
+          "fill": {
+            "role": "selected"
+          }
+        },
+        {
+          "part": "kpi.trigger",
+          "when": {
+            "interaction": "hover",
+            "selected": true
+          },
+          "fill": {
+            "role": "selected"
+          }
+        },
+        {
+          "part": "kpi.first",
+          "when": {
+            "interaction": "rest"
+          },
+          "metrics": {
+            "padding_start": 24.0
+          }
+        },
+        {
+          "part": "kpi.trigger",
+          "when": {
+            "interaction": "hover"
+          },
+          "shadow": [
+            {
+              "x": 0.0,
+              "y": 0.0,
+              "blur": 2.0,
+              "spread": 0.0,
+              "color": {
+                "mix": [
+                  {
+                    "hex": "#000000"
+                  },
+                  {
+                    "hex": "#00000000"
+                  }
+                ],
+                "first_fraction": 0.24
+              }
+            },
+            {
+              "x": 0.0,
+              "y": 4.0,
+              "blur": 8.0,
+              "spread": 0.0,
+              "color": {
+                "mix": [
+                  {
+                    "hex": "#000000"
+                  },
+                  {
+                    "hex": "#00000000"
+                  }
+                ],
+                "first_fraction": 0.28
+              }
+            }
+          ]
+        },
+        {
+          "part": "chart.card",
+          "when": {
+            "interaction": "rest"
+          },
+          "radius": 4.0,
+          "shadow": [
+            {
+              "x": 0.0,
+              "y": 0.0,
+              "blur": 2.0,
+              "spread": 0.0,
+              "color": {
+                "mix": [
+                  {
+                    "hex": "#000000"
+                  },
+                  {
+                    "hex": "#00000000"
+                  }
+                ],
+                "first_fraction": 0.24
+              }
+            },
+            {
+              "x": 0.0,
+              "y": 4.0,
+              "blur": 8.0,
+              "spread": 0.0,
+              "color": {
+                "mix": [
+                  {
+                    "hex": "#000000"
+                  },
+                  {
+                    "hex": "#00000000"
+                  }
+                ],
+                "first_fraction": 0.28
+              }
+            }
+          ]
+        },
+        {
+          "part": "menu.radio",
+          "when": {
+            "interaction": "rest"
+          },
+          "radius": 999,
+          "decoration": "circle"
+        },
+        {
+          "part": "switch.track",
+          "when": {
+            "interaction": "rest"
+          },
+          "radius": 999.0,
+          "stroke": {
+            "width": 1.0,
+            "color": {
+              "role": "control-line"
+            }
+          },
+          "stroke_edge": "all",
+          "fill": {
+            "role": "control-alt"
+          },
+          "metrics": {
+            "width": 40.0
+          }
+        },
+        {
+          "part": "switch.thumb",
+          "when": {
+            "interaction": "rest"
+          },
+          "radius": 999.0,
+          "fill": {
+            "role": "muted"
+          },
+          "metrics": {
+            "thumb_y": 3.0
+          }
+        },
+        {
+          "part": "switch.track",
+          "when": {
+            "interaction": "rest",
+            "checked": true
+          },
+          "fill": {
+            "role": "primary"
+          },
+          "stroke": {
+            "width": 1,
+            "color": {
+              "hex": "#00000000"
+            }
+          },
+          "stroke_edge": "all"
+        },
+        {
+          "part": "switch.thumb",
+          "when": {
+            "interaction": "rest",
+            "checked": true
+          },
+          "fill": {
+            "role": "on-primary"
+          },
+          "metrics": {
+            "thumb_x": 26.0,
+            "thumb_y": 3.0,
+            "width": 12.0,
+            "height": 12.0
+          }
+        },
+        {
+          "part": "section",
+          "when": {
+            "interaction": "rest"
+          },
+          "radius": 8.0,
+          "fill": {
+            "role": "card-fill"
+          },
+          "stroke": {
+            "width": 1.0,
+            "color": {
+              "role": "card-stroke"
+            }
+          },
+          "stroke_edge": "all",
+          "shadow": [],
+          "metrics": {
+            "gap": 12.0,
+            "padding_block": 14.0,
+            "padding_inline": 16.0,
+            "padding_top": 14.0,
+            "padding_bottom": 16.0
+          }
+        },
+        {
+          "part": "tab.panel",
+          "when": {
+            "interaction": "rest"
+          },
+          "layout": "card_stack",
+          "metrics": {
+            "gap": 16.0
+          }
+        },
+        {
+          "part": "section.flat",
+          "when": {
+            "interaction": "rest",
+            "context": "nested_section"
+          },
+          "radius": 0.0,
+          "fill": {
+            "hex": "#00000000"
+          },
+          "stroke": {
+            "width": 1,
+            "color": {
+              "hex": "#00000000"
+            }
+          },
+          "stroke_edge": "all",
+          "shadow": [],
+          "layout": "flatten_nested",
+          "metrics": {
+            "gap": 16.0,
+            "padding_block": 0.0,
+            "padding_inline": 0.0
+          }
+        },
+        {
+          "part": "section.flat",
+          "when": {
+            "interaction": "rest",
+            "context": "overlay"
+          },
+          "radius": 0.0,
+          "fill": {
+            "hex": "#00000000"
+          },
+          "stroke": {
+            "width": 1,
+            "color": {
+              "hex": "#00000000"
+            }
+          },
+          "stroke_edge": "all",
+          "shadow": [],
+          "layout": "flatten_nested",
+          "metrics": {
+            "gap": 16.0,
+            "padding_block": 0.0,
+            "padding_inline": 0.0
+          }
+        },
+        {
+          "part": "list.row",
+          "when": {
+            "interaction": "rest"
+          },
+          "metrics": {
+            "padding_start": 12.0,
+            "padding_inline": 12.0
+          }
+        },
+        {
+          "part": "navigation.item",
+          "when": {
+            "interaction": "rest",
+            "selected": true
+          },
+          "fill": {
+            "role": "subtle-secondary"
+          }
+        },
+        {
+          "part": "navigation.indicator",
+          "when": {
+            "interaction": "rest"
+          },
+          "decoration": "leading_indicator",
+          "radius": 2.0,
+          "fill": {
+            "role": "primary"
+          },
+          "metrics": {
+            "width": 3.0,
+            "height": 16.0
+          }
+        },
+        {
+          "part": "shell.bar",
+          "when": {
+            "interaction": "rest"
+          },
+          "fill": {
+            "hex": "#00000000"
+          },
+          "stroke": {
+            "width": 1,
+            "color": {
+              "hex": "#00000000"
+            }
+          },
+          "stroke_edge": "bottom",
+          "metrics": {
+            "height": 48.0
+          }
+        },
+        {
+          "part": "shell.title",
+          "when": {
+            "interaction": "rest"
+          },
+          "foreground": {
+            "role": "text"
+          },
+          "decoration": "plain_title",
+          "metrics": {
+            "font_size": 20.0,
+            "font_weight": 600
+          }
+        },
+        {
+          "part": "select.menu",
+          "when": {
+            "interaction": "rest"
+          },
+          "shadow": [
+            {
+              "x": 0.0,
+              "y": 0.0,
+              "blur": 2.0,
+              "spread": 0.0,
+              "color": {
+                "mix": [
+                  {
+                    "hex": "#000000"
+                  },
+                  {
+                    "hex": "#00000000"
+                  }
+                ],
+                "first_fraction": 0.24
+              }
+            },
+            {
+              "x": 0.0,
+              "y": 8.0,
+              "blur": 16.0,
+              "spread": 0.0,
+              "color": {
+                "mix": [
+                  {
+                    "hex": "#000000"
+                  },
+                  {
+                    "hex": "#00000000"
+                  }
+                ],
+                "first_fraction": 0.28
+              }
+            }
+          ]
+        }
+      ]
+    }
+  },
+  "typography": {
+    "family": "system:segoe_ui",
+    "scale": "fluent_desktop"
+  },
+  "metrics": {
+    "control_height": 32,
+    "segment_height": 36,
+    "switch_width": 40,
+    "switch_height": 20
+  }
+}
