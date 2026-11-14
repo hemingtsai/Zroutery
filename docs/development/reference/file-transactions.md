@@ -67,6 +67,14 @@ writes (`crates/zroutery-core/src/agent_takeover/gemini.rs`).
 The transaction is the durability layer; ownership and conflict decisions stay
 in takeover.
 
+## Failure modes
+
+| Symptom | Cause | Handling |
+|---|---|---|
+| staging fails | disk or validation error | the uncommitted stage is discarded (`crates/zroutery-core/src/file_transaction.rs::commit`) |
+| the marker is visible but flush failed | uncertain durability | retain the marker and roll forward (`crates/zroutery-core/src/file_transaction.rs::commit`) |
+| a destination changed | external edit | refuse; never overwrite (`crates/zroutery-core/src/file_transaction.rs::recover`) |
+
 ## Not implemented
 
 - No multi-file instantaneous visibility for readers.

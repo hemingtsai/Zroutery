@@ -90,6 +90,14 @@ the order comes from the router, not from the caller. A plan can be empty; that
 is reported as no candidate rather than silently served by a fallback that was
 rejected.
 
+## Failure modes
+
+| Symptom | Cause | Handling |
+|---|---|---|
+| the plan is empty | every candidate rejected | return no candidate; never invent one (`crates/zroutery-core/src/router/plan.rs::plan`) |
+| a cooling model is skipped | breaker open | wait for the cooldown or probe (`crates/zroutery-core/src/circuit_breaker.rs::CircuitState`) |
+| the elected order is unavailable | no election held | fall back to priority (`crates/zroutery-core/src/election.rs::Election`) |
+
 ## Not implemented
 
 - No speculative execution across candidates; one attempt at a time.

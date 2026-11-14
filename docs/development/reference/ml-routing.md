@@ -85,6 +85,14 @@ configuration identity, so a decision can be re-derived rather than trusted
   and rollback are explicit calls, not a background loop
   (`crates/zroutery-core/src/server/handlers.rs::ml_promote`).
 
+## Failure modes
+
+| Symptom | Cause | Handling |
+|---|---|---|
+| no model is attached | nothing promoted | deterministic routing (`crates/zroutery-core/src/ml/serving.rs::MlRouter`) |
+| no candidate is eligible | the plan is empty | refuse; never invent a fallback |
+| rollback is needed | a promoted model misbehaves | rollback the pointer (`crates/zroutery-core/src/server/ml_state.rs::rollback_active_model`) |
+
 ## Not implemented
 
 - No automatic promotion, no scheduled training, no online update between rounds.

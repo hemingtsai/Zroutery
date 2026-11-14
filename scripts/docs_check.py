@@ -237,6 +237,14 @@ def check_active(root: Path, entry: dict, verified: dict, redirects: dict[str, s
             errors.append(f"{entry['path']}: a normative or reference document must cite at least one source anchor")
         if type_ == "guide" and anchors == 0:
             errors.append(f"{entry['path']}: a guide must cite at least one source anchor")
+        if type_ == "reference":
+            headings = {line.strip() for line in text.splitlines() if line.startswith("## ")}
+            if "## Sources" not in headings:
+                errors.append(f"{entry['path']}: a reference must have a `## Sources` section")
+            if "## Failure modes" not in headings and "## Boundaries" not in headings:
+                errors.append(f"{entry['path']}: a reference must have `## Failure modes` or `## Boundaries`")
+            if "## Not implemented" not in headings and "## Boundaries" not in headings:
+                errors.append(f"{entry['path']}: a reference must have `## Not implemented` or `## Boundaries`")
         record = verified.get(entry["path"])
         if anchors and not record:
             errors.append(f"{entry['path']}: cites sources but has no docs/verified.json entry")

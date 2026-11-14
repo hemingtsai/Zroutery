@@ -84,6 +84,14 @@ cases (`crates/zroutery-core/src/config/routing.rs::RectifierConfig`).
 model whose thinking support is unknown, with the controls removed and the
 attempt marked degraded. It is visible in the route decision, never silent.
 
+## Failure modes
+
+| Symptom | Cause | Handling |
+|---|---|---|
+| the repair is refused | no rectifier matched | ordinary failover (`crates/zroutery-core/src/server/pipeline/repair.rs::try_rectify_buffered`) |
+| the wrong repair fires | broad keyword match | narrow the signature; the try set prevents repeats |
+| vision is unavailable | no target configured | placeholders, not silent deletion (`crates/zroutery-core/src/media/vision.rs::resolve`) |
+
 ## Not implemented
 
 - No arbitrary request rewrite; each repair is keyed to a provider signature.

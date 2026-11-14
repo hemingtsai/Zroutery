@@ -75,6 +75,14 @@ that to a client error with a new-session instruction, rather than retrying the
 same binding (`crates/zroutery-core/src/failure.rs::is_session_binding_invalidated_value`,
 `crates/zroutery-core/src/error.rs::is_session_binding_invalidated`).
 
+## Failure modes
+
+| Symptom | Cause | Handling |
+|---|---|---|
+| the class is missing | unknown upstream shape | `Unknown`, never success (`crates/zroutery-core/src/failure.rs::FailureClass`) |
+| one candidate is rate-limited | provider 429 | fail over to a sibling; do not sleep (`crates/zroutery-core/src/upstream/errors.rs::retry_advice`) |
+| a session binding is invalid | relay code `30013` | return a new-session error; never retry (`crates/zroutery-core/src/error.rs::is_session_binding_invalidated`) |
+
 ## Not implemented
 
 - No retry of an upstream or tool action that already executed; a local

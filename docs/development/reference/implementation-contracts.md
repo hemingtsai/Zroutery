@@ -64,6 +64,19 @@ not restate them.
   fixtures when structure changes (`ui/src/i18n.tsx`,
   `ui/src/i18n/en.ts`, `ui/src/i18n/zh.ts`, `ui/src/i18n.zhTW.ts`).
 
+## Failure modes
+
+| Symptom | Cause | Handling |
+|---|---|---|
+| a command is registered but not granted | capability drift | `scripts/command_surface_test.py` fails the surface |
+| the frontend contract drifts from Rust | `api.ts` not synchronized | fix the contract and the mock bridge |
+| a local write fails after an upstream action | persistence failure | terminal failure; never replay (`crates/zroutery-core/src/server/pipeline/lifecycle.rs::RequestLifecycle`) |
+
+## Not implemented
+
+- No per-command behaviour page; the IPC pattern and command-surface gate cover registration.
+- No automatic extraction of contracts from code.
+
 ## Sources
 
 - `crates/zroutery-core/Cargo.toml::default`

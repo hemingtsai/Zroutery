@@ -84,6 +84,14 @@ provider key. `SecretStore` is the credential boundary
 - A capability compiled by a feature is inert until configured; a capability not
   compiled is absent from the command surface, not merely hidden.
 
+## Failure modes
+
+| Symptom | Cause | Handling |
+|---|---|---|
+| save is refused | a blocking `ConfigIssue` | fix the issue; validation is authoritative (`crates/zroutery-core/src/config/validate.rs::AppConfig::validate`) |
+| the listener does not move | rebind failed | the previous document is restored (`src-tauri/src/state/server.rs::apply_config_locked`) |
+| config is corrupt | unreadable JSON | a backup is left before defaults load (`src-tauri/src/store.rs::startup_load`) |
+
 ## Not implemented
 
 - No remote or cloud configuration sync; the document is local.

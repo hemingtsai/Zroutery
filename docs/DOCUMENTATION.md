@@ -39,7 +39,7 @@ Exactly one type per document. The type decides the required sections.
 | `fact` | current facts, generated | gates, open issues, blockers, flaky, last green | hand editing |
 | `normative` | rules and boundaries | scope, rules, canonical commands, change log, see also | unsourced facts, narrative |
 | `guide` | onboarding and runbook | audience, prerequisites, steps, verify, troubleshoot, pointers | restating normative rules |
-| `reference` | one subsystem | what it does, invariants, configuration, failure modes, not implemented, sources | plans and roadmaps |
+| `reference` | one subsystem | what it does, failure modes (or boundaries), not implemented (or boundaries), sources | plans and roadmaps |
 | `adr` | durable decision | status, context, decision, consequences, sources | implementation diary |
 | `record` | execution evidence | date, commit range, commands, results, what is not established | being cited as current fact |
 | `index` | navigation, generated | legend, reading paths, tables, health | hand-written metadata |

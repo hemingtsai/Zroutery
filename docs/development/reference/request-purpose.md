@@ -96,6 +96,14 @@ question ("may this action run without asking?") in different protocols. The
 verdict parser is told which question was asked, so a `<block>` tag in a
 Guardian answer is not a verdict.
 
+## Failure modes
+
+| Symptom | Cause | Handling |
+|---|---|---|
+| a main request is misread as a side query | false positive | lower confidence; the threshold is 0.85 (`crates/zroutery-core/src/classifier.rs::detect`) |
+| a side query stays main | false negative | add a configured signature; detection failure is not an error |
+| the verdict is prose | unparseable | fail closed (`crates/zroutery-core/src/classifier.rs::parse_verdict`) |
+
 ## Not implemented
 
 - No detection by model name; shape is the only evidence.

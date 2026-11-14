@@ -83,6 +83,14 @@ closed failure class, impact bits and HTTP status cross the boundary. The
 `REQUEST_PROJECTION_FIELDS` list and its test pin the serialized field set
 (`crates/zroutery-core/src/observability.rs::REQUEST_PROJECTION_FIELDS`).
 
+## Failure modes
+
+| Symptom | Cause | Handling |
+|---|---|---|
+| health resets on restart | it is process-local | expected; not a data loss (`crates/zroutery-core/src/observation.rs::ObservationStore`) |
+| a projection is refused | missing decision id | keep the refusal, do not synthesize an id (`crates/zroutery-core/src/observability.rs::ProjectionRefusal`) |
+| old records disappear | bounded log | export or raise the limit (`crates/zroutery-core/src/stats.rs::Stats`) |
+
 ## Not implemented
 
 - No durable request log; use the runtime store or an export for history.

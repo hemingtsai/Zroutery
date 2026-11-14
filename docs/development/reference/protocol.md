@@ -99,6 +99,14 @@ zero by `crates/zroutery-core/src/ir/mod.rs::Usage::fresh_input_tokens`, never w
 - Without a reachable vision target, the image is not silently dropped; the
   capability boundary fails closed.
 
+## Failure modes
+
+| Symptom | Cause | Handling |
+|---|---|---|
+| unsupported upstream dialect | Gemini/Responses as upstream | refuse; only Anthropic/OpenAI-compatible are upstream (`crates/zroutery-core/src/config/provider.rs::ProviderKind`) |
+| malformed body | bad provider payload | protocol failure (`crates/zroutery-core/src/error.rs::safe_message`) |
+| stream ends without a terminal | truncation | `InterruptedStream`, keep sent output (`crates/zroutery-core/src/ir/mod.rs::StreamEvent`) |
+
 ## Not implemented
 
 - No upstream Gemini or Responses dialect; those are client-facing only.

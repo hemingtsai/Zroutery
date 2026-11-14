@@ -69,6 +69,14 @@ a reference, not a pixel specification; the shipped values are in the stylesheet
 5. No design-system change reaches the product without a `pnpm --dir ui build`
    and the relevant local harness.
 
+## Failure modes
+
+| Symptom | Cause | Handling |
+|---|---|---|
+| a language key is missing | dictionary drift | add the key to all three dictionaries (`ui/src/i18n.tsx`) |
+| a lazy page stays loading | runtime chunk not fetched | reload; the overflow harness catches it (`scripts/ui_overflow_test.py`) |
+| a token is overridden locally | inline style | use the token, not a literal (`ui/src/styles.css`) |
+
 ## Not implemented
 
 - No screenshot/visual-regression gate; layout and interaction are behavioural
