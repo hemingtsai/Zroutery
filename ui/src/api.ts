@@ -1721,6 +1721,7 @@ export interface TraySnapshot {
 }
 
 export interface ClientSetupOptions {
+  /** An offered usage class or exact exposed model id; null preserves the client default. */
   default_class: string | null;
   standby: boolean;
 }

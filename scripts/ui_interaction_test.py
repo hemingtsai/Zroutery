@@ -542,6 +542,10 @@ HARNESS = """
             model: "standard-class", display_name: "Standard fixture", effort_levels: ["high"],
             capabilities: { tools: true, vision: false, thinking: true, structured_output: false, audio: false, video: false, files: false },
             context_window: null, max_output_tokens: null, capability_source: "configured fixture",
+          }, {
+            model: "fixture-exact-model", display_name: "Exact model fixture", effort_levels: ["medium"],
+            capabilities: { tools: true, vision: false, thinking: true, structured_output: false, audio: false, video: false, files: false },
+            context_window: 64000, max_output_tokens: 8192, capability_source: "configured exact fixture",
           }],
           unavailable_classes: ["fast-class"],
           notes: ["Fixture menu needs a client restart"],
@@ -4233,6 +4237,11 @@ def case_ui26_client_menu_preview_and_apply(devtools: DevTools) -> list[str]:
     if first["args"]["agent"] != "codex":
         failures.append("the row opened another client's preview")
 
+    devtools.click_selector('.drawer [role="combobox"]')
+    devtools.wait_for("[...document.querySelectorAll('[role=\"option\"]')].some((option) => option.textContent.includes('Exact model fixture'))", "exact model setup option")
+    devtools.evaluate("[...document.querySelectorAll('[role=\"option\"]')].find((option) => option.textContent.includes('Exact model fixture')).click()")
+    devtools.wait_for("window.__zrStub.last('client_setup_preview')?.args.options.default_class === 'fixture-exact-model'", "exact model preview selection")
+
     # Changing an option re-derives the preview instead of invalidating it
     # silently: the drawer answers with the standby proposal on its own.
     devtools.click_selector('.drawer input[type="checkbox"]')
@@ -4243,7 +4252,7 @@ def case_ui26_client_menu_preview_and_apply(devtools: DevTools) -> list[str]:
     devtools.wait_for("window.__zrStub.log('client_setup_apply').length === 1", "one setup write")
     devtools.wait_for("document.querySelector('.drawer') === null", "completed setup to close")
     sent = devtools.evaluate("window.__zrStub.last('client_setup_apply').args")
-    if sent != {"agent": "codex", "options": {"default_class": None, "standby": True}, "expectedFingerprint": "preview-codex-standby"}:
+    if sent != {"agent": "codex", "options": {"default_class": "fixture-exact-model", "standby": True}, "expectedFingerprint": "preview-codex-standby"}:
         failures.append("setup publication lost its client, options or preview fingerprint: %r" % sent)
 
     # A reply in flight when the drawer closes must not land in a drawer that
@@ -4253,12 +4262,12 @@ def case_ui26_client_menu_preview_and_apply(devtools: DevTools) -> list[str]:
     devtools.evaluate("window.__zrStub.setDelay('client_setup_preview', 300)")
     devtools.click_selector(action)
     devtools.wait_for("document.querySelector('.drawer-title')?.textContent.includes('Codex')", "DEBUG drawer reopened")
-    devtools.wait_for("window.__zrStub.log('client_setup_preview').length === 3", "in-flight preview request")
+    devtools.wait_for("window.__zrStub.log('client_setup_preview').length === 4", "in-flight preview request")
     devtools.press_key("Escape")
     devtools.wait_for("document.querySelector('.drawer') === null", "dismissed pending setup")
     devtools.click_selector('[data-agent="claude"] .btn-ghost')
     devtools.wait_for("document.querySelector('.drawer-title')?.textContent.includes('Claude')", "fresh Claude setup")
-    devtools.wait_for("window.__zrStub.log('client_setup_preview').length === 4", "fresh client preview reply")
+    devtools.wait_for("window.__zrStub.log('client_setup_preview').length === 5", "fresh client preview reply")
     devtools.wait_for(
         "document.querySelector('.drawer')?.textContent.includes('C:/fixture/claude')",
         "the fresh client's own preview",

@@ -20,7 +20,7 @@ pub fn codex_catalogue(classes: &[TierClass]) -> Value {
         let effort = class.effort_levels.iter().find(|level| level.as_str() == "medium").or_else(|| class.effort_levels.first());
         json!({
             "slug": class.model, "display_name": class.display_name,
-            "description": "Zroutery candidate pool. Usage tier and reasoning effort are independent; verify limitations in Zroutery.",
+            "description": "Zroutery model or candidate pool. Usage tier and reasoning effort are independent; verify limitations in Zroutery.",
             "default_reasoning_level": effort,
             "supported_reasoning_levels": class.effort_levels.iter().map(|effort| json!({"effort":effort,"description":effort})).collect::<Vec<_>>(),
             "shell_type": if class.capabilities.tools { "unified_exec" } else { "disabled" },

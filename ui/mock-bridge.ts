@@ -1267,14 +1267,45 @@ const takeoverViewFor = (agent: TakeoverAgent): TakeoverView => {
 const setupFingerprint = (agent: TakeoverAgent, options: ClientSetupOptions): string =>
   `mock-setup-${agent}-${options.default_class ?? "keep"}-${options.standby ? "8788" : "8787"}`;
 
-/** The menu-sync preview: one model per usage tier out of the catalogue
- * fixtures (highest priority wins, the way the real preview reads the tier
- * pools), the gateway address the standby toggle really moves, and the
- * proposal diff the apply's fingerprint guard is checked against. */
+/** The menu offers conservative usage pools and exact enabled model ids. */
 const setupPreviewFor = (agent: TakeoverAgent, options: ClientSetupOptions): ClientSetupPreview => {
   const port = options.standby ? 8788 : 8787;
   const url = `http://127.0.0.1:${port}`;
   const tiers: ModelTier[] = ["fast", "standard", "reasoning", "frontier"];
+  const available = models.filter((model) => model.enabled && providers.some(
+    (provider) => provider.id === model.provider_id && provider.enabled && provider.kind !== "decision",
+  ));
+  const classes: ClientSetupPreview["classes"] = tiers.flatMap((tier) => {
+    const members = available.filter((model) => model.tier === tier);
+    const first = members[0];
+    if (!first) return [];
+    const capabilities = { ...first.capabilities };
+    for (const key of Object.keys(capabilities) as (keyof typeof capabilities)[]) {
+      capabilities[key] = members.every((model) => model.capabilities[key]);
+    }
+    const sharedLimit = (key: "context_window" | "max_output_tokens") =>
+      members.every((model) => model[key] !== null)
+        ? Math.min(...members.map((model) => model[key]!)) : null;
+    return [{
+      model: `${tier}-class`, display_name: `Zroutery · ${tier}`,
+      effort_levels: first.effort_levels.filter((level) => members.every((model) => model.effort_levels.includes(level))),
+      capabilities, context_window: sharedLimit("context_window"),
+      max_output_tokens: sharedLimit("max_output_tokens"), capability_source: "configured shared pool",
+    }];
+  });
+  for (const model of available) {
+    const id = `${model.provider_id.trim()}-${model.upstream_model.trim()}`.replace(/[^a-zA-Z0-9._-]/g, "-");
+    if ((agent === "opencode" && id.includes(".")) || classes.some((entry) => entry.model === id)) continue;
+    classes.push({
+      model: id, display_name: `${providers.find((provider) => provider.id === model.provider_id)!.name} · ${model.display_name ?? model.upstream_model}`,
+      effort_levels: model.effort_levels, capabilities: model.capabilities,
+      context_window: model.context_window, max_output_tokens: model.max_output_tokens,
+      capability_source: "configured exact provider/model",
+    });
+  }
+  if (options.default_class !== null && !classes.some((entry) => entry.model === options.default_class)) {
+    throw new Error("default model is not offered by the gateway");
+  }
   const proposal = {
     managed_fields: MANAGED_FIELDS[agent] ?? [],
     changes: (MANAGED_FIELDS[agent] ?? []).map((field, index) => ({
@@ -1284,24 +1315,15 @@ const setupPreviewFor = (agent: TakeoverAgent, options: ClientSetupOptions): Cli
     })),
     fingerprint: setupFingerprint(agent, options),
   };
+  if (options.default_class !== null) {
+    proposal.managed_fields = [...proposal.managed_fields, "model"];
+    proposal.changes.push({ field_path: "model", current: "previous-model",
+      managed: agent === "opencode" ? `zroutery/${options.default_class}` : options.default_class });
+  }
   return {
     agent,
-    classes: tiers.flatMap((tier) => {
-      const model = models
-        .filter((m) => m.enabled && m.tier === tier)
-        .sort((a, b) => a.priority - b.priority)[0];
-      if (!model) return [];
-      return [{
-        model: `${model.provider_id}:${model.upstream_model}`,
-        display_name: model.display_name ?? model.upstream_model,
-        effort_levels: model.effort_levels,
-        capabilities: model.capabilities,
-        context_window: model.context_window,
-        max_output_tokens: model.max_output_tokens,
-        capability_source: "manifest",
-      }];
-    }),
-    unavailable_classes: [],
+    classes,
+    unavailable_classes: tiers.filter((tier) => !classes.some((entry) => entry.model === `${tier}-class`)).map((tier) => `${tier}-class`),
     catalogue_fingerprint: "mock-catalogue-1",
     proposal,
     config_path: CONFIG_PATH[agent],

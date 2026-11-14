@@ -44,23 +44,6 @@ import { SaveFeedbackReset } from "../saveQueue";
 const AGENTS: TakeoverAgent[] = ["claude", "codex", "opencode", "gemini"];
 const MENU_AGENTS: TakeoverAgent[] = ["claude", "codex", "opencode"];
 
-/** The four usage tiers, with their i18n keys spelled out.
- *
- * A template literal — `tier.${tier}` — once compiled to a key that does not
- * exist in any dictionary, and the `as TKey` cast swallowed the one proof tsc
- * could have given; `t()` returned undefined and the Radix select portalled
- * that undefined into its trigger, so the "默认用途档位" control went visually
- * dead the moment a tier was chosen. An explicit record lets the compiler
- * check every key, and there is no cast to silently widen.
- */
-const TIERS = ["fast", "standard", "reasoning", "frontier"] as const;
-const TIER_LABEL: Record<(typeof TIERS)[number], TKey> = {
-  fast: "tier.name.fast",
-  standard: "tier.name.standard",
-  reasoning: "tier.name.reasoning",
-  frontier: "tier.name.frontier",
-};
-
 /** A config value as a reviewable fragment: JSON for anything but a string. */
 function valueText(value: unknown): string {
   if (value === null || value === undefined) return "—";
@@ -100,6 +83,7 @@ export default function Takeover() {
   const [confirm, setConfirm] = useState<ConfirmRequest | null>(null);
   const [setup, setSetup] = useState<ClientSetupOptions>({ default_class: null, standby: false });
   const [preview, setPreview] = useState<ClientSetupPreview | null>(null);
+  const [offeredModels, setOfferedModels] = useState<ClientSetupPreview["classes"]>([]);
   const [previewing, setPreviewing] = useState(false);
   const [setupError, setSetupError] = useState<string | null>(null);
   const setupVersion = useRef(0);
@@ -112,6 +96,7 @@ export default function Takeover() {
     setSetupAgent(agent);
     setSetup({ default_class: null, standby: false });
     setPreview(null);
+    setOfferedModels([]);
     setSetupError(null);
   };
   const closeSetup = () => {
@@ -136,6 +121,7 @@ export default function Takeover() {
         .then((next) => {
           if (version !== setupVersion.current) return;
           setPreview(next);
+          setOfferedModels(next.classes);
           setSetupError(null);
         })
         .catch((error) => {
@@ -327,8 +313,8 @@ export default function Takeover() {
                 disabled={acting === setupAgent}
                 options={[
                   { value: "keep", label: t("client_setup.keep") },
-                  ...TIERS.map((tier) => ({
-                    value: `${tier}-class`, label: t(TIER_LABEL[tier]),
+                  ...offeredModels.map((entry) => ({
+                    value: entry.model, label: entry.display_name,
                   })),
                 ]}
                 onChange={(value) =>
