@@ -1,0 +1,12 @@
+[package]
+name = "zroutery-plugin-api"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "Closed, non-secret control-plane contracts for Zroutery plugins"
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
