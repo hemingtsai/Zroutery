@@ -549,7 +549,8 @@
     "docs/licenses/**",
     "node_modules/**",
     "target/**",
-    "docs/archive/**"
+    "docs/archive/**",
+    ".zcode/**"
   ],
   "triggers": {
     ".github/workflows/**": [

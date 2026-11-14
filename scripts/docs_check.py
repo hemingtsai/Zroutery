@@ -108,7 +108,7 @@ def expand(entries: list[dict], root: Path) -> list[dict]:
             for path in sorted(root.glob(entry["glob"])):
                 copy = dict(entry)
                 copy.pop("glob", None)
-                copy["path"] = str(path.relative_to(root))
+                copy["path"] = str(path.relative_to(root)).replace("\\", "/")
                 expanded.append(copy)
     return expanded
 
@@ -119,11 +119,12 @@ def ignored(relative: str, patterns: list[str]) -> bool:
 
 def all_markdown(root: Path) -> list[str]:
     found = []
-    for path in root.rglob("*.md"):
-        relative = path.relative_to(root)
-        if any(part in SKIP_DIRS for part in relative.parts):
-            continue
-        found.append(str(relative))
+    for dirpath, dirnames, filenames in os.walk(root):
+        dirnames[:] = [name for name in dirnames if name not in SKIP_DIRS]
+        for name in filenames:
+            if name.endswith(".md"):
+                relative = (Path(dirpath) / name).relative_to(root)
+                found.append(str(relative).replace("\\", "/"))
     return sorted(found)
 
 
@@ -181,7 +182,7 @@ def check_redirects(root: Path, redirects: dict[str, str]) -> list[str]:
     for file in (root / "docs" / "archive").rglob("*"):
         if not file.is_file() or file.name in {"README.md", "redirects.json", "successors.json"}:
             continue
-        relative = str(file.relative_to(root))
+        relative = str(file.relative_to(root)).replace("\\", "/")
         if relative in exact or any(relative.startswith(prefix) for prefix in prefixes):
             continue
         errors.append(f"{relative}: archived file has no redirect mapping")

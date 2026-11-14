@@ -46,8 +46,8 @@ def validate(root: Path) -> tuple[list[str], dict[str, int]]:
     errors: list[str] = []
     if data.get("schema_version") != 1:
         errors.append("schema_version must be 1")
-    if data.get("derived_from") != str(LIB):
-        errors.append(f"derived_from must be {LIB}")
+    if data.get("derived_from") != LIB.as_posix():
+        errors.append(f"derived_from must be {LIB.as_posix()}")
     entries = data.get("modules", [])
     citations = cited_by(root)
     seen: dict[str, dict] = {}

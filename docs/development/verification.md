@@ -1,6 +1,6 @@
 # Verification
 
-> Authority: normative · Owner: backend · Last verified: 2026-11-14 · Verified by: `scripts/docs_check.py`
+> Authority: normative · Owner: backend · Last verified: 2026-11-15 · Verified by: `scripts/docs_check.py`
 
 This is the only document that defines the toolchain and the gates. Other
 documents point here; they do not restate a command. Current pass/fail status
@@ -139,7 +139,8 @@ Consequences, stated rather than discovered:
 - `markdown_check.py` enforces fenced-code closure and table structure without
   a third-party parser.
 - `docs_sources.py --check` resolves every `path::symbol` and `path#Lx` anchor in
-  active documents.
+  active documents, matching document paths portably across host separators
+  (`scripts/docs_sources.py::reverse_index`).
 - `docs_check.py` enforces manifest coverage, links, banners, size budgets and
   generated-file freshness. A zero-pending migration renders as complete rather
   than as an empty table. A path-like inline code span is resolved or
