@@ -242,24 +242,17 @@
     }
   ],
   "pending": [
-    "scripts/desktop_packaging_record.md",
-    "docs/development/backend-optimization-execution.md",
     "docs/development/cc-switch-design-notes.md",
     "docs/development/codex-auto-rectifier.md",
     "docs/development/dependency-dag.md",
     "docs/development/evidence-registry.md",
     "docs/development/history-treatment-map.md",
-    "docs/development/ml-closed-loop-report.md",
     "docs/development/newapi-adapter.md",
     "docs/development/opencode-zen.md",
-    "docs/development/perf-baseline.md",
-    "docs/development/regression-ledger.md",
     "docs/development/routing-data-collection-guide.md",
     "docs/development/skin-spec-md3-fluent.md",
     "docs/development/tag-remap.md",
-    "docs/development/upgrade-contracts.md",
-    "docs/development/upgrade-execution.md",
-    "docs/development/upstream-sse-errors-2026-11-07.md"
+    "docs/development/upgrade-contracts.md"
   ],
   "ignore": [
     "docs/images/**",
