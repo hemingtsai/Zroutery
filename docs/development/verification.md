@@ -9,7 +9,9 @@ lives in `current-state.md`, not here.
 ## Scope
 
 - Applies to every Rust, frontend, contract and documentation change.
-- A gate that cannot run is reported as **unrun**, never as passed.
+- **pass** completed green; **fail** completed red.
+- A gate that cannot run, or starts but cannot complete (a timeout), is
+  **unrun**, never a pass; record the reason.
 - Running a gate on a different compiler than CI resolves is **unverified**,
   even when it exits zero.
 

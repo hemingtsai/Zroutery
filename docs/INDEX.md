@@ -69,7 +69,7 @@ Historical documents live under `docs/archive/`. They are not current fact and a
 
 ## Issues
 
-Audits, findings, triage and risk discussions live in GitHub Issues. Use the `audit` and `finding/*` labels; `current-state.md` links open issues and never copies them.
+Audits, findings, triage and risk discussions live in GitHub Issues. Use the `audit` and `finding/*` labels; `current-state.md` links open issues and carries at most a one-line status projection, never the issue body.
 
 ## Health
 
