@@ -27,6 +27,7 @@ mod binding;
 #[cfg(feature = "ml")]
 mod ml;
 mod model;
+mod plugin;
 mod provider;
 mod reasoning;
 mod registry;
@@ -48,8 +49,9 @@ pub use ml::MlRoutingConfig;
 pub use model::{
     normalize_effort_levels, ModelCapabilities, ModelTier, NamingStyle, EFFORT_LEVELS,
 };
+pub use plugin::{PluginCredentialBinding, PluginInstanceConfig, CONFIG_SCHEMA_VERSION};
 pub use provider::{
-    passthrough_denied, resolve_client_identity, ClientIdentity, ProviderClientProfile,
+    passthrough_denied, resolve_client_identity, ApiSurface, ClientIdentity, ProviderClientProfile,
     ProviderKind, PASSTHROUGH_DENIED,
 };
 pub use reasoning::ReasoningCapability;

@@ -28,6 +28,8 @@ pub struct AppState {
     pub(super) stats: Arc<Stats>,
     pub(super) upstream: Upstream,
     pub(super) secrets: Arc<dyn SecretStore>,
+    #[cfg(feature = "plugin")]
+    pub(super) plugin_port: RwLock<Option<Arc<dyn crate::plugin::PluginPort>>>,
     /// Spend so far, which the budgets are checked against. It lives here rather
     /// than in `Stats` because the request log is deliberately memory only, and a
     /// guardrail that forgets on restart is not a guardrail.

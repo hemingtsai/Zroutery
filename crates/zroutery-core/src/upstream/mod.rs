@@ -56,6 +56,7 @@ mod http;
 mod json;
 mod observation;
 mod stream;
+pub mod transport;
 pub use codex_auto::StagedResponse;
 
 #[cfg(test)]
@@ -207,20 +208,18 @@ impl Upstream {
         client: &ClientIdentity,
     ) -> Result<ChatResponse> {
         let observation = client.observation.clone();
+        let url = provider.chat_url();
         let request = self
-            .client_for(provider)
-            .post(provider.chat_url())
-            .headers(build_headers_for_identity(provider, api_key, client)?)
+            .request_for(provider, &url, reqwest::Method::POST, api_key, client)
+            .await?
             .json(body);
 
-        let response =
-            tokio::time::timeout(Duration::from_secs(provider.timeout_secs), request.send())
-                .await
-                .map_err(|_| Error::Timeout(provider.timeout_secs))?
-                .map_err(|source| Error::Transport {
-                    provider: provider.name.clone(),
-                    source,
-                })?;
+        let response = tokio::time::timeout(
+            Duration::from_secs(provider.timeout_secs),
+            self.execute_request(provider, &url, request),
+        )
+        .await
+        .map_err(|_| Error::Timeout(provider.timeout_secs))??;
 
         let status = response.status();
         client.reply_headers.capture(response.headers());
@@ -299,20 +298,18 @@ impl Upstream {
         body: &Value,
         identity: &ClientIdentity,
     ) -> Result<DecisionReply> {
+        let url = provider.decision.url(&provider.base_url);
         let request = self
-            .client_for(provider)
-            .post(provider.decision.url(&provider.base_url))
-            .headers(build_headers_for_identity(provider, api_key, identity)?)
+            .request_for(provider, &url, reqwest::Method::POST, api_key, identity)
+            .await?
             .json(body);
 
-        let response =
-            tokio::time::timeout(Duration::from_secs(provider.timeout_secs), request.send())
-                .await
-                .map_err(|_| Error::Timeout(provider.timeout_secs))?
-                .map_err(|source| Error::Transport {
-                    provider: provider.name.clone(),
-                    source,
-                })?;
+        let response = tokio::time::timeout(
+            Duration::from_secs(provider.timeout_secs),
+            self.execute_request(provider, &url, request),
+        )
+        .await
+        .map_err(|_| Error::Timeout(provider.timeout_secs))??;
 
         let status = response.status();
         let retry_after = retry_after(response.headers());

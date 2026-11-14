@@ -189,6 +189,15 @@ pub(super) fn validate_execution(state: &AppState, candidate: &Candidate) -> Res
             "provider was removed before execution".into(),
         ));
     };
+    #[cfg(feature = "plugin")]
+    if let Some(binding) = &candidate.provider.plugin_binding {
+        binding.authorize(binding.operation_for_url(&candidate.provider.chat_url())?)?;
+        if provider.plugin_binding != candidate.provider.plugin_binding {
+            return Err(Error::NoCandidate(
+                "plugin binding changed before execution".into(),
+            ));
+        }
+    }
     // The send is built from the planned snapshot. Everything that decides
     // what leaves this process — endpoint, protocol, the way the credential
     // travels and the headers around it — must still be what the plan recorded.

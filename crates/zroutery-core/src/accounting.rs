@@ -39,6 +39,8 @@ fn upstream_protocol_name(provider: &ProviderConfig) -> Option<String> {
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ExecutionSnapshot {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub plugin_origin: Option<PluginExecutionOrigin>,
     pub provider_id: String,
     pub provider_name: String,
     pub model_id: String,
@@ -62,10 +64,36 @@ pub struct ExecutionSnapshot {
     pub pricing: Option<Pricing>,
     pub rate_quote: Option<crate::billing::RateQuote>,
 }
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct PluginExecutionOrigin {
+    pub installation_id: String,
+    pub contribution_id: String,
+    pub package_digest: String,
+    pub grant_epoch: u64,
+    pub transport_profile: Option<String>,
+}
 
 impl ExecutionSnapshot {
     pub fn from_candidate(candidate: &Candidate) -> Self {
         Self {
+            plugin_origin: {
+                #[cfg(feature = "plugin")]
+                {
+                    candidate.provider.plugin_binding.as_ref().map(|binding| {
+                        PluginExecutionOrigin {
+                            installation_id: binding.installation_id().into(),
+                            contribution_id: binding.contribution_id().into(),
+                            package_digest: binding.package_digest().into(),
+                            grant_epoch: binding.grant_epoch(),
+                            transport_profile: binding.profile().map(str::to_string),
+                        }
+                    })
+                }
+                #[cfg(not(feature = "plugin"))]
+                {
+                    None
+                }
+            },
             provider_id: candidate.provider.id.clone(),
             provider_name: candidate.provider.name.clone(),
             model_id: candidate.model_id().to_string(),

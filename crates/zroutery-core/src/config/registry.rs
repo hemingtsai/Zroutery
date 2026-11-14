@@ -19,6 +19,11 @@ pub use crate::protocol::ProviderQuirks;
 /// One upstream account/endpoint.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ProviderConfig {
+    /// Verified Rust binding, deliberately impossible to deserialize from config
+    /// or lose when a candidate is cloned for probes/auxiliary/retry paths.
+    #[cfg(feature = "plugin")]
+    #[serde(skip)]
+    pub plugin_binding: Option<crate::plugin::PluginBinding>,
     /// Stable internal id (uuid or slug).
     pub id: String,
     /// Human readable name shown in the GUI, e.g. "DeepSeek".
@@ -389,6 +394,8 @@ impl ProviderConfig {
     pub fn new(id: impl Into<String>, name: impl Into<String>, kind: ProviderKind) -> Self {
         let id = id.into();
         ProviderConfig {
+            #[cfg(feature = "plugin")]
+            plugin_binding: None,
             key_ref: format!("provider:{id}"),
             id,
             name: name.into(),

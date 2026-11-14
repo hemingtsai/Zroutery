@@ -9,7 +9,7 @@ use futures_util::{Stream, StreamExt};
 use serde_json::Value;
 
 use super::errors::truncate;
-use super::headers::{anonymous_identity, build_headers_for_identity};
+use super::headers::anonymous_identity;
 use super::{EventStream, Upstream};
 use crate::config::{ClientIdentity, ProviderConfig};
 use crate::error::{Error, Result};
@@ -69,21 +69,18 @@ impl Upstream {
         // window that reopens. Every replay carries the same fingerprint.
         let mut retries = 0u32;
         let response = loop {
+            let url = provider.chat_url();
             let request = self
-                .client_for(provider)
-                .post(provider.chat_url())
-                .headers(build_headers_for_identity(provider, api_key, client)?)
+                .request_for(provider, &url, reqwest::Method::POST, api_key, client)
+                .await?
                 .json(body);
-            let result =
-                tokio::time::timeout(Duration::from_secs(provider.timeout_secs), request.send())
-                    .await
-                    .map_err(|_| Error::Timeout(provider.timeout_secs))
-                    .and_then(|r| {
-                        r.map_err(|source| Error::Transport {
-                            provider: provider.name.clone(),
-                            source,
-                        })
-                    });
+            let result = tokio::time::timeout(
+                Duration::from_secs(provider.timeout_secs),
+                self.execute_request(provider, &url, request),
+            )
+            .await
+            .map_err(|_| Error::Timeout(provider.timeout_secs))
+            .and_then(|r| r);
             let response = match result {
                 Ok(response) => response,
                 Err(err) => match super::retry_advice(&err, retries, can_fail_over, 2) {

@@ -1,0 +1,59 @@
+//! Published service names map to existing Rust codecs, not plugin-authored effects.
+use crate::config::{ProviderConfig, ProviderKind};
+use crate::error::{Error, Result};
+use zroutery_plugin_api::provider::{HostOperationBinding, ProviderDescriptor};
+
+pub fn services() -> Vec<&'static str> {
+    // No Gemini upstream, generic rotation or private protocol claims merely
+    // because an inbound codec or memory-only refresh implementation exists.
+    vec![
+        "host.protocol.openai_chat",
+        "host.protocol.openai_responses",
+        "host.protocol.anthropic",
+        "host.auth.bearer",
+        "host.auth.anthropic",
+        "host.catalog.openai",
+        "host.catalog.anthropic",
+        "host.client.claude_code",
+        "host.client.codex",
+        "host.client.opencode",
+    ]
+}
+pub fn inference(descriptor: &ProviderDescriptor) -> Result<&HostOperationBinding> {
+    descriptor
+        .operations
+        .iter()
+        .find(|op| {
+            matches!(
+                op.service.id.as_str(),
+                "host.protocol.openai_chat"
+                    | "host.protocol.openai_responses"
+                    | "host.protocol.anthropic"
+            )
+        })
+        .ok_or_else(|| Error::NoCandidate("unsupported plugin inference service".into()))
+}
+pub fn provider(
+    id: &str,
+    name: &str,
+    descriptor: &ProviderDescriptor,
+    binding: super::PluginBinding,
+) -> Result<ProviderConfig> {
+    let operation = inference(descriptor)?;
+    let kind = match operation.service.id.as_str() {
+        "host.protocol.anthropic" => ProviderKind::Anthropic,
+        _ => ProviderKind::OpenAICompatible,
+    };
+    let mut provider = ProviderConfig::new(id, name, kind);
+    provider.base_url = operation.base_url.clone();
+    provider.bypass_proxy = Some(true);
+    provider.client_profile = crate::config::ProviderClientProfile::Native;
+    provider.bearer_auth = operation.service_options.bearer_auth;
+    provider.quirks.stream_usage = operation.service_options.stream_usage;
+    if operation.service.id == "host.protocol.openai_responses" {
+        provider.api_surface = crate::config::ApiSurface::Responses;
+    }
+    provider.key_ref.clear();
+    provider.plugin_binding = Some(binding);
+    Ok(provider)
+}

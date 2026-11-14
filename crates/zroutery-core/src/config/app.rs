@@ -100,6 +100,12 @@ impl Default for BalanceRefreshConfig {
 /// Root persisted document.
 #[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
 pub struct AppConfig {
+    #[serde(default, skip_serializing_if = "is_legacy_schema")]
+    pub schema_version: u16,
+    /// Passive declarations: never present as executable native provider copies
+    /// in a saved document, including exports handed to an older binary.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub plugin_instances: Vec<super::PluginInstanceConfig>,
     #[serde(default)]
     pub server: ServerConfig,
     #[serde(default)]
@@ -137,6 +143,7 @@ pub struct AppConfig {
     #[serde(default)]
     pub ml_routing: MlRoutingConfig,
     #[serde(default)]
+    #[serde(serialize_with = "serialize_native_providers")]
     pub providers: Vec<ProviderConfig>,
     #[serde(default)]
     pub models: Vec<ModelEntry>,
@@ -144,4 +151,19 @@ pub struct AppConfig {
     /// that refuses requests out of the box would be a surprise.
     #[serde(default)]
     pub budgets: Vec<Budget>,
+}
+
+fn is_legacy_schema(version: &u16) -> bool {
+    *version == 0
+}
+fn serialize_native_providers<S: serde::Serializer>(
+    providers: &[ProviderConfig],
+    serializer: S,
+) -> Result<S::Ok, S::Error> {
+    #[cfg(feature = "plugin")]
+    let providers: Vec<_> = providers
+        .iter()
+        .filter(|provider| provider.plugin_binding.is_none())
+        .collect();
+    serde::Serialize::serialize(&providers, serializer)
 }

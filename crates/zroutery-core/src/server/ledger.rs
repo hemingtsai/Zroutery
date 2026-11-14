@@ -152,6 +152,8 @@ impl AppState {
             outcomes: OutcomeLog::new(log_limit),
             upstream: Upstream::new(false, 15),
             secrets,
+            #[cfg(feature = "plugin")]
+            plugin_port: RwLock::new(None),
             ledger: RwLock::new(Ledger::new()),
             ledger_dirty: AtomicBool::new(false),
             ledger_generation: AtomicU64::new(0),
@@ -261,6 +263,8 @@ impl AppState {
             outcomes: OutcomeLog::new(log_limit),
             upstream: Upstream::new(bypass_proxy, connect_timeout_secs),
             secrets,
+            #[cfg(feature = "plugin")]
+            plugin_port: RwLock::new(None),
             ledger: RwLock::new(Ledger::new()),
             ledger_dirty: AtomicBool::new(false),
             ledger_generation: AtomicU64::new(0),

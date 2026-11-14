@@ -6666,6 +6666,7 @@ dependencies = [
  "tower-http",
  "tracing",
  "uuid",
+ "zroutery-plugin-api",
 ]
 
 [[package]]

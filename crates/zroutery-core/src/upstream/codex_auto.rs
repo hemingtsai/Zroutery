@@ -5,7 +5,7 @@ use std::time::Duration;
 use futures_util::StreamExt;
 use serde_json::Value;
 
-use super::{build_headers_for_identity, retry_after, Upstream};
+use super::{retry_after, Upstream};
 use crate::config::{ClientIdentity, ProviderConfig};
 use crate::error::{Error, Result};
 use crate::ir::{Dialect, StreamEvent, Usage};
@@ -27,22 +27,15 @@ impl Upstream {
         body: &Value,
         identity: &ClientIdentity,
     ) -> Result<Value> {
+        let url = format!("{}/compact", provider.chat_url().trim_end_matches('/'));
         let request = self
-            .client_for(provider)
-            .post(format!(
-                "{}/compact",
-                provider.chat_url().trim_end_matches('/')
-            ))
-            .headers(build_headers_for_identity(provider, key, identity)?)
+            .request_for(provider, &url, reqwest::Method::POST, key, identity)
+            .await?
             .json(body);
         let idle = IDLE_TIMEOUT.min(Duration::from_secs(provider.timeout_secs));
-        let response = tokio::time::timeout(idle, request.send())
+        let response = tokio::time::timeout(idle, self.execute_request(provider, &url, request))
             .await
-            .map_err(|_| Error::Timeout(idle.as_secs()))?
-            .map_err(|source| Error::Transport {
-                provider: provider.name.clone(),
-                source,
-            })?;
+            .map_err(|_| Error::Timeout(idle.as_secs()))??;
         let status = response.status().as_u16();
         let floor = retry_after(response.headers());
         let mut bytes = Vec::new();
@@ -87,18 +80,14 @@ impl Upstream {
         identity: &ClientIdentity,
     ) -> Result<StagedResponse> {
         let idle = IDLE_TIMEOUT.min(Duration::from_secs(provider.timeout_secs));
+        let url = provider.chat_url();
         let request = self
-            .client_for(provider)
-            .post(provider.chat_url())
-            .headers(build_headers_for_identity(provider, key, identity)?)
+            .request_for(provider, &url, reqwest::Method::POST, key, identity)
+            .await?
             .json(body);
-        let response = tokio::time::timeout(idle, request.send())
+        let response = tokio::time::timeout(idle, self.execute_request(provider, &url, request))
             .await
-            .map_err(|_| Error::Timeout(idle.as_secs()))?
-            .map_err(|source| Error::Transport {
-                provider: provider.name.clone(),
-                source,
-            })?;
+            .map_err(|_| Error::Timeout(idle.as_secs()))??;
         let status = response.status().as_u16();
         let floor = retry_after(response.headers());
         let sse = response
