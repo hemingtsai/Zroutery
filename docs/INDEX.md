@@ -54,6 +54,7 @@ This file is generated from `docs/docs.manifest.json`. Do not edit it.
 | [docs/development/reference/routing-policy.md](development/reference/routing-policy.md) | reference | reference | backend | Resolution, policy, eligibility, strategy, election and the circuit breaker. |
 | [docs/development/reference/failure.md](development/reference/failure.md) | reference | reference | backend | Failure classes, impact bits, retry/failover rules, safe wire messages and terminal states. |
 | [docs/development/reference/observability.md](development/reference/observability.md) | reference | reference | backend | Request records, health and latency state, activity projection and in-memory sessions. |
+| [docs/development/reference/config.md](development/reference/config.md) | reference | reference | backend | Defaults, validation, normalisation, persistence, secret boundary and feature gates. |
 
 ## Pending migration
 
@@ -71,9 +72,9 @@ Audits, findings, triage and risk discussions live in GitHub Issues. Use the `au
 
 ## Health
 
-- active documents: 35
-- source-anchored (non-ADR): 23
-- hash-ledgered: 23
+- active documents: 36
+- source-anchored (non-ADR): 24
+- hash-ledgered: 24
 - guides: 5
 - ADRs: 8 (5 with code anchors; decision records, not machine-verified)
 - generated/index: 4

@@ -414,5 +414,23 @@
       "cargo test --workspace --all-features --locked"
     ],
     "note": "The record and observation structs are the source; process-local versus durable is the distinction the page preserves."
+  },
+  "docs/development/reference/config.md": {
+    "verified_at": "2026-11-14",
+    "sources": {
+      "crates/zroutery-core/src/config/app.rs": "sha256:3d76faa31c6686927e6ba1010c0b5085b8dcd29205c938945b10f741ee15b5f1",
+      "crates/zroutery-core/src/config/registry.rs": "sha256:0f18de17e1d49c2cb62ab81a611e2b2f41ac3257bd085ed0b2ae032a9c8d703f",
+      "crates/zroutery-core/src/config/server.rs": "sha256:bee183e115f654014ef4c5a5c271d8561b33bda7fd55f88bcac1b37468d0d532",
+      "crates/zroutery-core/src/config/validate.rs": "sha256:a7f2a2b1a6abdcd170c400843ec4dca3e815555cf2846049ca90434a144bb454",
+      "crates/zroutery-core/src/config/secrets.rs": "sha256:3fe88ed5037687627a011740b32a743957e87c6bb411dce93450c4b0d120b663",
+      "src-tauri/src/store.rs": "sha256:05701f3f4375c52e4ee1e4fd6d1c41566777992edcb0f12e72ac14d8f0dfd12c",
+      "src-tauri/src/state/server.rs": "sha256:580e347d1f140100b2fbfe88b0014db9b2146967770e5504a4a825c0dfcce848",
+      "crates/zroutery-core/Cargo.toml": "sha256:efc7be54b370a29abac18ed08f3a75d5b0863195949d22a1b55fbebbf9004ba6",
+      "src-tauri/Cargo.toml": "sha256:026dc0aedd8b657559ac6e1cfa61011f588917bf3164a3bb42966d7bfbc40783"
+    },
+    "commands": [
+      "cargo test --workspace --all-features --locked"
+    ],
+    "note": "Defaults, validation and the save/apply path are the source; the document is declaration, not runtime state."
   }
 }
