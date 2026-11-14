@@ -264,6 +264,16 @@ pub struct Stroke {
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
+pub struct StrokeGradient {
+    pub width: f64,
+    pub from: ColorExpr,
+    pub to: ColorExpr,
+    #[serde(default)]
+    pub angle: Option<f64>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct ComponentRecipe {
     pub part: String,
     #[serde(default)]
@@ -275,6 +285,8 @@ pub struct ComponentRecipe {
     pub foreground: Option<ColorExpr>,
     #[serde(default)]
     pub stroke: Option<Stroke>,
+    #[serde(default)]
+    pub stroke_gradient: Option<StrokeGradient>,
     #[serde(default)]
     pub radius: Option<f64>,
     #[serde(default)]
@@ -448,6 +460,18 @@ impl ThemeV1 {
                 {
                     return Err(PluginError::InvalidManifest);
                 }
+                if let Some(gradient) = &r.stroke_gradient {
+                    if r.stroke.is_some()
+                        || r.fill.is_none()
+                        || r.stroke_edge.is_some_and(|edge| edge != StrokeEdge::All)
+                        || !finite(gradient.width, 4.0)
+                        || gradient.angle.is_some_and(|angle| !finite(angle, 360.0))
+                        || !check_color(&gradient.from)
+                        || !check_color(&gradient.to)
+                    {
+                        return Err(PluginError::InvalidManifest);
+                    }
+                }
                 if let Some(shadows) = &r.shadow {
                     if shadows.len() > 4
                         || shadows.iter().any(|s| {
@@ -526,5 +550,73 @@ impl ThemeV1 {
         let theme: Self = strict::decode(bytes, strict::MAX_FRAME_BYTES)?;
         theme.validate()?;
         Ok(theme)
+    }
+}
+
+#[cfg(test)]
+mod gradient_tests {
+    use super::*;
+
+    fn theme() -> serde_json::Value {
+        serde_json::from_slice(include_bytes!("../../../plugins/theme-fluent/theme.json")).unwrap()
+    }
+
+    #[test]
+    fn bundled_themes_validate_in_the_native_host() {
+        for bytes in [
+            include_bytes!("../../../plugins/theme-fluent/theme.json").as_slice(),
+            include_bytes!("../../../plugins/theme-md3/theme.json").as_slice(),
+        ] {
+            ThemeV1::decode(bytes).unwrap();
+        }
+    }
+
+    #[test]
+    fn gradient_requires_fill_excludes_stroke_and_bounds_all_values() {
+        for mutation in [
+            "missing_fill",
+            "stroke",
+            "edge",
+            "width",
+            "angle",
+            "color",
+            "unknown",
+        ] {
+            let mut value = theme();
+            let recipe = value["modes"]["light"]["recipes"]
+                .as_array_mut()
+                .unwrap()
+                .iter_mut()
+                .find(|recipe| recipe.get("stroke_gradient").is_some())
+                .unwrap();
+            match mutation {
+                "missing_fill" => {
+                    recipe.as_object_mut().unwrap().remove("fill");
+                }
+                "stroke" => {
+                    recipe["stroke"] = serde_json::json!({"width":1,"color":{"hex":"#000000"}});
+                }
+                "edge" => {
+                    recipe["stroke_edge"] = serde_json::json!("bottom");
+                }
+                "width" => {
+                    recipe["stroke_gradient"]["width"] = serde_json::json!(5);
+                }
+                "angle" => {
+                    recipe["stroke_gradient"]["angle"] = serde_json::json!(361);
+                }
+                "color" => {
+                    recipe["stroke_gradient"]["from"] = serde_json::json!({"role":"not-a-role"});
+                }
+                "unknown" => {
+                    recipe["stroke_gradient"]["css"] = serde_json::json!("arbitrary");
+                }
+                _ => unreachable!(),
+            }
+            assert!(
+                ThemeV1::decode(&serde_json::to_vec(&value).unwrap()).is_err(),
+                "{mutation}"
+            );
+        }
     }
 }
