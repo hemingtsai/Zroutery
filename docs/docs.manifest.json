@@ -501,6 +501,19 @@
       "owner": "backend",
       "summary": "Reporting attribution ladder, confidence, canonical ids and the bounded registry.",
       "max_lines": 250
+    },
+    {
+      "path": "docs/development/reference/README.md",
+      "title": "Reference Index",
+      "type": "index",
+      "authority": "index",
+      "audience": [
+        "human",
+        "agent"
+      ],
+      "status": "active",
+      "owner": "docs",
+      "summary": "Module-to-reference map and the areas that are covered elsewhere."
     }
   ],
   "pending": [],
