@@ -1,0 +1,2477 @@
+{
+  "schema_version": 1,
+  "name": {
+    "en": "Material 3",
+    "zh-CN": "Material 3",
+    "zh-TW": "Material 3"
+  },
+  "modes": {
+    "light": {
+      "colors": {
+        "bg": {
+          "hex": "#fef7ff"
+        },
+        "surface": {
+          "hex": "#f7f2fa"
+        },
+        "surface-muted": {
+          "hex": "#f3edf7"
+        },
+        "surface-high": {
+          "hex": "#ece6f0"
+        },
+        "container-highest": {
+          "hex": "#e6e0e9"
+        },
+        "hover": {
+          "mix": [
+            {
+              "role": "text"
+            },
+            {
+              "hex": "#00000000"
+            }
+          ],
+          "first_fraction": 0.08
+        },
+        "selected": {
+          "mix": [
+            {
+              "role": "text"
+            },
+            {
+              "hex": "#00000000"
+            }
+          ],
+          "first_fraction": 0.12
+        },
+        "line": {
+          "hex": "#79747e"
+        },
+        "line-muted": {
+          "hex": "#cac4d0"
+        },
+        "border-secondary": {
+          "role": "line-muted"
+        },
+        "text": {
+          "hex": "#1d1b20"
+        },
+        "text-2": {
+          "hex": "#49454f"
+        },
+        "muted": {
+          "hex": "#49454f"
+        },
+        "primary": {
+          "system": "accent",
+          "fallback": {
+            "hex": "#6750a4"
+          }
+        },
+        "primary-hover": {
+          "mix": [
+            {
+              "role": "on-primary"
+            },
+            {
+              "role": "primary"
+            }
+          ],
+          "first_fraction": 0.08
+        },
+        "on-primary": {
+          "system": "accent_foreground",
+          "fallback": {
+            "hex": "#ffffff"
+          }
+        },
+        "primary-container": {
+          "hex": "#eaddff"
+        },
+        "on-primary-container": {
+          "hex": "#21005d"
+        },
+        "secondary-container": {
+          "hex": "#e8def8"
+        },
+        "on-secondary-container": {
+          "hex": "#1d192b"
+        },
+        "error-container": {
+          "hex": "#f9dedc"
+        },
+        "on-error-container": {
+          "hex": "#410e0b"
+        },
+        "inverse-surface": {
+          "hex": "#322f35"
+        },
+        "inverse-on-surface": {
+          "hex": "#f5eff7"
+        },
+        "inverse-primary": {
+          "hex": "#d0bcff"
+        },
+        "ok": {
+          "hex": "#00722a"
+        },
+        "ok-bg": {
+          "hex": "#daecdb"
+        },
+        "warn": {
+          "hex": "#835100"
+        },
+        "warn-bg": {
+          "hex": "#f5e3cd"
+        },
+        "danger": {
+          "hex": "#b3261e"
+        },
+        "danger-bg": {
+          "hex": "#f9dedc"
+        },
+        "scrollbar-thumb": {
+          "role": "line-muted"
+        },
+        "scrollbar-thumb-hover": {
+          "role": "line"
+        },
+        "control-line": {
+          "role": "line"
+        },
+        "line-strong": {
+          "role": "line-muted"
+        },
+        "border-primary": {
+          "role": "control-line"
+        }
+      },
+      "recipes": [
+        {
+          "part": "button",
+          "when": {
+            "interaction": "rest"
+          },
+          "radius": 999.0,
+          "fill": {
+            "role": "secondary-container"
+          },
+          "stroke": {
+            "width": 1,
+            "color": {
+              "hex": "#00000000"
+            }
+          },
+          "stroke_edge": "all",
+          "foreground": {
+            "role": "on-secondary-container"
+          },
+          "metrics": {
+            "font_weight": 500
+          }
+        },
+        {
+          "part": "button",
+          "when": {
+            "interaction": "hover",
+            "disabled": false
+          },
+          "variant": "default",
+          "fill": {
+            "mix": [
+              {
+                "role": "on-secondary-container"
+              },
+              {
+                "role": "secondary-container"
+              }
+            ],
+            "first_fraction": 0.08
+          },
+          "stroke": {
+            "width": 1,
+            "color": {
+              "hex": "#00000000"
+            }
+          },
+          "stroke_edge": "all"
+        },
+        {
+          "part": "button",
+          "when": {
+            "interaction": "rest"
+          },
+          "variant": "primary",
+          "fill": {
+            "role": "primary"
+          },
+          "stroke": {
+            "width": 1,
+            "color": {
+              "hex": "#00000000"
+            }
+          },
+          "stroke_edge": "all",
+          "foreground": {
+            "role": "on-primary"
+          }
+        },
+        {
+          "part": "button",
+          "when": {
+            "interaction": "hover",
+            "disabled": false
+          },
+          "variant": "primary",
+          "fill": {
+            "role": "primary-hover"
+          },
+          "stroke": {
+            "width": 1,
+            "color": {
+              "hex": "#00000000"
+            }
+          },
+          "stroke_edge": "all"
+        },
+        {
+          "part": "button",
+          "when": {
+            "interaction": "rest"
+          },
+          "variant": "ghost",
+          "fill": {
+            "hex": "#00000000"
+          },
+          "stroke": {
+            "width": 1,
+            "color": {
+              "hex": "#00000000"
+            }
+          },
+          "stroke_edge": "all",
+          "foreground": {
+            "role": "primary"
+          }
+        },
+        {
+          "part": "button",
+          "when": {
+            "interaction": "hover",
+            "disabled": false
+          },
+          "variant": "ghost",
+          "fill": {
+            "mix": [
+              {
+                "role": "primary"
+              },
+              {
+                "hex": "#00000000"
+              }
+            ],
+            "first_fraction": 0.08
+          },
+          "foreground": {
+            "role": "primary"
+          }
+        },
+        {
+          "part": "button",
+          "when": {
+            "interaction": "rest"
+          },
+          "variant": "danger",
+          "foreground": {
+            "role": "on-error-container"
+          },
+          "fill": {
+            "role": "error-container"
+          },
+          "stroke": {
+            "width": 1,
+            "color": {
+              "hex": "#00000000"
+            }
+          },
+          "stroke_edge": "all"
+        },
+        {
+          "part": "button",
+          "when": {
+            "interaction": "hover",
+            "disabled": false
+          },
+          "variant": "danger",
+          "fill": {
+            "mix": [
+              {
+                "role": "on-error-container"
+              },
+              {
+                "role": "error-container"
+              }
+            ],
+            "first_fraction": 0.08
+          },
+          "stroke": {
+            "width": 1,
+            "color": {
+              "hex": "#00000000"
+            }
+          },
+          "stroke_edge": "all"
+        },
+        {
+          "part": "input",
+          "when": {
+            "interaction": "rest"
+          },
+          "radius": 4.0
+        },
+        {
+          "part": "select.trigger",
+          "when": {
+            "interaction": "rest"
+          },
+          "radius": 4.0,
+          "fill": {
+            "hex": "#00000000"
+          }
+        },
+        {
+          "part": "select.menu",
+          "when": {
+            "interaction": "rest"
+          },
+          "radius": 4.0,
+          "fill": {
+            "role": "surface-muted"
+          },
+          "metrics": {
+            "padding_block": 8.0,
+            "padding_inline": 0.0
+          }
+        },
+        {
+          "part": "input",
+          "when": {
+            "interaction": "rest",
+            "focus_visible": true
+          },
+          "focus_rings": [
+            {
+              "width": 2.0,
+              "offset": -2.0,
+              "color": {
+                "role": "primary"
+              }
+            }
+          ]
+        },
+        {
+          "part": "select.trigger",
+          "when": {
+            "interaction": "rest",
+            "focus_visible": true
+          },
+          "focus_rings": [
+            {
+              "width": 2.0,
+              "offset": -2.0,
+              "color": {
+                "role": "primary"
+              }
+            }
+          ]
+        },
+        {
+          "part": "input",
+          "when": {
+            "interaction": "hover",
+            "focus_visible": false
+          },
+          "stroke": {
+            "width": 1,
+            "color": {
+              "role": "text"
+            }
+          },
+          "stroke_edge": "all"
+        },
+        {
+          "part": "select.trigger",
+          "when": {
+            "interaction": "hover",
+            "focus_visible": false
+          },
+          "stroke": {
+            "width": 1,
+            "color": {
+              "role": "text"
+            }
+          },
+          "stroke_edge": "all",
+          "fill": {
+            "hex": "#00000000"
+          }
+        },
+        {
+          "part": "select.item",
+          "when": {
+            "interaction": "rest",
+            "checked": true
+          },
+          "fill": {
+            "role": "secondary-container"
+          },
+          "foreground": {
+            "role": "on-secondary-container"
+          }
+        },
+        {
+          "part": "checkbox",
+          "when": {
+            "interaction": "rest"
+          },
+          "radius": 2.0
+        },
+        {
+          "part": "segment",
+          "when": {
+            "interaction": "rest"
+          },
+          "stroke": {
+            "width": 0,
+            "color": {
+              "hex": "#00000000"
+            }
+          },
+          "stroke_edge": "all",
+          "radius": 999.0,
+          "shadow": [
+            {
+              "x": 0.0,
+              "y": 0.0,
+              "blur": 0.0,
+              "spread": 1.0,
+              "color": {
+                "role": "line"
+              },
+              "inset": true
+            }
+          ],
+          "layout": "flat"
+        },
+        {
+          "part": "segment.item",
+          "when": {
+            "interaction": "hover"
+          },
+          "fill": {
+            "role": "hover"
+          }
+        },
+        {
+          "part": "segment.item",
+          "when": {
+            "interaction": "rest",
+            "selected": true
+          },
+          "shadow": [],
+          "fill": {
+            "role": "secondary-container"
+          },
+          "foreground": {
+            "role": "on-secondary-container"
+          }
+        },
+        {
+          "part": "navigation.item",
+          "when": {
+            "interaction": "rest"
+          },
+          "radius": 999.0,
+          "metrics": {
+            "font_weight": 500
+          }
+        },
+        {
+          "part": "navigation.item",
+          "when": {
+            "interaction": "hover"
+          },
+          "fill": {
+            "role": "hover"
+          }
+        },
+        {
+          "part": "navigation.item",
+          "when": {
+            "interaction": "rest",
+            "selected": true
+          },
+          "fill": {
+            "role": "secondary-container"
+          },
+          "foreground": {
+            "role": "on-secondary-container"
+          }
+        },
+        {
+          "part": "drawer",
+          "when": {
+            "interaction": "rest"
+          },
+          "radius": 16.0,
+          "stroke": {
+            "width": 0,
+            "color": {
+              "hex": "#00000000"
+            }
+          },
+          "stroke_edge": "start",
+          "shadow": [
+            {
+              "x": 0.0,
+              "y": 1.0,
+              "blur": 2.0,
+              "spread": 0.0,
+              "color": {
+                "mix": [
+                  {
+                    "hex": "#000000"
+                  },
+                  {
+                    "hex": "#00000000"
+                  }
+                ],
+                "first_fraction": 0.3
+              }
+            },
+            {
+              "x": 0.0,
+              "y": 1.0,
+              "blur": 3.0,
+              "spread": 1.0,
+              "color": {
+                "mix": [
+                  {
+                    "hex": "#000000"
+                  },
+                  {
+                    "hex": "#00000000"
+                  }
+                ],
+                "first_fraction": 0.15
+              }
+            }
+          ]
+        },
+        {
+          "part": "banner",
+          "when": {
+            "interaction": "rest"
+          },
+          "radius": 28.0
+        },
+        {
+          "part": "banner",
+          "when": {
+            "interaction": "rest"
+          },
+          "variant": "warning",
+          "fill": {
+            "mix": [
+              {
+                "role": "warn"
+              },
+              {
+                "role": "surface"
+              }
+            ],
+            "first_fraction": 0.12
+          },
+          "stroke": {
+            "width": 1,
+            "color": {
+              "hex": "#00000000"
+            }
+          },
+          "stroke_edge": "all",
+          "foreground": {
+            "role": "warn"
+          }
+        },
+        {
+          "part": "banner",
+          "when": {
+            "interaction": "rest"
+          },
+          "variant": "error",
+          "fill": {
+            "role": "danger-bg"
+          },
+          "stroke": {
+            "width": 1,
+            "color": {
+              "hex": "#00000000"
+            }
+          },
+          "stroke_edge": "all",
+          "foreground": {
+            "role": "on-error-container"
+          }
+        },
+        {
+          "part": "dialog",
+          "when": {
+            "interaction": "rest"
+          },
+          "radius": 28.0,
+          "fill": {
+            "role": "surface-high"
+          },
+          "stroke": {
+            "width": 1,
+            "color": {
+              "hex": "#00000000"
+            }
+          },
+          "stroke_edge": "all",
+          "shadow": [
+            {
+              "x": 0.0,
+              "y": 1.0,
+              "blur": 3.0,
+              "spread": 0.0,
+              "color": {
+                "mix": [
+                  {
+                    "hex": "#000000"
+                  },
+                  {
+                    "hex": "#00000000"
+                  }
+                ],
+                "first_fraction": 0.3
+              }
+            },
+            {
+              "x": 0.0,
+              "y": 4.0,
+              "blur": 8.0,
+              "spread": 3.0,
+              "color": {
+                "mix": [
+                  {
+                    "hex": "#000000"
+                  },
+                  {
+                    "hex": "#00000000"
+                  }
+                ],
+                "first_fraction": 0.15
+              }
+            }
+          ]
+        },
+        {
+          "part": "popover",
+          "when": {
+            "interaction": "rest"
+          },
+          "radius": 4.0,
+          "fill": {
+            "role": "surface-muted"
+          },
+          "stroke": {
+            "width": 1,
+            "color": {
+              "hex": "#00000000"
+            }
+          },
+          "stroke_edge": "all",
+          "shadow": [
+            {
+              "x": 0.0,
+              "y": 1.0,
+              "blur": 2.0,
+              "spread": 0.0,
+              "color": {
+                "mix": [
+                  {
+                    "hex": "#000000"
+                  },
+                  {
+                    "hex": "#00000000"
+                  }
+                ],
+                "first_fraction": 0.3
+              }
+            },
+            {
+              "x": 0.0,
+              "y": 2.0,
+              "blur": 6.0,
+              "spread": 2.0,
+              "color": {
+                "mix": [
+                  {
+                    "hex": "#000000"
+                  },
+                  {
+                    "hex": "#00000000"
+                  }
+                ],
+                "first_fraction": 0.15
+              }
+            }
+          ],
+          "metrics": {
+            "padding_block": 8.0,
+            "padding_inline": 8.0
+          }
+        },
+        {
+          "part": "menu.item",
+          "when": {
+            "interaction": "rest"
+          },
+          "radius": 0.0
+        },
+        {
+          "part": "menu.item",
+          "when": {
+            "interaction": "rest",
+            "focus_visible": true
+          },
+          "focus_rings": [
+            {
+              "width": 2.0,
+              "offset": -2.0,
+              "color": {
+                "role": "primary"
+              }
+            }
+          ]
+        },
+        {
+          "part": "badge",
+          "when": {
+            "interaction": "rest"
+          },
+          "radius": 8.0
+        },
+        {
+          "part": "chip",
+          "when": {
+            "interaction": "rest"
+          },
+          "radius": 8.0
+        },
+        {
+          "part": "kpi.row",
+          "when": {
+            "interaction": "rest"
+          },
+          "metrics": {
+            "column_gap": 12.0
+          }
+        },
+        {
+          "part": "kpi.cell",
+          "when": {
+            "interaction": "rest"
+          },
+          "stroke": {
+            "width": 0,
+            "color": {
+              "hex": "#00000000"
+            }
+          },
+          "stroke_edge": "start",
+          "radius": 12.0,
+          "fill": {
+            "role": "container-highest"
+          }
+        },
+        {
+          "part": "kpi.first",
+          "when": {
+            "interaction": "rest"
+          },
+          "metrics": {
+            "padding_start": 24.0
+          }
+        },
+        {
+          "part": "kpi.trigger",
+          "when": {
+            "interaction": "hover"
+          },
+          "fill": {
+            "mix": [
+              {
+                "role": "text"
+              },
+              {
+                "role": "surface"
+              }
+            ],
+            "first_fraction": 0.08
+          }
+        },
+        {
+          "part": "table.cell",
+          "when": {
+            "interaction": "hover"
+          },
+          "fill": {
+            "role": "hover"
+          }
+        },
+        {
+          "part": "list.row",
+          "when": {
+            "interaction": "rest"
+          },
+          "stroke": {
+            "width": 1,
+            "color": {
+              "role": "line-muted"
+            }
+          },
+          "stroke_edge": "bottom",
+          "metrics": {
+            "padding_start": 12.0,
+            "padding_inline": 12.0
+          }
+        },
+        {
+          "part": "timeline.item",
+          "when": {
+            "interaction": "rest"
+          },
+          "stroke": {
+            "width": 1,
+            "color": {
+              "role": "line-muted"
+            }
+          },
+          "stroke_edge": "bottom"
+        },
+        {
+          "part": "toast",
+          "when": {
+            "interaction": "rest"
+          },
+          "radius": 4.0,
+          "fill": {
+            "role": "inverse-surface"
+          },
+          "stroke": {
+            "width": 1,
+            "color": {
+              "hex": "#00000000"
+            }
+          },
+          "stroke_edge": "all",
+          "foreground": {
+            "role": "inverse-on-surface"
+          },
+          "shadow": [
+            {
+              "x": 0.0,
+              "y": 1.0,
+              "blur": 3.0,
+              "spread": 0.0,
+              "color": {
+                "mix": [
+                  {
+                    "hex": "#000000"
+                  },
+                  {
+                    "hex": "#00000000"
+                  }
+                ],
+                "first_fraction": 0.3
+              }
+            },
+            {
+              "x": 0.0,
+              "y": 4.0,
+              "blur": 8.0,
+              "spread": 3.0,
+              "color": {
+                "mix": [
+                  {
+                    "hex": "#000000"
+                  },
+                  {
+                    "hex": "#00000000"
+                  }
+                ],
+                "first_fraction": 0.15
+              }
+            }
+          ]
+        },
+        {
+          "part": "toast",
+          "when": {
+            "interaction": "hover"
+          },
+          "fill": {
+            "role": "inverse-surface"
+          }
+        },
+        {
+          "part": "chart.card",
+          "when": {
+            "interaction": "rest"
+          },
+          "radius": 4.0
+        },
+        {
+          "part": "menu.radio",
+          "when": {
+            "interaction": "rest"
+          },
+          "radius": 999,
+          "decoration": "circle"
+        },
+        {
+          "part": "switch.track",
+          "when": {
+            "interaction": "rest"
+          },
+          "radius": 999.0,
+          "fill": {
+            "role": "container-highest"
+          },
+          "stroke": {
+            "width": 2,
+            "color": {
+              "role": "line"
+            }
+          },
+          "stroke_edge": "all"
+        },
+        {
+          "part": "switch.thumb",
+          "when": {
+            "interaction": "rest"
+          },
+          "radius": 999.0,
+          "fill": {
+            "role": "line"
+          }
+        },
+        {
+          "part": "switch.thumb",
+          "when": {
+            "interaction": "hover",
+            "checked": false
+          },
+          "fill": {
+            "role": "text-2"
+          }
+        },
+        {
+          "part": "switch.thumb",
+          "when": {
+            "interaction": "rest",
+            "checked": true
+          },
+          "metrics": {
+            "thumb_x": 16.0,
+            "thumb_y": 1.0,
+            "width": 14.0,
+            "height": 14.0
+          }
+        },
+        {
+          "part": "switch.thumb",
+          "when": {
+            "interaction": "hover",
+            "checked": true
+          },
+          "fill": {
+            "role": "primary-container"
+          }
+        },
+        {
+          "part": "section",
+          "when": {
+            "interaction": "rest"
+          },
+          "radius": 12.0,
+          "fill": {
+            "role": "surface-muted"
+          },
+          "metrics": {
+            "gap": 12.0,
+            "padding_block": 14.0,
+            "padding_inline": 16.0,
+            "padding_top": 14.0,
+            "padding_bottom": 16.0
+          }
+        },
+        {
+          "part": "tab.panel",
+          "when": {
+            "interaction": "rest"
+          },
+          "layout": "card_stack",
+          "metrics": {
+            "gap": 16.0
+          }
+        },
+        {
+          "part": "section.flat",
+          "when": {
+            "interaction": "rest",
+            "context": "nested_section"
+          },
+          "radius": 0.0,
+          "fill": {
+            "hex": "#00000000"
+          },
+          "layout": "flatten_nested",
+          "metrics": {
+            "gap": 16.0,
+            "padding_block": 0.0,
+            "padding_inline": 0.0
+          }
+        },
+        {
+          "part": "section.flat",
+          "when": {
+            "interaction": "rest",
+            "context": "overlay"
+          },
+          "radius": 0.0,
+          "fill": {
+            "hex": "#00000000"
+          },
+          "layout": "flatten_nested",
+          "metrics": {
+            "gap": 16.0,
+            "padding_block": 0.0,
+            "padding_inline": 0.0
+          }
+        },
+        {
+          "part": "kpi.trigger",
+          "when": {
+            "interaction": "rest",
+            "selected": true
+          },
+          "stroke": {
+            "width": 2,
+            "color": {
+              "hex": "#00000000"
+            }
+          },
+          "stroke_edge": "bottom",
+          "fill": {
+            "role": "secondary-container"
+          },
+          "foreground": {
+            "role": "on-secondary-container"
+          }
+        },
+        {
+          "part": "kpi.label",
+          "when": {
+            "interaction": "rest"
+          },
+          "decoration": "inherit_ink"
+        },
+        {
+          "part": "kpi.value",
+          "when": {
+            "interaction": "rest"
+          },
+          "decoration": "inherit_ink"
+        },
+        {
+          "part": "kpi.trigger",
+          "when": {
+            "interaction": "hover",
+            "selected": true
+          },
+          "fill": {
+            "mix": [
+              {
+                "role": "on-secondary-container"
+              },
+              {
+                "role": "secondary-container"
+              }
+            ],
+            "first_fraction": 0.08
+          }
+        },
+        {
+          "part": "input",
+          "when": {
+            "interaction": "rest",
+            "readonly": false
+          },
+          "fill": {
+            "hex": "#00000000"
+          }
+        },
+        {
+          "part": "segment.item",
+          "when": {
+            "interaction": "rest"
+          },
+          "metrics": {
+            "font_weight": 500
+          }
+        },
+        {
+          "part": "field.label",
+          "when": {
+            "interaction": "rest"
+          },
+          "metrics": {
+            "font_weight": 500
+          }
+        },
+        {
+          "part": "section.title",
+          "when": {
+            "interaction": "rest"
+          },
+          "metrics": {
+            "font_size": 22.0,
+            "font_weight": 400
+          }
+        },
+        {
+          "part": "shell.bar",
+          "when": {
+            "interaction": "rest"
+          },
+          "fill": {
+            "hex": "#00000000"
+          },
+          "stroke": {
+            "width": 1,
+            "color": {
+              "hex": "#00000000"
+            }
+          },
+          "stroke_edge": "bottom",
+          "metrics": {
+            "height": 64.0
+          }
+        },
+        {
+          "part": "shell.sidebar",
+          "when": {
+            "interaction": "rest"
+          },
+          "fill": {
+            "hex": "#00000000"
+          },
+          "stroke": {
+            "width": 1,
+            "color": {
+              "hex": "#00000000"
+            }
+          },
+          "stroke_edge": "end"
+        },
+        {
+          "part": "shell.title",
+          "when": {
+            "interaction": "rest"
+          },
+          "foreground": {
+            "role": "text"
+          },
+          "decoration": "plain_title",
+          "metrics": {
+            "font_size": 22.0,
+            "font_weight": 400
+          }
+        },
+        {
+          "part": "select.menu",
+          "when": {
+            "interaction": "rest"
+          },
+          "shadow": [
+            {
+              "x": 0.0,
+              "y": 1.0,
+              "blur": 2.0,
+              "spread": 0.0,
+              "color": {
+                "mix": [
+                  {
+                    "hex": "#000000"
+                  },
+                  {
+                    "hex": "#00000000"
+                  }
+                ],
+                "first_fraction": 0.3
+              }
+            },
+            {
+              "x": 0.0,
+              "y": 2.0,
+              "blur": 6.0,
+              "spread": 2.0,
+              "color": {
+                "mix": [
+                  {
+                    "hex": "#000000"
+                  },
+                  {
+                    "hex": "#00000000"
+                  }
+                ],
+                "first_fraction": 0.15
+              }
+            }
+          ]
+        },
+        {
+          "part": "chart.card",
+          "when": {
+            "interaction": "rest"
+          },
+          "shadow": [
+            {
+              "x": 0.0,
+              "y": 1.0,
+              "blur": 2.0,
+              "spread": 0.0,
+              "color": {
+                "mix": [
+                  {
+                    "hex": "#000000"
+                  },
+                  {
+                    "hex": "#00000000"
+                  }
+                ],
+                "first_fraction": 0.3
+              }
+            },
+            {
+              "x": 0.0,
+              "y": 2.0,
+              "blur": 6.0,
+              "spread": 2.0,
+              "color": {
+                "mix": [
+                  {
+                    "hex": "#000000"
+                  },
+                  {
+                    "hex": "#00000000"
+                  }
+                ],
+                "first_fraction": 0.15
+              }
+            }
+          ]
+        },
+        {
+          "part": "switch.track",
+          "when": {
+            "interaction": "rest",
+            "checked": true
+          },
+          "fill": {
+            "role": "primary"
+          },
+          "stroke": {
+            "width": 2,
+            "color": {
+              "role": "primary"
+            }
+          }
+        },
+        {
+          "part": "switch.thumb",
+          "when": {
+            "interaction": "rest",
+            "checked": true
+          },
+          "fill": {
+            "role": "on-primary"
+          }
+        }
+      ]
+    },
+    "dark": {
+      "colors": {
+        "bg": {
+          "hex": "#141218"
+        },
+        "surface": {
+          "hex": "#1d1b20"
+        },
+        "surface-muted": {
+          "hex": "#211f26"
+        },
+        "surface-high": {
+          "hex": "#2b2930"
+        },
+        "container-highest": {
+          "hex": "#36343b"
+        },
+        "hover": {
+          "mix": [
+            {
+              "role": "text"
+            },
+            {
+              "hex": "#00000000"
+            }
+          ],
+          "first_fraction": 0.08
+        },
+        "selected": {
+          "mix": [
+            {
+              "role": "text"
+            },
+            {
+              "hex": "#00000000"
+            }
+          ],
+          "first_fraction": 0.12
+        },
+        "line": {
+          "hex": "#938f99"
+        },
+        "line-muted": {
+          "hex": "#49454f"
+        },
+        "border-secondary": {
+          "role": "line-muted"
+        },
+        "text": {
+          "hex": "#e6e0e9"
+        },
+        "text-2": {
+          "hex": "#cac4d0"
+        },
+        "muted": {
+          "hex": "#cac4d0"
+        },
+        "primary": {
+          "mix": [
+            {
+              "system": "accent",
+              "fallback": {
+                "hex": "#6750a4"
+              }
+            },
+            {
+              "hex": "#ffffff"
+            }
+          ],
+          "first_fraction": 0.45
+        },
+        "primary-hover": {
+          "mix": [
+            {
+              "role": "on-primary"
+            },
+            {
+              "role": "primary"
+            }
+          ],
+          "first_fraction": 0.08
+        },
+        "on-primary": {
+          "mix": [
+            {
+              "system": "accent",
+              "fallback": {
+                "hex": "#6750a4"
+              }
+            },
+            {
+              "hex": "#1d1b20"
+            }
+          ],
+          "first_fraction": 0.15
+        },
+        "primary-container": {
+          "hex": "#4f378b"
+        },
+        "on-primary-container": {
+          "hex": "#eaddff"
+        },
+        "secondary-container": {
+          "hex": "#4a4458"
+        },
+        "on-secondary-container": {
+          "hex": "#e8def8"
+        },
+        "error-container": {
+          "hex": "#8c1d18"
+        },
+        "on-error-container": {
+          "hex": "#f2b8b5"
+        },
+        "inverse-surface": {
+          "hex": "#e6e0e9"
+        },
+        "inverse-on-surface": {
+          "hex": "#322f35"
+        },
+        "inverse-primary": {
+          "hex": "#6750a4"
+        },
+        "ok": {
+          "hex": "#93d69c"
+        },
+        "ok-bg": {
+          "hex": "#1b3820"
+        },
+        "warn": {
+          "hex": "#eab26b"
+        },
+        "warn-bg": {
+          "hex": "#432b07"
+        },
+        "danger": {
+          "hex": "#f2b8b5"
+        },
+        "danger-bg": {
+          "hex": "#8c1d18"
+        },
+        "scrollbar-thumb": {
+          "role": "line-muted"
+        },
+        "scrollbar-thumb-hover": {
+          "role": "line"
+        },
+        "control-line": {
+          "role": "line"
+        },
+        "line-strong": {
+          "role": "line-muted"
+        },
+        "border-primary": {
+          "role": "control-line"
+        }
+      },
+      "recipes": [
+        {
+          "part": "button",
+          "when": {
+            "interaction": "rest"
+          },
+          "radius": 999.0,
+          "fill": {
+            "role": "secondary-container"
+          },
+          "stroke": {
+            "width": 1,
+            "color": {
+              "hex": "#00000000"
+            }
+          },
+          "stroke_edge": "all",
+          "foreground": {
+            "role": "on-secondary-container"
+          },
+          "metrics": {
+            "font_weight": 500
+          }
+        },
+        {
+          "part": "button",
+          "when": {
+            "interaction": "hover",
+            "disabled": false
+          },
+          "variant": "default",
+          "fill": {
+            "mix": [
+              {
+                "role": "on-secondary-container"
+              },
+              {
+                "role": "secondary-container"
+              }
+            ],
+            "first_fraction": 0.08
+          },
+          "stroke": {
+            "width": 1,
+            "color": {
+              "hex": "#00000000"
+            }
+          },
+          "stroke_edge": "all"
+        },
+        {
+          "part": "button",
+          "when": {
+            "interaction": "rest"
+          },
+          "variant": "primary",
+          "fill": {
+            "role": "primary"
+          },
+          "stroke": {
+            "width": 1,
+            "color": {
+              "hex": "#00000000"
+            }
+          },
+          "stroke_edge": "all",
+          "foreground": {
+            "role": "on-primary"
+          }
+        },
+        {
+          "part": "button",
+          "when": {
+            "interaction": "hover",
+            "disabled": false
+          },
+          "variant": "primary",
+          "fill": {
+            "role": "primary-hover"
+          },
+          "stroke": {
+            "width": 1,
+            "color": {
+              "hex": "#00000000"
+            }
+          },
+          "stroke_edge": "all"
+        },
+        {
+          "part": "button",
+          "when": {
+            "interaction": "rest"
+          },
+          "variant": "ghost",
+          "fill": {
+            "hex": "#00000000"
+          },
+          "stroke": {
+            "width": 1,
+            "color": {
+              "hex": "#00000000"
+            }
+          },
+          "stroke_edge": "all",
+          "foreground": {
+            "role": "primary"
+          }
+        },
+        {
+          "part": "button",
+          "when": {
+            "interaction": "hover",
+            "disabled": false
+          },
+          "variant": "ghost",
+          "fill": {
+            "mix": [
+              {
+                "role": "primary"
+              },
+              {
+                "hex": "#00000000"
+              }
+            ],
+            "first_fraction": 0.08
+          },
+          "foreground": {
+            "role": "primary"
+          }
+        },
+        {
+          "part": "button",
+          "when": {
+            "interaction": "rest"
+          },
+          "variant": "danger",
+          "foreground": {
+            "role": "on-error-container"
+          },
+          "fill": {
+            "role": "error-container"
+          },
+          "stroke": {
+            "width": 1,
+            "color": {
+              "hex": "#00000000"
+            }
+          },
+          "stroke_edge": "all"
+        },
+        {
+          "part": "button",
+          "when": {
+            "interaction": "hover",
+            "disabled": false
+          },
+          "variant": "danger",
+          "fill": {
+            "mix": [
+              {
+                "role": "on-error-container"
+              },
+              {
+                "role": "error-container"
+              }
+            ],
+            "first_fraction": 0.08
+          },
+          "stroke": {
+            "width": 1,
+            "color": {
+              "hex": "#00000000"
+            }
+          },
+          "stroke_edge": "all"
+        },
+        {
+          "part": "input",
+          "when": {
+            "interaction": "rest"
+          },
+          "radius": 4.0
+        },
+        {
+          "part": "select.trigger",
+          "when": {
+            "interaction": "rest"
+          },
+          "radius": 4.0,
+          "fill": {
+            "hex": "#00000000"
+          }
+        },
+        {
+          "part": "select.menu",
+          "when": {
+            "interaction": "rest"
+          },
+          "radius": 4.0,
+          "fill": {
+            "mix": [
+              {
+                "role": "primary"
+              },
+              {
+                "role": "surface-muted"
+              }
+            ],
+            "first_fraction": 0.08
+          },
+          "metrics": {
+            "padding_block": 8.0,
+            "padding_inline": 0.0
+          }
+        },
+        {
+          "part": "input",
+          "when": {
+            "interaction": "rest",
+            "focus_visible": true
+          },
+          "focus_rings": [
+            {
+              "width": 2.0,
+              "offset": -2.0,
+              "color": {
+                "role": "primary"
+              }
+            }
+          ]
+        },
+        {
+          "part": "select.trigger",
+          "when": {
+            "interaction": "rest",
+            "focus_visible": true
+          },
+          "focus_rings": [
+            {
+              "width": 2.0,
+              "offset": -2.0,
+              "color": {
+                "role": "primary"
+              }
+            }
+          ]
+        },
+        {
+          "part": "input",
+          "when": {
+            "interaction": "hover",
+            "focus_visible": false
+          },
+          "stroke": {
+            "width": 1,
+            "color": {
+              "role": "text"
+            }
+          },
+          "stroke_edge": "all"
+        },
+        {
+          "part": "select.trigger",
+          "when": {
+            "interaction": "hover",
+            "focus_visible": false
+          },
+          "stroke": {
+            "width": 1,
+            "color": {
+              "role": "text"
+            }
+          },
+          "stroke_edge": "all",
+          "fill": {
+            "hex": "#00000000"
+          }
+        },
+        {
+          "part": "select.item",
+          "when": {
+            "interaction": "rest",
+            "checked": true
+          },
+          "fill": {
+            "role": "secondary-container"
+          },
+          "foreground": {
+            "role": "on-secondary-container"
+          }
+        },
+        {
+          "part": "checkbox",
+          "when": {
+            "interaction": "rest"
+          },
+          "radius": 2.0
+        },
+        {
+          "part": "segment",
+          "when": {
+            "interaction": "rest"
+          },
+          "stroke": {
+            "width": 0,
+            "color": {
+              "hex": "#00000000"
+            }
+          },
+          "stroke_edge": "all",
+          "radius": 999.0,
+          "shadow": [
+            {
+              "x": 0.0,
+              "y": 0.0,
+              "blur": 0.0,
+              "spread": 1.0,
+              "color": {
+                "role": "line"
+              },
+              "inset": true
+            }
+          ],
+          "layout": "flat"
+        },
+        {
+          "part": "segment.item",
+          "when": {
+            "interaction": "hover"
+          },
+          "fill": {
+            "role": "hover"
+          }
+        },
+        {
+          "part": "segment.item",
+          "when": {
+            "interaction": "rest",
+            "selected": true
+          },
+          "shadow": [],
+          "fill": {
+            "role": "secondary-container"
+          },
+          "foreground": {
+            "role": "on-secondary-container"
+          }
+        },
+        {
+          "part": "navigation.item",
+          "when": {
+            "interaction": "rest"
+          },
+          "radius": 999.0,
+          "metrics": {
+            "font_weight": 500
+          }
+        },
+        {
+          "part": "navigation.item",
+          "when": {
+            "interaction": "hover"
+          },
+          "fill": {
+            "role": "hover"
+          }
+        },
+        {
+          "part": "navigation.item",
+          "when": {
+            "interaction": "rest",
+            "selected": true
+          },
+          "fill": {
+            "role": "secondary-container"
+          },
+          "foreground": {
+            "role": "on-secondary-container"
+          }
+        },
+        {
+          "part": "drawer",
+          "when": {
+            "interaction": "rest"
+          },
+          "radius": 16.0,
+          "stroke": {
+            "width": 0,
+            "color": {
+              "hex": "#00000000"
+            }
+          },
+          "stroke_edge": "start",
+          "shadow": [],
+          "fill": {
+            "mix": [
+              {
+                "role": "primary"
+              },
+              {
+                "role": "surface"
+              }
+            ],
+            "first_fraction": 0.05
+          }
+        },
+        {
+          "part": "banner",
+          "when": {
+            "interaction": "rest"
+          },
+          "radius": 28.0
+        },
+        {
+          "part": "banner",
+          "when": {
+            "interaction": "rest"
+          },
+          "variant": "warning",
+          "fill": {
+            "mix": [
+              {
+                "role": "warn"
+              },
+              {
+                "role": "surface"
+              }
+            ],
+            "first_fraction": 0.12
+          },
+          "stroke": {
+            "width": 1,
+            "color": {
+              "hex": "#00000000"
+            }
+          },
+          "stroke_edge": "all",
+          "foreground": {
+            "role": "warn"
+          }
+        },
+        {
+          "part": "banner",
+          "when": {
+            "interaction": "rest"
+          },
+          "variant": "error",
+          "fill": {
+            "role": "danger-bg"
+          },
+          "stroke": {
+            "width": 1,
+            "color": {
+              "hex": "#00000000"
+            }
+          },
+          "stroke_edge": "all",
+          "foreground": {
+            "role": "on-error-container"
+          }
+        },
+        {
+          "part": "dialog",
+          "when": {
+            "interaction": "rest"
+          },
+          "radius": 28.0,
+          "fill": {
+            "mix": [
+              {
+                "role": "primary"
+              },
+              {
+                "role": "surface-high"
+              }
+            ],
+            "first_fraction": 0.11
+          },
+          "stroke": {
+            "width": 1,
+            "color": {
+              "hex": "#00000000"
+            }
+          },
+          "stroke_edge": "all",
+          "shadow": []
+        },
+        {
+          "part": "popover",
+          "when": {
+            "interaction": "rest"
+          },
+          "radius": 4.0,
+          "fill": {
+            "mix": [
+              {
+                "role": "primary"
+              },
+              {
+                "role": "surface-muted"
+              }
+            ],
+            "first_fraction": 0.08
+          },
+          "stroke": {
+            "width": 1,
+            "color": {
+              "hex": "#00000000"
+            }
+          },
+          "stroke_edge": "all",
+          "shadow": [],
+          "metrics": {
+            "padding_block": 8.0,
+            "padding_inline": 8.0
+          }
+        },
+        {
+          "part": "menu.item",
+          "when": {
+            "interaction": "rest"
+          },
+          "radius": 0.0
+        },
+        {
+          "part": "menu.item",
+          "when": {
+            "interaction": "rest",
+            "focus_visible": true
+          },
+          "focus_rings": [
+            {
+              "width": 2.0,
+              "offset": -2.0,
+              "color": {
+                "role": "primary"
+              }
+            }
+          ]
+        },
+        {
+          "part": "badge",
+          "when": {
+            "interaction": "rest"
+          },
+          "radius": 8.0
+        },
+        {
+          "part": "chip",
+          "when": {
+            "interaction": "rest"
+          },
+          "radius": 8.0
+        },
+        {
+          "part": "kpi.row",
+          "when": {
+            "interaction": "rest"
+          },
+          "metrics": {
+            "column_gap": 12.0
+          }
+        },
+        {
+          "part": "kpi.cell",
+          "when": {
+            "interaction": "rest"
+          },
+          "stroke": {
+            "width": 0,
+            "color": {
+              "hex": "#00000000"
+            }
+          },
+          "stroke_edge": "start",
+          "radius": 12.0,
+          "fill": {
+            "role": "container-highest"
+          }
+        },
+        {
+          "part": "kpi.first",
+          "when": {
+            "interaction": "rest"
+          },
+          "metrics": {
+            "padding_start": 24.0
+          }
+        },
+        {
+          "part": "kpi.trigger",
+          "when": {
+            "interaction": "hover"
+          },
+          "fill": {
+            "mix": [
+              {
+                "role": "text"
+              },
+              {
+                "role": "surface"
+              }
+            ],
+            "first_fraction": 0.08
+          }
+        },
+        {
+          "part": "table.cell",
+          "when": {
+            "interaction": "hover"
+          },
+          "fill": {
+            "role": "hover"
+          }
+        },
+        {
+          "part": "list.row",
+          "when": {
+            "interaction": "rest"
+          },
+          "stroke": {
+            "width": 1,
+            "color": {
+              "role": "line-muted"
+            }
+          },
+          "stroke_edge": "bottom",
+          "metrics": {
+            "padding_start": 12.0,
+            "padding_inline": 12.0
+          }
+        },
+        {
+          "part": "timeline.item",
+          "when": {
+            "interaction": "rest"
+          },
+          "stroke": {
+            "width": 1,
+            "color": {
+              "role": "line-muted"
+            }
+          },
+          "stroke_edge": "bottom"
+        },
+        {
+          "part": "toast",
+          "when": {
+            "interaction": "rest"
+          },
+          "radius": 4.0,
+          "fill": {
+            "role": "inverse-surface"
+          },
+          "stroke": {
+            "width": 1,
+            "color": {
+              "hex": "#00000000"
+            }
+          },
+          "stroke_edge": "all",
+          "foreground": {
+            "role": "inverse-on-surface"
+          },
+          "shadow": []
+        },
+        {
+          "part": "toast",
+          "when": {
+            "interaction": "hover"
+          },
+          "fill": {
+            "role": "inverse-surface"
+          }
+        },
+        {
+          "part": "chart.card",
+          "when": {
+            "interaction": "rest"
+          },
+          "radius": 4.0
+        },
+        {
+          "part": "menu.radio",
+          "when": {
+            "interaction": "rest"
+          },
+          "radius": 999,
+          "decoration": "circle"
+        },
+        {
+          "part": "switch.track",
+          "when": {
+            "interaction": "rest"
+          },
+          "radius": 999.0,
+          "fill": {
+            "role": "container-highest"
+          },
+          "stroke": {
+            "width": 2,
+            "color": {
+              "role": "line"
+            }
+          },
+          "stroke_edge": "all"
+        },
+        {
+          "part": "switch.thumb",
+          "when": {
+            "interaction": "rest"
+          },
+          "radius": 999.0,
+          "fill": {
+            "role": "line"
+          }
+        },
+        {
+          "part": "switch.thumb",
+          "when": {
+            "interaction": "hover",
+            "checked": false
+          },
+          "fill": {
+            "role": "text-2"
+          }
+        },
+        {
+          "part": "switch.thumb",
+          "when": {
+            "interaction": "rest",
+            "checked": true
+          },
+          "metrics": {
+            "thumb_x": 16.0,
+            "thumb_y": 1.0,
+            "width": 14.0,
+            "height": 14.0
+          }
+        },
+        {
+          "part": "switch.thumb",
+          "when": {
+            "interaction": "hover",
+            "checked": true
+          },
+          "fill": {
+            "role": "primary-container"
+          }
+        },
+        {
+          "part": "section",
+          "when": {
+            "interaction": "rest"
+          },
+          "radius": 12.0,
+          "fill": {
+            "role": "surface-muted"
+          },
+          "metrics": {
+            "gap": 12.0,
+            "padding_block": 14.0,
+            "padding_inline": 16.0,
+            "padding_top": 14.0,
+            "padding_bottom": 16.0
+          }
+        },
+        {
+          "part": "tab.panel",
+          "when": {
+            "interaction": "rest"
+          },
+          "layout": "card_stack",
+          "metrics": {
+            "gap": 16.0
+          }
+        },
+        {
+          "part": "section.flat",
+          "when": {
+            "interaction": "rest",
+            "context": "nested_section"
+          },
+          "radius": 0.0,
+          "fill": {
+            "hex": "#00000000"
+          },
+          "layout": "flatten_nested",
+          "metrics": {
+            "gap": 16.0,
+            "padding_block": 0.0,
+            "padding_inline": 0.0
+          }
+        },
+        {
+          "part": "section.flat",
+          "when": {
+            "interaction": "rest",
+            "context": "overlay"
+          },
+          "radius": 0.0,
+          "fill": {
+            "hex": "#00000000"
+          },
+          "layout": "flatten_nested",
+          "metrics": {
+            "gap": 16.0,
+            "padding_block": 0.0,
+            "padding_inline": 0.0
+          }
+        },
+        {
+          "part": "kpi.trigger",
+          "when": {
+            "interaction": "rest",
+            "selected": true
+          },
+          "stroke": {
+            "width": 2,
+            "color": {
+              "hex": "#00000000"
+            }
+          },
+          "stroke_edge": "bottom",
+          "fill": {
+            "role": "secondary-container"
+          },
+          "foreground": {
+            "role": "on-secondary-container"
+          }
+        },
+        {
+          "part": "kpi.label",
+          "when": {
+            "interaction": "rest"
+          },
+          "decoration": "inherit_ink"
+        },
+        {
+          "part": "kpi.value",
+          "when": {
+            "interaction": "rest"
+          },
+          "decoration": "inherit_ink"
+        },
+        {
+          "part": "kpi.trigger",
+          "when": {
+            "interaction": "hover",
+            "selected": true
+          },
+          "fill": {
+            "mix": [
+              {
+                "role": "on-secondary-container"
+              },
+              {
+                "role": "secondary-container"
+              }
+            ],
+            "first_fraction": 0.08
+          }
+        },
+        {
+          "part": "input",
+          "when": {
+            "interaction": "rest",
+            "readonly": false
+          },
+          "fill": {
+            "hex": "#00000000"
+          }
+        },
+        {
+          "part": "segment.item",
+          "when": {
+            "interaction": "rest"
+          },
+          "metrics": {
+            "font_weight": 500
+          }
+        },
+        {
+          "part": "field.label",
+          "when": {
+            "interaction": "rest"
+          },
+          "metrics": {
+            "font_weight": 500
+          }
+        },
+        {
+          "part": "section.title",
+          "when": {
+            "interaction": "rest"
+          },
+          "metrics": {
+            "font_size": 22.0,
+            "font_weight": 400
+          }
+        },
+        {
+          "part": "shell.bar",
+          "when": {
+            "interaction": "rest"
+          },
+          "fill": {
+            "hex": "#00000000"
+          },
+          "stroke": {
+            "width": 1,
+            "color": {
+              "hex": "#00000000"
+            }
+          },
+          "stroke_edge": "bottom",
+          "metrics": {
+            "height": 64.0
+          }
+        },
+        {
+          "part": "shell.sidebar",
+          "when": {
+            "interaction": "rest"
+          },
+          "fill": {
+            "hex": "#00000000"
+          },
+          "stroke": {
+            "width": 1,
+            "color": {
+              "hex": "#00000000"
+            }
+          },
+          "stroke_edge": "end"
+        },
+        {
+          "part": "shell.title",
+          "when": {
+            "interaction": "rest"
+          },
+          "foreground": {
+            "role": "text"
+          },
+          "decoration": "plain_title",
+          "metrics": {
+            "font_size": 22.0,
+            "font_weight": 400
+          }
+        },
+        {
+          "part": "select.menu",
+          "when": {
+            "interaction": "rest"
+          },
+          "shadow": []
+        },
+        {
+          "part": "chart.card",
+          "when": {
+            "interaction": "rest"
+          },
+          "shadow": []
+        },
+        {
+          "part": "switch.track",
+          "when": {
+            "interaction": "rest",
+            "checked": true
+          },
+          "fill": {
+            "role": "primary"
+          },
+          "stroke": {
+            "width": 2,
+            "color": {
+              "role": "primary"
+            }
+          }
+        },
+        {
+          "part": "switch.thumb",
+          "when": {
+            "interaction": "rest",
+            "checked": true
+          },
+          "fill": {
+            "role": "on-primary"
+          }
+        }
+      ]
+    }
+  },
+  "typography": {
+    "family": "host:roboto",
+    "scale": "material_desktop"
+  },
+  "metrics": {
+    "control_height": 36,
+    "segment_height": 36,
+    "switch_width": 36,
+    "switch_height": 20
+  }
+}

@@ -8,7 +8,7 @@ use serde::{Deserialize, Serialize};
 // GatewayTarget / takeover_fields
 // ---------------------------------------------------------------------------
 
-/// One model class an agent is allowed to ask Zroutery for.
+/// One usage class or exact model an agent is allowed to ask Zroutery for.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct TierClass {
     /// The model id the agent puts in its request.
@@ -49,7 +49,7 @@ pub struct GatewayTarget {
     pub token: String,
     /// The model classes this agent may ask for.
     pub classes: Vec<TierClass>,
-    /// The class to make the agent's default, if any.
+    /// The offered usage class or exact model to make the agent's default, if any.
     ///
     /// `None` means the takeover does not touch the agent's model selection: the
     /// agent keeps whatever default it had and the user picks a class in the
@@ -126,7 +126,7 @@ pub fn takeover_fields(
     if target.classes.is_empty() {
         return Err(
             "cannot take over: Zroutery currently offers no model classes, so an agent pointed at \
-             it would have nothing to ask for. Assign a tier to at least one enabled model first."
+             it would have nothing to ask for. Configure at least one enabled model first."
                 .into(),
         );
     }
@@ -148,10 +148,10 @@ pub fn takeover_fields(
         if class.model.trim().is_empty() {
             return Err("cannot take over: a class was offered with an empty model id".into());
         }
-        // A dot in a model id would be read as a path separator by
+        // OpenCode embeds model ids in owned field paths. A dot would be read as a path separator by
         // `set_nested`/`extract_field_values` and land the value somewhere the
         // client never looks.
-        if class.model.contains('.') {
+        if agent == AgentType::OpenCode && class.model.contains('.') {
             return Err(format!(
                 "cannot take over: class model id `{}` contains a '.', which is the field-path \
                  separator",
@@ -185,7 +185,7 @@ pub fn takeover_fields(
                     // model's capabilities/prices for a heterogeneous class.
                     value: serde_json::json!({"replaceBuiltInOptions": true, "options": target.classes.iter().map(|class| serde_json::json!({
                         "model": class.model, "label": class.display_name,
-                        "description": "Zroutery candidate pool; actual capability and billing in Zroutery"
+                        "description": "Zroutery model or candidate pool; actual capability and billing in Zroutery"
                     })).collect::<Vec<_>>() }),
                 },
             ];

@@ -165,6 +165,10 @@ export function TextField({
         placeholder={placeholder}
         readOnly={readOnly}
         aria-label={ariaLabel}
+        // The dirty mark the drawer's Escape yield reads: Radix answers
+        // Escape in the capture phase, before this handler can mark the
+        // event, so the mark has to live on the element instead.
+        data-commit-dirty={draft !== value ? "" : undefined}
         onChange={(e) => setDraft(e.currentTarget.value)}
         onFocus={keys.onFocus}
         onBlur={keys.onBlur}
@@ -268,6 +272,8 @@ export function CompactNumber({
       step={integer ? 1 : "any"}
       placeholder={placeholder}
       aria-label={ariaLabel}
+      // Dirty mark for the drawer's Escape yield (see TextField).
+      data-commit-dirty={draft !== text ? "" : undefined}
       value={draft}
       onChange={(e) => setDraft(e.currentTarget.value)}
       onFocus={keys.onFocus}
@@ -322,6 +328,8 @@ export function CommitInput({
       value={draft}
       aria-label={ariaLabel}
       placeholder={placeholder}
+      // Dirty mark for the drawer's Escape yield (see TextField).
+      data-commit-dirty={draft !== value ? "" : undefined}
       onChange={(e) => setDraft(e.currentTarget.value)}
       onFocus={keys.onFocus}
       onBlur={keys.onBlur}
@@ -377,6 +385,8 @@ export function CommitNumber({
       max={max}
       step={integer ? 1 : "any"}
       value={draft}
+      // Dirty mark for the drawer's Escape yield (see TextField).
+      data-commit-dirty={draft !== text ? "" : undefined}
       onChange={(e) => setDraft(e.currentTarget.value)}
       onFocus={keys.onFocus}
       onBlur={keys.onBlur}

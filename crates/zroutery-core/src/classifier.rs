@@ -309,22 +309,34 @@ fn system_text(body: &Value) -> String {
 ///
 /// Guardian is a normal Responses request — same endpoint, same provider, no
 /// marker header — whose developer message contains the review policy and the
-/// JSON output contract. The phrases below are long and belong to that policy;
+/// native output contract (JSON outcome or the asynchronous high/low token).
+/// The phrases below are long and belong to that policy;
 /// a client prompt that happened to contain one would be asking the same
 /// question, which is the case this routing is for.
-fn is_codex_guardian(body: &Value, system: &str) -> bool {
+fn codex_guardian_kind(body: &Value, system: &str) -> Option<crate::query::SideQueryKind> {
     let responses_shaped = body.get("input").is_some() || body.get("instructions").is_some();
     if !responses_shaped {
-        return false;
+        return None;
     }
     let system = system.to_ascii_lowercase();
-    [
-        "first-step asynchronous security reviewer",
-        "prior guardian decisions are context, not precedent",
-        "you may use read-only tool checks to gather any additional context",
-    ]
-    .iter()
-    .any(|marker| system.contains(marker))
+    if system.contains("first-step asynchronous security reviewer") {
+        return Some(crate::query::SideQueryKind::CodexGuardianRisk);
+    }
+    let policy = system.contains("you are judging one planned coding-agent action")
+        || system.contains("prior guardian decisions are context, not precedent")
+        || system.contains("use prior reviews as context, not binding precedent");
+    let contract =
+        system.contains("outcome") && system.contains("allow") && system.contains("deny");
+    // A generic mention of read-only tools is not an approval request.
+    if (policy && contract)
+        || (contract
+            && system
+                .contains("you may use read-only tool checks to gather any additional context"))
+    {
+        Some(crate::query::SideQueryKind::CodexGuardian)
+    } else {
+        None
+    }
 }
 
 /// Classify one inbound request.
@@ -406,13 +418,15 @@ pub fn detect(headers: &HeaderMap, body: &Value, config: &DetectionConfig) -> De
             );
         }
     }
-    if config.builtins.codex_guardian_signature && is_codex_guardian(body, &system) {
-        return Detection {
-            kind: RequestKind::Side(crate::query::SideQueryKind::CodexGuardian),
-            confidence: 0.97,
-            matched: Some("codex-guardian".to_string()),
-            reasons: vec!["guardian_prompt"],
-        };
+    if config.builtins.codex_guardian_signature {
+        if let Some(kind) = codex_guardian_kind(body, &system) {
+            return Detection {
+                kind: RequestKind::Side(kind),
+                confidence: 0.97,
+                matched: Some("codex-guardian".to_string()),
+                reasons: vec!["guardian_prompt"],
+            };
+        }
     }
 
     // Levels 2 and 3: structural signatures, built-in first, then the user's.
@@ -628,6 +642,11 @@ pub fn parse_verdict_for(kind: RequestKind, text: &str) -> ClassifierVerdict {
         RequestKind::Side(crate::query::SideQueryKind::CodexGuardian) => {
             parse_guardian_verdict(text)
         }
+        RequestKind::Side(crate::query::SideQueryKind::CodexGuardianRisk) => match text.trim() {
+            "low" => ClassifierVerdict::Allow,
+            "high" => ClassifierVerdict::Block,
+            _ => ClassifierVerdict::Unparseable,
+        },
         _ => parse_verdict(text),
     }
 }
@@ -663,6 +682,14 @@ pub fn verdict_text_for(kind: RequestKind, verdict: ClassifierVerdict) -> String
     match kind {
         RequestKind::Side(crate::query::SideQueryKind::CodexGuardian) => {
             guardian_verdict_json(verdict)
+        }
+        RequestKind::Side(crate::query::SideQueryKind::CodexGuardianRisk) => {
+            if verdict == ClassifierVerdict::Allow {
+                "low"
+            } else {
+                "high"
+            }
+            .into()
         }
         _ => verdict_text(verdict),
     }
@@ -990,11 +1017,11 @@ mod tests {
     }
 
     #[test]
-    fn codex_guardian_review_is_detected_from_its_policy() {
+    fn codex_guardian_risk_is_detected_from_its_policy() {
         let d = detect_with(guardian_body());
         assert_eq!(
             d.kind,
-            RequestKind::Side(crate::query::SideQueryKind::CodexGuardian),
+            RequestKind::Side(crate::query::SideQueryKind::CodexGuardianRisk),
             "{d:?}"
         );
         assert!(d.confidence >= 0.85, "{d:?}");
@@ -1007,6 +1034,41 @@ mod tests {
         config.builtins.codex_guardian_signature = false;
         let d = detect(&HeaderMap::new(), &guardian_body(), &config);
         assert_eq!(d.kind, RequestKind::Main, "{d:?}");
+    }
+
+    #[test]
+    fn current_synchronous_guardian_policy_is_detected() {
+        let body = json!({"model":"m", "input":[], "instructions":
+            "You are judging one planned coding-agent action. Derive outcome from risk_level and user_authorization. Return allow or deny."});
+        assert_eq!(
+            detect_with(body).kind,
+            RequestKind::Side(crate::query::SideQueryKind::CodexGuardian)
+        );
+        let ordinary = json!({"model":"m", "input":[], "instructions":
+            "You may use read-only tool checks to gather any additional context while explaining this code."});
+        assert_eq!(detect_with(ordinary).kind, RequestKind::Main);
+    }
+
+    #[test]
+    fn asynchronous_guardian_uses_only_the_high_low_contract() {
+        let kind = RequestKind::Side(crate::query::SideQueryKind::CodexGuardianRisk);
+        assert_eq!(parse_verdict_for(kind, "low\n"), ClassifierVerdict::Allow);
+        assert_eq!(parse_verdict_for(kind, "high"), ClassifierVerdict::Block);
+        for invalid in ["", "looks safe", "low risk", "{\"outcome\":\"allow\"}"] {
+            assert_eq!(
+                parse_verdict_for(kind, invalid),
+                ClassifierVerdict::Unparseable
+            );
+        }
+        assert_eq!(verdict_text_for(kind, ClassifierVerdict::Allow), "low");
+        assert_eq!(
+            verdict_text_for(kind, ClassifierVerdict::Unparseable),
+            "high"
+        );
+        assert_eq!(
+            serde_json::to_string(&kind).unwrap(),
+            "\"codex_guardian_risk\""
+        );
     }
 
     #[test]

@@ -176,7 +176,10 @@ def main() -> int:
         page = handle.read()
     page = page.replace(
         "</body>",
-        layout.HARNESS.replace("__SNAPSHOT__", json.dumps(layout.SNAPSHOT)) + "</body>",
+        layout.HARNESS.replace("__SNAPSHOT__", json.dumps(layout.SNAPSHOT)).replace(
+            "__SKIN__",
+            'localStorage.setItem("zroutery-theme-ref", "industrial"); localStorage.setItem("zroutery-theme", "light");',
+        ) + "</body>",
     )
     with open(index, "w", encoding="utf-8") as handle:
         handle.write(page)
@@ -222,7 +225,7 @@ def main() -> int:
                     "the %s page door" % door,
                 )
                 if door != name:
-                    tab = "#tab-%s" % name
+                    tab = '[data-tab="%s"]' % name
                     devtools.wait_for(
                         "document.querySelector(%s) !== null" % json.dumps(tab),
                         "the %s page tab" % name,

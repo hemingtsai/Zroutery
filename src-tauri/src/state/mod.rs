@@ -37,6 +37,7 @@ pub struct Desktop {
     pub(crate) secrets: Arc<KeychainSecrets>,
     pub(crate) config_dir: PathBuf,
     pub(crate) runtime_path: PathBuf,
+    pub(crate) plugins: Arc<crate::plugins::PluginState>,
     pub(super) server: AsyncMutex<Option<ServerHandle>>,
     /// Serialises configuration changes and listener migration, so a save that
     /// has to rebind cannot interleave with a concurrent stop or save.
@@ -180,6 +181,7 @@ mod panel_balance_tests;
 mod ml;
 mod server;
 mod snapshot;
+pub(crate) use snapshot::config_revision;
 mod takeover;
 mod views;
 

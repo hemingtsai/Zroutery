@@ -70,6 +70,13 @@ impl Desktop {
     pub async fn remove_provider(&self, provider_id: &str) -> Result<Option<String>, String> {
         let _migration = self.migration.lock().await;
         let previous = self.core.config();
+        if previous
+            .plugin_instances
+            .iter()
+            .any(|instance| instance.id == provider_id)
+        {
+            return Err("plugin instances are retained; disable their package or clear a separately authorized slot".into());
+        }
         let provider = previous
             .provider(provider_id)
             .ok_or_else(|| format!("unknown provider `{provider_id}`"))?;
@@ -184,6 +191,16 @@ impl Desktop {
     ) -> Result<(), String> {
         let _migration = self.migration.lock().await;
         let mut next = (*self.core.config()).clone();
+        if let Some(instance) = next
+            .plugin_instances
+            .iter_mut()
+            .find(|instance| instance.id == provider_id)
+        {
+            instance.enabled = enabled;
+            store::save(&self.config_dir, &next)?;
+            self.core.set_config(next);
+            return Ok(());
+        }
         let provider = next
             .providers
             .iter_mut()
@@ -200,6 +217,29 @@ impl Desktop {
         // Tidy the alias lists and fold any legacy id the dashboard echoed back.
         next.normalize();
         let previous = self.core.config();
+        let mut projected = previous.plugin_instances.clone();
+        for instance in &mut projected {
+            instance.credentials.clear();
+            for account in &mut instance.accounts {
+                account.key_ref.clear();
+                for key in &mut account.inference_keys {
+                    key.key_ref.clear();
+                }
+            }
+        }
+        if next.plugin_instances != previous.plugin_instances && next.plugin_instances != projected
+        {
+            return Err("plugin instances and credential ownership must be edited through the scoped host flow".into());
+        }
+        next.plugin_instances = previous.plugin_instances.clone();
+        // IPC cannot deserialize the private Rust binding. A projected instance
+        // must not be saved as an executable native provider by an older client.
+        next.providers.retain(|provider| {
+            !previous
+                .plugin_instances
+                .iter()
+                .any(|instance| instance.id == provider.id)
+        });
         // Identity/credential versions are backend-owned publication facts.
         // A stale dashboard save cannot roll them back or rename them.
         for provider in &mut next.providers {

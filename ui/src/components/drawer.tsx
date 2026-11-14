@@ -3,41 +3,30 @@
  * instead of navigating — the interaction model of a desktop application
  * rather than a page-based admin tool.
  *
- * The veil is not the modal boundary: `aria-modal` promises that the rest of
- * the page is unreachable, so focus starts inside the drawer, Tab is kept
- * inside it, focus that lands outside is pulled back, and closing returns
- * focus to whatever opened it.
- *
- * The background is isolated rather than marked `inert`: the shell is a
- * *sibling* of the drawer, and `inert` on it stops Chromium from hit testing
- * the drawer's own controls as well, which leaves the visible drawer unusable
- * by mouse. The focus guard below gives the same keyboard guarantee without
- * that side effect.
+ * The modal behaviour is Radix's (@radix-ui/react-dialog): portal, veil,
+ * focus trap, focus restore to whatever opened the drawer, and Escape
+ * layering — a confirmation raised from inside the drawer is a nested layer
+ * and only the top one answers Escape. What this file owns is the surface's
+ * own classes, the save-status foot, and the two escape yields that Radix's
+ * capture-phase keydown would otherwise swallow: an IME composition owns its
+ * keys, and a dirty commit input restores its draft before the layer closes.
  */
-import { useEffect, useId, useRef, type ReactNode } from "react";
+import { useRef, type ReactNode } from "react";
+import * as DialogPrimitive from "@radix-ui/react-dialog";
 import { useI18n } from "../i18n";
 import { useSaveStatus } from "../saveQueue";
-import {
-  claimFocus,
-  isInsidePortalledOverlay,
-  popOverlay,
-  pushOverlay,
-  topOverlay,
-} from "./overlay";
 
 /**
  * Whether this drawer answers an Escape itself, or yields.
  *
- * Only the top overlay closes: a confirmation raised from inside the drawer
- * is a separate overlay, and Escape there belongs to the confirmation.
- * An IME composition owns its keys too — the Escape that cancels a candidate
- * must not close the layer the composer is typing into.
+ * An IME composition owns its keys — the Escape that cancels a candidate must
+ * not close the layer the composer is typing into.
  *
  * And a dirty commit input inside the drawer consumes the Escape first: it
  * restores its own draft and marks the event with `preventDefault`, and the
- * close yields to that mark. The next Escape finds the draft clean and
- * closes from here. Exported because the contract is worth asserting
- * directly; the drawer's keydown listener is a thin wrapper over it.
+ * close yields to that mark. The next Escape finds the draft clean and closes
+ * from here. Exported because the contract is worth asserting directly; the
+ * drawer's `onEscapeKeyDown` is a thin wrapper over it.
  */
 export function drawerEscapeCloses(
   e: { key: string; defaultPrevented: boolean; isComposing?: boolean; keyCode?: number | undefined },
@@ -59,11 +48,16 @@ export function Drawer({
   children: ReactNode;
   showSaveStatus?: boolean;
 }) {
-  const panel = useRef<HTMLElement>(null);
+  /*
+   * Focus comes back to whatever held it when the drawer opened. Captured
+   * during the mount render — before Radix's FocusScope moves the focus in,
+   * because effects run after the focus has already moved.
+   */
   const restoreTo = useRef<Element | null>(null);
-  const overlayId = useRef<symbol | null>(null);
-  if (overlayId.current === null) overlayId.current = Symbol("drawer");
-  const titleId = useId();
+  if (restoreTo.current === null) {
+    restoreTo.current =
+      document.activeElement instanceof HTMLElement ? document.activeElement : null;
+  }
   const { t } = useI18n();
   /*
    * Every drawer edits the one configuration, so every drawer carries the
@@ -74,120 +68,71 @@ export function Drawer({
    */
   const saveStatus = useSaveStatus();
 
-  useEffect(() => {
-    const id = overlayId.current!;
-    pushOverlay(id);
-    const previous = document.activeElement;
-    restoreTo.current = previous instanceof HTMLElement ? previous : null;
-    const first = panel.current?.querySelector<HTMLElement>(
-      "input, select, textarea, button:not([disabled]), [tabindex]:not([tabindex='-1'])",
-    );
-    (first ?? panel.current)?.focus();
-    // Nothing behind the drawer may hold focus while it is open — unless a
-    // modal is open on top of it, in which case that modal owns the focus and
-    // the two must not pull it back and forth.
-    const keepInside = (event: FocusEvent) => {
-      claimFocus(panel.current, id, event);
-    };
-    document.addEventListener("focusin", keepInside);
-    return () => {
-      document.removeEventListener("focusin", keepInside);
-      popOverlay(id);
-      const target = restoreTo.current;
-      if (target instanceof HTMLElement && target.isConnected) target.focus();
-    };
-  }, []);
-
-  useEffect(() => {
-    /*
-     * Escape closes in the bubble phase, on purpose. A commit input inside
-     * the drawer answers Escape first, at the React root: a dirty draft
-     * restores itself and marks the event with `preventDefault`, and this
-     * close yields to the mark — the first Escape restores the field, the
-     * next one, finding the draft clean, closes the drawer. Handled in the
-     * capture phase, the drawer would close first and the restore would
-     * never run.
-     */
-    const onEscape = (e: KeyboardEvent) => {
-      if (!drawerEscapeCloses(e, topOverlay() === overlayId.current)) return;
-      onClose();
-    };
-    // Bubble, not capture: the close must come after the fields inside have
-    // had their say (see above).
-    window.addEventListener("keydown", onEscape);
-    const onKey = (e: KeyboardEvent) => {
-      // Only the top overlay traps the keyboard.
-      if (e.key !== "Tab") return;
-      const root = panel.current;
-      if (!root) return;
-      // A portalled overlay that is open owns the keyboard while it is open —
-      // Radix traps the focus inside a select's own menu. The drawer's trap
-      // must not reach in and take it back, or Shift+Tab from the first option
-      // would throw the user out of the menu into the drawer behind it.
-      if (isInsidePortalledOverlay(document.activeElement ?? root)) return;
-      const focusable = Array.from(
-        root.querySelectorAll<HTMLElement>(
-          "a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex='-1'])",
-        ),
-      ).filter((el) => el.offsetParent !== null || el === document.activeElement);
-      if (focusable.length === 0) return;
-      const first = focusable[0];
-      const last = focusable[focusable.length - 1];
-      const active = document.activeElement;
-      if (e.shiftKey && (active === first || !root.contains(active))) {
-        e.preventDefault();
-        last.focus();
-      } else if (!e.shiftKey && active === last) {
-        e.preventDefault();
-        first.focus();
-      }
-    };
-    // The Tab trap stays in the capture phase: it has to win against whatever
-    // would move the focus out of a modal surface.
-    window.addEventListener("keydown", onKey, true);
-    return () => {
-      window.removeEventListener("keydown", onEscape);
-      window.removeEventListener("keydown", onKey, true);
-    };
-  }, [onClose]);
-
   return (
-    <>
-      <div className="drawer-veil" onClick={onClose} aria-hidden />
-      <aside
-        ref={panel}
-        className="drawer"
-        role="dialog"
-        aria-modal="true"
-        aria-labelledby={titleId}
-        tabIndex={-1}
-      >
-        <header className="drawer-head">
-          <div className="drawer-title" id={titleId}>
-            {title}
-          </div>
-          <button type="button" className="linky" onClick={onClose} title={t("common.close")} aria-label={t("common.close")}>
-            ×
-          </button>
-        </header>
-        <div className="drawer-body">{children}</div>
-        {showSaveStatus && saveStatus.phase !== "idle" && (
-          <footer
-            className={`drawer-foot${
-              saveStatus.phase === "error" ? " drawer-foot-error" : ""
-            }`}
-            role="status"
-          >
-            {saveStatus.phase === "saving" && t("drawer.saving")}
-            {saveStatus.phase === "saved" &&
-              t("drawer.saved", {
-                time: new Date(saveStatus.at).toLocaleTimeString([], { hour12: false }),
-              })}
-            {saveStatus.phase === "error" &&
-              t("drawer.save_failed", { err: saveStatus.message })}
-          </footer>
-        )}
-      </aside>
-    </>
+    <DialogPrimitive.Root
+      open
+      onOpenChange={(open) => {
+        if (!open) onClose();
+      }}
+    >
+      <DialogPrimitive.Portal>
+        <DialogPrimitive.Overlay className="drawer-veil" aria-hidden />
+        <DialogPrimitive.Content
+          className="drawer"
+          tabIndex={-1}
+          onCloseAutoFocus={(event) => {
+            const target = restoreTo.current;
+            restoreTo.current = null;
+            if (target instanceof HTMLElement && target.isConnected) target.focus();
+            event.preventDefault();
+          }}
+          onEscapeKeyDown={(event) => {
+            // Radix answers Escape in the capture phase on the document, so
+            // this runs before a field's own keydown. The yields below keep
+            // the drawer's contract: IME owns its keys, and a dirty commit
+            // input restores its draft first — the input marks itself with
+            // `data-commit-dirty`, and its restore still runs in its own
+            // handler afterwards. The first Escape restores the field, the
+            // next one, finding the draft clean, closes the drawer.
+            if (!drawerEscapeCloses(event, true)) {
+              event.preventDefault();
+              return;
+            }
+            const active = document.activeElement;
+            if (active instanceof HTMLElement && active.hasAttribute("data-commit-dirty")) {
+              event.preventDefault();
+            }
+          }}
+        >
+          <header className="drawer-head">
+            <DialogPrimitive.Title className="drawer-title">{title}</DialogPrimitive.Title>
+            <DialogPrimitive.Close
+              className="linky"
+              title={t("common.close")}
+              aria-label={t("common.close")}
+            >
+              ×
+            </DialogPrimitive.Close>
+          </header>
+          <div className="drawer-body">{children}</div>
+          {showSaveStatus && saveStatus.phase !== "idle" && (
+            <footer
+              className={`drawer-foot${
+                saveStatus.phase === "error" ? " drawer-foot-error" : ""
+              }`}
+              role="status"
+            >
+              {saveStatus.phase === "saving" && t("drawer.saving")}
+              {saveStatus.phase === "saved" &&
+                t("drawer.saved", {
+                  time: new Date(saveStatus.at).toLocaleTimeString([], { hour12: false }),
+                })}
+              {saveStatus.phase === "error" &&
+                t("drawer.save_failed", { err: saveStatus.message })}
+            </footer>
+          )}
+        </DialogPrimitive.Content>
+      </DialogPrimitive.Portal>
+    </DialogPrimitive.Root>
   );
 }

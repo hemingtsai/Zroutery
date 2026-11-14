@@ -143,6 +143,10 @@ async fn mock_openai_chat(
             })
         } else if model.starts_with("think") {
             json!({"role": "assistant", "content": "final", "reasoning_content": "reasoning"})
+        } else if model == "guardian-risk" {
+            json!({"role":"assistant", "content":"low"})
+        } else if model == "guardian-review" {
+            json!({"role":"assistant", "content":"{\"outcome\":\"allow\"}"})
         } else if ["stop", "stop_sequences"].iter().any(|key| {
             body[key]
                 .as_array()
@@ -192,6 +196,17 @@ async fn mock_openai_chat(
             Value::Null,
         ));
         sse.push_str(&chunk(json!({}), json!("tool_calls")));
+    } else if matches!(model.as_str(), "guardian-risk" | "guardian-review") {
+        let text = if model == "guardian-risk" {
+            "low"
+        } else {
+            "{\"outcome\":\"allow\"}"
+        };
+        sse.push_str(&chunk(
+            json!({"role":"assistant", "content":text}),
+            Value::Null,
+        ));
+        sse.push_str(&chunk(json!({}), json!("stop")));
     } else {
         sse.push_str(&chunk(
             json!({"role": "assistant", "content": ""}),
@@ -1013,6 +1028,47 @@ async fn classifier_requests_route_to_the_classifier_pool() {
         .any(|k| k.kind == "auto_mode" && k.requests == 1));
 
     h.shutdown().await;
+}
+
+#[tokio::test]
+async fn codex_guardian_risk_and_review_keep_their_native_contracts() {
+    for (model, instructions, answer, kind) in [
+        ("guardian-risk", "You are acting as a first-step asynchronous security reviewer. Your first output token is high or low.", "low", "codex_guardian_risk"),
+        ("guardian-review", "You are judging one planned coding-agent action. Derive outcome from risk_level and user_authorization. Return allow or deny.", "{\"outcome\":\"allow\"}", "codex_guardian"),
+    ] {
+        let (addr, mock) = start_mock().await;
+        let mut cfg = config_for(addr);
+        cfg.models[1].upstream_model = model.into();
+        cfg.classifier.enabled = true;
+        cfg.classifier.candidates = vec![zroutery_core::config::ClassifierCandidate {
+            model: format!("deepseek-{model}"), priority: 0, enabled: true,
+        }];
+        let h = Harness::start(cfg, mock).await;
+        for streaming in [false, true] {
+            let response = h.post("/v1/responses").json(&json!({
+                "model":"client-review-alias-not-in-registry", "stream":streaming,
+                "instructions":instructions, "input":[{"role":"user", "content":"Review this planned file read."}]
+            })).send().await.unwrap();
+            let status = response.status();
+            let text = response.text().await.unwrap();
+            assert_eq!(status, 200, "{text}");
+            if streaming {
+                assert!(text.contains("response.completed"), "{text}");
+                assert!(!text.contains("<block>"), "{text}");
+                let completed = text.lines().filter_map(|line| line.strip_prefix("data: "))
+                    .filter_map(|data| serde_json::from_str::<Value>(data).ok())
+                    .find(|event| event["type"] == "response.completed").unwrap();
+                assert_eq!(completed["response"]["output"][0]["content"][0]["text"], answer);
+            } else {
+                let body: Value = serde_json::from_str(&text).unwrap();
+                assert_eq!(body["output"][0]["content"][0]["text"], answer);
+            }
+        }
+        assert_eq!(h.mock.count(), 2);
+        assert!(h.mock.bodies().iter().all(|body| body["model"] == model));
+        assert!(h.state.stats().recent(2).iter().all(|record| record.kind.as_str() == kind && record.ok));
+        h.shutdown().await;
+    }
 }
 
 #[tokio::test]

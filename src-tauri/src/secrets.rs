@@ -25,6 +25,8 @@ pub type Fallback = Arc<dyn Fn(&str) -> Option<String> + Send + Sync>;
 pub enum StoreError {
     /// There is no entry under this reference. Deleting one is a success.
     NoEntry,
+    /// Access to the platform store is currently locked or denied.
+    Locked,
     /// Anything else the platform reported: access denied, a locked store, a
     /// storage failure.
     Backend(String),
@@ -34,6 +36,7 @@ impl std::fmt::Display for StoreError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             StoreError::NoEntry => write!(f, "no such entry"),
+            StoreError::Locked => write!(f, "credential store is locked"),
             StoreError::Backend(message) => write!(f, "{message}"),
         }
     }
@@ -90,6 +93,7 @@ impl CredentialBackend for KeyringBackend {
 fn backend_error(error: keyring::Error) -> StoreError {
     match error {
         keyring::Error::NoEntry => StoreError::NoEntry,
+        keyring::Error::NoStorageAccess(_) => StoreError::Locked,
         other => StoreError::Backend(other.to_string()),
     }
 }
@@ -168,6 +172,9 @@ impl KeychainSecrets {
     }
 
     pub fn set(&self, key_ref: &str, secret: &str) -> Result<(), String> {
+        if key_ref.starts_with("plugin:") {
+            return Err("plugin credential requires scoped ownership".into());
+        }
         self.backend
             .set(key_ref, secret)
             .map_err(|e| format!("cannot store key in keychain: {e}"))?;
@@ -178,6 +185,9 @@ impl KeychainSecrets {
     /// Remove the credential. A missing entry is not an error; every other
     /// failure is, and it must not look like the key was removed.
     pub fn delete(&self, key_ref: &str) -> Result<(), String> {
+        if key_ref.starts_with("plugin:") {
+            return Err("plugin credential requires scoped ownership".into());
+        }
         match self.backend.delete(key_ref) {
             Ok(()) | Err(StoreError::NoEntry) => {
                 // Only a confirmed deletion (or a confirmed absence) may mark
@@ -185,6 +195,9 @@ impl KeychainSecrets {
                 // otherwise reappear after a restart.
                 self.cached(key_ref, None);
                 Ok(())
+            }
+            Err(StoreError::Locked) => {
+                Err("cannot remove the stored key: credential store is locked".into())
             }
             Err(StoreError::Backend(message)) => Err(format!(
                 "cannot remove the stored key from the keychain: {message}"
@@ -196,6 +209,24 @@ impl KeychainSecrets {
         self.get(key_ref).is_some_and(|k| !k.is_empty())
     }
 
+    /// Plugin operations use the same backend/service, but NEVER the legacy
+    /// headless environment fallback or an unscoped native cache entry.
+    /// Ownership and grant revision must have been checked before calling this.
+    pub(crate) fn keyring_only(&self, key_ref: &str) -> Result<String, StoreError> {
+        self.backend.get(key_ref)
+    }
+
+    pub(crate) fn set_keyring_only(&self, key_ref: &str, secret: &str) -> Result<(), StoreError> {
+        self.backend.set(key_ref, secret)
+    }
+
+    pub(crate) fn delete_keyring_only(&self, key_ref: &str) -> Result<(), StoreError> {
+        match self.backend.delete(key_ref) {
+            Ok(()) | Err(StoreError::NoEntry) => Ok(()),
+            Err(error) => Err(error),
+        }
+    }
+
     fn cached(&self, key_ref: &str, value: Option<String>) {
         write(&self.cache).insert(key_ref.to_string(), value);
     }
@@ -203,6 +234,9 @@ impl KeychainSecrets {
 
 impl SecretStore for KeychainSecrets {
     fn get(&self, key_ref: &str) -> Option<String> {
+        if key_ref.starts_with("plugin:") {
+            return None;
+        }
         if let Some(hit) = read(&self.cache).get(key_ref) {
             return hit.clone();
         }

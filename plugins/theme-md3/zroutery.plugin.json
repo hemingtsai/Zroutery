@@ -1,0 +1,14 @@
+{
+  "manifest_version": 1,
+  "id": "org.zroutery.theme.md3",
+  "version": "1.0.0",
+  "name": { "en": "Material 3", "zh-CN": "Material 3", "zh-TW": "Material 3" },
+  "host_api": { "major": 1, "min_minor": 0 },
+  "runtime": null,
+  "requires": [],
+  "permissions": [{
+    "capability": "theme.contribute", "principal": "theme", "contributions": ["md3"],
+    "reason": { "en": "Apply colors and host component recipes", "zh-CN": "应用颜色与宿主组件配方", "zh-TW": "套用色彩與宿主元件配方" }
+  }],
+  "contributions": { "themes": [{ "id": "md3", "file": "theme.json" }] }
+}

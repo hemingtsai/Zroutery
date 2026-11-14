@@ -51,12 +51,24 @@ DIST = os.path.join(ROOT, "ui", "dist")
 # be the expectation for every kind, so the expectation is per kind.
 EXPECTED_CONTROL_HEIGHT = 30.0
 EXPECTED_SEGMENT_HEIGHT = 36.0
-KIND_HEIGHTS = {
-    "native": EXPECTED_CONTROL_HEIGHT,
-    "combobox": EXPECTED_CONTROL_HEIGHT,
-    "action": EXPECTED_CONTROL_HEIGHT,
-    "segment": EXPECTED_SEGMENT_HEIGHT,
-}
+# skin-spec v3.1 appendix: the control height is per skin — industrial keeps
+# the 30px this stub was built on, MD3 takes the official 36px compromise and
+# Fluent the WinUI 32px. The compiled theme root sets `--control-h`, so the
+# same control must measure its skin's height, not industrial's.
+SKIN_CONTROL_HEIGHTS = {"industrial": 30.0, "md3": 36.0, "fluent": 32.0}
+THEME_REFS = {"md3": "org.zroutery.theme.md3", "fluent": "org.zroutery.theme.fluent"}
+ACTIVE_SKIN = "industrial"
+
+
+def kind_heights() -> dict[str, float]:
+    """Height expectations for the active skin (see --skin)."""
+    control = SKIN_CONTROL_HEIGHTS[ACTIVE_SKIN]
+    return {
+        "native": control,
+        "combobox": control,
+        "action": control,
+        "segment": EXPECTED_SEGMENT_HEIGHT,
+    }
 # Controls on one flex line share a top, give or take an action group's offset;
 # the next line starts a whole control lower.
 TOLERANCE = 0.6
@@ -518,6 +530,11 @@ HARNESS = """
   // declared in M2). The inline script runs before the deferred bundle, so
   // the preference is in place before the app reads it.
   localStorage.setItem("zroutery-mode", "geek");
+  // The plugin theme ref and a fixed light mode, seeded before the deferred
+  // bundle reads them, so the run measures the requested skin's own
+  // `--control-h` and recipes rather than industrial's. main() replaces this
+  // placeholder with the storage calls for the requested skin.
+  __SKIN__
   // Stub the Tauri bridge so the real dashboard renders in a plain browser.
   const SNAPSHOT = __SNAPSHOT__;
   const USAGE_DAYS = [
@@ -664,7 +681,7 @@ HARNESS = """
             ? { local: { source_name: "This device", revision: 1, summary: SNAPSHOT.summary, recent: SNAPSHOT.recent, days: USAGE_DAYS }, standby: null }
           : cmd === "get_imported_usage"
             ? { totals: { requests: 0, failures: 0, input_tokens: 0, output_tokens: 0, cache_read_tokens: 0, cache_write_tokens: 0, unpriced_requests: 0, suspected_requests: 0, aggregate_requests: 0, cost: {} }, days: [] }
-          : cmd === "pending_usage_history_imports" || cmd === "discover_usage_history_sources" || cmd === "get_usage_attempts"
+           : cmd === "pending_usage_history_imports" || cmd === "discover_usage_history_sources" || cmd === "get_usage_attempts" || cmd === "list_plugins" || cmd === "get_plugin_themes"
             ? []
           : cmd === "takeover_status"
             ? TAKEOVER
@@ -819,7 +836,7 @@ SURFACES = (
         # The add form is folded under the page head's 添加模型 link; the
         # harness unfolds it the way a reader does before measuring.
         unfold=0,
-        unfold_anchor="#panel-models input[placeholder='deepseek-chat']",
+        unfold_anchor="[data-panel=models] input[placeholder='deepseek-chat']",
     ),
     Surface(
         "providers",
@@ -829,7 +846,7 @@ SURFACES = (
         anchor=".list-row",
         # Same fold: 添加提供商 is the page head's first action.
         unfold=0,
-        unfold_anchor="#panel-providers .field-actions",
+        unfold_anchor='[data-panel="providers"] .field-actions',
     ),
     Surface(
         "accounts",
@@ -893,7 +910,7 @@ SURFACES = (
         tab="budgets",
         unfold=0,
         unfold_selector=".section-head button.linky",
-        unfold_anchor="#panel-budgets .section > .controls",
+        unfold_anchor='[data-panel="budgets"] .section > .controls',
     ),
     Surface(
         "history-import",
@@ -973,8 +990,9 @@ def judge(row: dict) -> Verdict:
     for item in row["items"]:
         kinds.setdefault(item["kind"], []).append(item["height"])
     sized = True
+    heights_by_kind = kind_heights()
     for kind, values in kinds.items():
-        expected = KIND_HEIGHTS[kind]
+        expected = heights_by_kind[kind]
         if max(values) - min(values) > TOLERANCE:
             sized = False
         if any(abs(value - expected) > TOLERANCE for value in values):
@@ -1454,6 +1472,11 @@ def measure_surfaces(devtools: DevTools) -> dict[str, dict]:
             "routing": "models",
             "cutover": "takeover",
         }.get(surface.nav, surface.nav)
+        # Sub-areas and tab doors scope their anchor to the visible panel;
+        # the other surfaces (overview, settings, activity, drawers) keep the
+        # document-wide anchor. The branches below overwrite this when they
+        # apply.
+        anchor_target = surface.anchor
         door_selector = '[data-page="%s"]' % door
         devtools.click(devtools.element(door_selector))
         devtools.wait_for(
@@ -1462,7 +1485,7 @@ def measure_surfaces(devtools: DevTools) -> dict[str, dict]:
             "the %s task door" % door,
         )
         if surface.nav != door:
-            area_selector = "#tab-%s" % surface.nav
+            area_selector = '[data-tab="%s"]' % surface.nav
             devtools.wait_for(
                 "document.querySelector(%s) !== null" % json.dumps(area_selector),
                 "the %s task tab" % surface.nav,
@@ -1473,11 +1496,20 @@ def measure_surfaces(devtools: DevTools) -> dict[str, dict]:
                 % json.dumps(area_selector),
                 "the selected %s task tab" % surface.nav,
             )
+            # Radix keeps an inactive panel mounted but `hidden`, and the tab
+            # click can land while the sub-area's lazy chunk is still loading —
+            # React then hides the whole suspended tree and the previous
+            # panel's anchor would satisfy a generic wait. The anchor only
+            # counts inside the visible sub-area panel (the panel is named by
+            # the tab value, not by the door).
+            anchor_target = '[data-panel="%s"]:not([hidden]) %s' % (surface.nav, surface.anchor)
         elif surface.nav in {"models", "providers", "takeover"}:
             # The door itself is also the first tab. Lazy loading may leave the
             # previous page visible briefly after aria-current moves, so wait
-            # for this task's actual panel before accepting a generic anchor.
-            panel_selector = "#panel-%s" % surface.nav
+            # for this task's actual visible panel before accepting a generic
+            # anchor (Radix keeps hidden panels in the document).
+            anchor_target = '[data-panel="%s"]:not([hidden]) %s' % (surface.nav, surface.anchor)
+            panel_selector = '[data-panel="%s"]:not([hidden])' % surface.nav
             devtools.wait_for(
                 "document.querySelector(%s) !== null" % json.dumps(panel_selector),
                 "the %s task panel" % surface.nav,
@@ -1485,7 +1517,7 @@ def measure_surfaces(devtools: DevTools) -> dict[str, dict]:
         elif surface.nav == "activity" and surface.tab is not None:
             try:
                 devtools.wait_for(
-                    "document.querySelector('#tab-usage') !== null",
+                    "document.querySelector('[data-tab=usage]') !== null",
                     "the mounted Usage tabs before the %s surface" % surface.label,
                     timeout=15.0,
                 )
@@ -1508,10 +1540,13 @@ def measure_surfaces(devtools: DevTools) -> dict[str, dict]:
         else:
             tabs = surface.tab
 
+        # Sub-areas and tab doors scope their anchor to the visible panel; the
+        # other surfaces (overview, settings, activity, drawers) keep the
+        # document-wide anchor.
         merged = {"surface": surface.id, "rows": [], "controls": 0, "kinds": {}}
         for tab in tabs:
             if tab is not None:
-                selector = "#tab-%s" % tab
+                selector = '[data-tab="%s"]' % tab
                 diagnostic = devtools.evaluate(
                     "JSON.stringify({mode:localStorage.getItem('zroutery-mode'), "
                     "active:document.querySelector('.nav-item[aria-current=page]')?.textContent, "
@@ -1532,11 +1567,11 @@ def measure_surfaces(devtools: DevTools) -> dict[str, dict]:
             anchor_state = devtools.evaluate(
                 "JSON.stringify({anchor:%s, tabs:[...document.querySelectorAll('[role=tab]')].map(el=>({id:el.id, selected:el.getAttribute('aria-selected')})), "
                 "panels:[...document.querySelectorAll('[role=tabpanel]')].map(el=>el.id), errors:window.__zrErrors})"
-                % json.dumps(surface.anchor)
+                % json.dumps(anchor_target)
             )
             devtools.wait_for(
-                "document.querySelector(%s) !== null" % json.dumps(surface.anchor),
-                "%s (state %s)" % (surface.anchor, anchor_state),
+                "document.querySelector(%s) !== null" % json.dumps(anchor_target),
+                "%s (state %s)" % (anchor_target, anchor_state),
             )
             if surface.drawer is not None:
                 devtools.click(devtools.element(surface.drawer_selector, surface.drawer))
@@ -1618,15 +1653,28 @@ def report(measured: dict[str, dict]) -> int:
         return 1
     total = sum(result["controls"] for result in measured.values())
     print(
-        "all %d declared surfaces measured, %d controls on one baseline per line "
-        "and at their own kind's height (* = has hint text)" % (len(SURFACES), total)
+        "skin %s: all %d declared surfaces measured, %d controls on one baseline per line "
+        "and at their own kind's height (* = has hint text)"
+        % (ACTIVE_SKIN, len(SURFACES), total)
     )
     return 0
 
 
 def main() -> int:
+    global ACTIVE_SKIN
     if "--self-test" in sys.argv:
         return self_test()
+    args = sys.argv[1:]
+    if "--skin" in args:
+        at = args.index("--skin")
+        try:
+            ACTIVE_SKIN = args[at + 1]
+        except IndexError:
+            print("--skin needs a value: industrial, md3 or fluent")
+            return 2
+        if ACTIVE_SKIN not in SKIN_CONTROL_HEIGHTS:
+            print("unknown skin %r; use industrial, md3 or fluent" % ACTIVE_SKIN)
+            return 2
     if not os.path.exists(os.path.join(DIST, "index.html")):
         print("ui/dist is missing; run `pnpm --dir ui build` first")
         return 2
@@ -1640,8 +1688,13 @@ def main() -> int:
     index = os.path.join(stage, "index.html")
     with open(index) as fh:
         page = fh.read()
+    skin = 'localStorage.setItem("zroutery-theme-ref", %s); localStorage.setItem("zroutery-theme", "light");' % json.dumps(
+        THEME_REFS.get(ACTIVE_SKIN, "industrial")
+    )
     page = page.replace(
-        "</body>", HARNESS.replace("__SNAPSHOT__", json.dumps(SNAPSHOT)) + "</body>"
+        "</body>",
+        HARNESS.replace("__SNAPSHOT__", json.dumps(SNAPSHOT)).replace("__SKIN__", skin)
+        + "</body>",
     )
     with open(index, "w") as fh:
         fh.write(page)

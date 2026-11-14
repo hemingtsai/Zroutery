@@ -410,6 +410,9 @@ impl Desktop {
         };
         let live = crate::secret_refs::referenced_secrets(&self.core.config());
         for publication in runtime.pending_inference_publications()? {
+            if publication.staged_ref.starts_with("plugin:") {
+                continue;
+            }
             if live.contains(&publication.staged_ref) {
                 // The save landed; the staging reference is now the live one.
                 runtime.complete_inference_publication(&publication.id)?;

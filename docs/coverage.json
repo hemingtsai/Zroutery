@@ -186,6 +186,11 @@
       "module": "sync",
       "status": "covered_elsewhere",
       "where": "private lock helper; no public behaviour"
+    },
+    {
+      "module": "plugin",
+      "status": "unowned",
+      "reason": "new in the integrated upstream change; a reference page follows in the next documentation change"
     }
   ]
 }

@@ -2702,6 +2702,75 @@ fn takeover_fields_refuses_an_unusable_target() {
         .contains("field-path separator"));
 }
 
+#[test]
+fn exact_models_are_native_defaults_without_owning_approval_policy() {
+    let mut target = a_target();
+    target.classes = vec![TierClass {
+        model: "provider-specific-model".into(),
+        display_name: "Specific model".into(),
+        ..Default::default()
+    }];
+    target.default_class = Some("provider-specific-model".into());
+    for agent in [AgentType::Claude, AgentType::Codex, AgentType::OpenCode] {
+        let fields = takeover_fields(agent, &target, None).unwrap();
+        let expected = if agent == AgentType::OpenCode {
+            "zroutery/provider-specific-model"
+        } else {
+            "provider-specific-model"
+        };
+        assert!(fields
+            .iter()
+            .any(|field| field.path == "model" && field.value == expected));
+        assert!(!fields.iter().any(|field| field.path.contains("approval")
+            || field.path.contains("sandbox")
+            || field.path.contains("permissions")));
+    }
+}
+
+#[test]
+fn exact_model_selection_restores_the_previous_client_default() {
+    super::isolate_agent_home();
+    let home = super::isolated_agent_home().unwrap();
+    let path = home.join(".claude").join("settings.json");
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    let original = serde_json::json!({
+        "model":"previous-model",
+        "permissions":{"defaultMode":"manual"},
+        "env":{"UNRELATED":"keep"}
+    });
+    std::fs::write(&path, original.to_string()).unwrap();
+    let mut target = a_target();
+    target.classes = vec![TierClass {
+        model: "provider-model.v2".into(),
+        display_name: "Exact model".into(),
+        ..Default::default()
+    }];
+    target.default_class = Some("provider-model.v2".into());
+    let snapshot = ClaudeAdapter.read_config().unwrap();
+    let fields = takeover_fields(AgentType::Claude, &target, Some(&snapshot.raw)).unwrap();
+    let paths = fields
+        .iter()
+        .map(|field| field.path.clone())
+        .collect::<Vec<_>>();
+    let store = TakeoverStore::new();
+    store
+        .adopt(paths.clone(), &extract_field_values(&snapshot.raw, &paths))
+        .unwrap();
+    let patched = ClaudeAdapter.apply_patch(&snapshot, &fields).unwrap();
+    store
+        .record_applied(
+            &fields
+                .iter()
+                .map(|field| (field.path.clone(), field.value.clone()))
+                .collect(),
+        )
+        .unwrap();
+    assert_eq!(patched.raw["model"], "provider-model.v2");
+    assert_eq!(patched.raw["permissions"], original["permissions"]);
+    store.release_with_restore(&ClaudeAdapter).unwrap();
+    assert_eq!(ClaudeAdapter.read_config().unwrap().raw, original);
+}
+
 #[cfg(unix)]
 #[test]
 fn apply_patch_preserves_restrictive_file_mode() {

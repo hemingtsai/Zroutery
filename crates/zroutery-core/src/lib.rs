@@ -46,6 +46,8 @@ pub mod models_dev;
 pub mod observability;
 pub mod observation;
 pub mod outcome;
+#[cfg(feature = "plugin")]
+pub mod plugin;
 pub mod policy;
 pub mod protocol;
 pub mod query;

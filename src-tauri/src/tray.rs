@@ -35,6 +35,7 @@ struct Labels {
     copy_url: &'static str,
     copy_token: &'static str,
     quit: &'static str,
+    safe_appearance: &'static str,
 }
 
 fn labels() -> Labels {
@@ -47,6 +48,7 @@ fn labels() -> Labels {
             copy_url: "复制 Base URL",
             copy_token: "复制令牌",
             quit: "退出 Zroutery",
+            safe_appearance: "安全外观（禁用主题）",
         }
     } else {
         Labels {
@@ -57,6 +59,7 @@ fn labels() -> Labels {
             copy_url: "Copy base URL",
             copy_token: "Copy API token",
             quit: "Quit Zroutery",
+            safe_appearance: "Safe appearance (disable themes)",
         }
     }
 }
@@ -97,6 +100,13 @@ pub fn build(app: &AppHandle) -> tauri::Result<()> {
     let copy_url = MenuItem::with_id(app, "copy_url", l.copy_url, true, None::<&str>)?;
     let copy_token = MenuItem::with_id(app, "copy_token", l.copy_token, true, None::<&str>)?;
     let quit = MenuItem::with_id(app, "quit", l.quit, true, None::<&str>)?;
+    let safe = MenuItem::with_id(
+        app,
+        "safe_appearance",
+        l.safe_appearance,
+        true,
+        None::<&str>,
+    )?;
 
     let menu = Menu::with_items(
         app,
@@ -111,6 +121,7 @@ pub fn build(app: &AppHandle) -> tauri::Result<()> {
             &copy_token,
             &PredefinedMenuItem::separator(app)?,
             &quit,
+            &safe,
         ],
     )?;
 
@@ -158,6 +169,10 @@ fn on_menu_event(app: &AppHandle, event: tauri::menu::MenuEvent) {
         "open" => show_dashboard(&app),
         "panel" => crate::tray_panel::show_at_cursor(&app),
         "quit" => quit(&app),
+        "safe_appearance" => {
+            crate::plugins::commands::recover_appearance(&app);
+            show_dashboard(&app);
+        }
         "toggle" => {
             tauri::async_runtime::spawn(async move {
                 let Some(desktop) = app.try_state::<Arc<Desktop>>().map(|s| s.inner().clone())

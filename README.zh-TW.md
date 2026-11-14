@@ -18,6 +18,7 @@ Zroutery 是一個本機 LLM 閘道：把多家模型供應商接到同一個本
 ## 功能
 
 - **多協定**：支援 Anthropic、OpenAI Chat、OpenAI Responses、Gemini 四種客戶端協定；上游支援 Anthropic、OpenAI 相容（Chat Completions 或 Responses）以及 OpenCode Zen/Console。
+- **主題與外掛**：儀表板內建資料主題（權杖來源固定），桌面建置包含依能力授權的外掛宿主；未啟用 `plugin` feature 的建置不會啟用任何外掛宣告。
 - **模型分級**：模型分為 fast / standard / reasoning / frontier 四級，客戶端只寫 `standard-class`，由優先順序、路由策略和上游健康狀態決定實際使用的模型。
 - **失敗轉移**：依錯誤類型決定重試或切換模型；模型連續失敗會觸發斷路器，斷路期間以半開探測確認恢復，失敗轉移次數和斷路器參數皆可設定。
 - **預算控制**：依總量、供應商或層級設定日 / 月上限，超限後可拒絕請求或自動降級到較便宜的層級；帳本落盤，重新啟動不會遺失。
@@ -149,6 +150,7 @@ MIT（見 `Cargo.toml` 的 `license`）。
 - 預設監聽位址、連接埠與請求本文上限：`crates/zroutery-core/src/config/server.rs::ServerConfig`。
 - HTTP 路由：`crates/zroutery-core/src/server/handlers.rs::build_app`。
 - 上游協定型別與 API 端面：`crates/zroutery-core/src/config/provider.rs::ProviderKind`、`crates/zroutery-core/src/config/provider.rs::ApiSurface`、`crates/zroutery-core/src/config/provider.rs::ProviderKind::is_decision`、`crates/zroutery-core/src/config/registry.rs::ProviderConfig::dialect`。
+- 主題與外掛端面：`crates/zroutery-plugin-api/src/capability.rs::Capability`、`crates/zroutery-plugin-api/src/manifest.rs::PluginManifestV1`、`crates/zroutery-core/src/config/plugin.rs::PluginInstanceConfig`、`ui/src/themes/registry.ts`、`scripts/plugin_theme_test.py`。
 - 打包目標：`src-tauri/tauri.conf.json::bundle`。
 - 設定檔與閘道 token：`src-tauri/src/store.rs::FILE_NAME`、`src-tauri/src/store.rs::generate_token`。
 - Linux 憑證相依：`src-tauri/Cargo.toml::keyring`。

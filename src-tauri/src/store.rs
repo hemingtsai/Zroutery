@@ -46,6 +46,17 @@ pub fn startup_load(dir: &Path) -> Result<StartupConfig, String> {
 
     let text = std::fs::read_to_string(&path)
         .map_err(|e| format!("cannot read {}: {e}", path.display()))?;
+    // A newer schema is not corruption and must never be backed up as broken,
+    // normalized onto defaults, or overwritten by an older binary.
+    if let Ok(value) = serde_json::from_str::<serde_json::Value>(&text) {
+        if value
+            .get("schema_version")
+            .and_then(|v| v.as_u64())
+            .is_some_and(|version| version > zroutery_core::config::CONFIG_SCHEMA_VERSION as u64)
+        {
+            return Err("configuration schema is newer than this application; original retained, editing disabled".into());
+        }
+    }
     match serde_json::from_str::<AppConfig>(&text) {
         Ok(cfg) => {
             let had_token = !cfg.server.auth_token.trim().is_empty();
@@ -233,9 +244,29 @@ pub fn save_ledger(dir: &Path, ledger: &Ledger) -> Result<(), String> {
 
 /// Write atomically: a crash mid-save must not truncate the config.
 pub fn save(dir: &Path, cfg: &AppConfig) -> Result<PathBuf, String> {
+    if cfg.schema_version > zroutery_core::config::CONFIG_SCHEMA_VERSION {
+        return Err("configuration schema is newer than this application; editing disabled".into());
+    }
+    if let Ok(bytes) = std::fs::read(dir.join(FILE_NAME)) {
+        if let Ok(value) = serde_json::from_slice::<serde_json::Value>(&bytes) {
+            if value
+                .get("schema_version")
+                .and_then(|v| v.as_u64())
+                .is_some_and(|version| {
+                    version > zroutery_core::config::CONFIG_SCHEMA_VERSION as u64
+                })
+            {
+                return Err("configuration schema is newer than this application; original retained, editing disabled".into());
+            }
+        }
+    }
     // One file has an atomic replacement boundary already. Multi-file client
     // switches use file_transaction together with their ownership manifests.
-    let text = serde_json::to_string_pretty(cfg).map_err(|error| error.to_string())?;
+    let mut cfg = cfg.clone();
+    if !cfg.plugin_instances.is_empty() {
+        cfg.schema_version = zroutery_core::config::CONFIG_SCHEMA_VERSION;
+    }
+    let text = serde_json::to_string_pretty(&cfg).map_err(|error| error.to_string())?;
     write_atomically(dir, FILE_NAME, &text)
 }
 

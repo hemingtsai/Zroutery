@@ -142,22 +142,17 @@ pub fn encode_request_with(
                         }));
                     }
                 }
-                ContentBlock::Thinking { text, signature } => {
+                ContentBlock::Thinking { text, .. } => {
                     if let Some(item) = reasoning_bridge::encode_thinking_block(b) {
                         separate_items.push(item);
-                    } else if signature.is_none() {
+                    } else {
+                        // Claude clients echo unsigned reasoning with either
+                        // an absent or empty signature. Both are plain history,
+                        // not an unsupported opaque payload.
                         separate_items.push(json!({
                             "type": "reasoning",
                             "summary": [{"type": "summary_text", "text": text}],
                         }));
-                    } else if let Some(replacement) =
-                        apply_content_policy(req.unsupported_content_policy, b)?
-                    {
-                        if let Some(text) = replacement.as_text() {
-                            parts.push(json!({"type": text_part_type, "text": text}));
-                        }
-                    } else {
-                        return Err(Error::internal("thinking content could not be encoded"));
                     }
                 }
                 ContentBlock::RedactedThinking { data } => {

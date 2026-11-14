@@ -18,6 +18,7 @@ Clients can speak Anthropic, OpenAI Chat, OpenAI Responses, or Gemini; Claude Co
 ## Features
 
 - **Multi-protocol**: supports Anthropic, OpenAI Chat, OpenAI Responses, and Gemini client protocols; upstream providers speak Anthropic, OpenAI-compatible (Chat Completions or Responses), and the OpenCode Zen/Console kinds.
+- **Themes and plugins**: the dashboard ships bundled data-themes with pinned token sources, and desktop builds carry a capability-scoped plugin host whose declarations stay inert without the `plugin` feature.
 - **Model tiers**: models are grouped into fast / standard / reasoning / frontier; clients just request `standard-class`, and the model actually used is decided by your priority order, routing policy, and upstream health.
 - **Failover**: errors are classified to decide between retrying and switching models; repeated failures trip a per-model circuit breaker, and half-open probes detect recovery. Failover and breaker parameters are configurable.
 - **Budgets**: daily / monthly limits per total, provider, or tier; over-budget requests can be rejected or downgraded to a cheaper tier. Ledgers persist across restarts.
@@ -149,6 +150,7 @@ MIT (see the `license` field in `Cargo.toml`).
 - Default bind address, port and body limit: `crates/zroutery-core/src/config/server.rs::ServerConfig`.
 - HTTP routes: `crates/zroutery-core/src/server/handlers.rs::build_app`.
 - Upstream protocol kinds and surfaces: `crates/zroutery-core/src/config/provider.rs::ProviderKind`, `crates/zroutery-core/src/config/provider.rs::ApiSurface`, `crates/zroutery-core/src/config/provider.rs::ProviderKind::is_decision`, `crates/zroutery-core/src/config/registry.rs::ProviderConfig::dialect`.
+- Theme and plugin surfaces: `crates/zroutery-plugin-api/src/capability.rs::Capability`, `crates/zroutery-plugin-api/src/manifest.rs::PluginManifestV1`, `crates/zroutery-core/src/config/plugin.rs::PluginInstanceConfig`, `ui/src/themes/registry.ts`, `scripts/plugin_theme_test.py`.
 - Bundle targets: `src-tauri/tauri.conf.json::bundle`.
 - Config file and gateway token: `src-tauri/src/store.rs::FILE_NAME`, `src-tauri/src/store.rs::generate_token`.
 - Linux credential dependency: `src-tauri/Cargo.toml::keyring`.

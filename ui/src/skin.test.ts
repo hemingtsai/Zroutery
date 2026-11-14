@@ -11,18 +11,20 @@ describe("skin preference", () => {
       setItem: (key: string, value: string) => values.set(key, value),
     });
     expect(loadSkin()).toBe("industrial");
-    storeSkin("fluent");
-    expect(loadSkin()).toBe("fluent");
+    storeSkin("org.zroutery.theme.fluent");
+    expect(loadSkin()).toBe("org.zroutery.theme.fluent");
     values.set("zroutery-skin", "unknown");
-    expect(loadSkin()).toBe("industrial");
+    expect(loadSkin()).toBe("org.zroutery.theme.fluent");
   });
 
   it("applies the skin to the root element and removes industrial state", () => {
     const root = { dataset: {} as Record<string, string> };
-    vi.stubGlobal("document", { documentElement: root, fonts: { add: vi.fn() } });
-    applySkin("md3");
-    expect(root.dataset.skin).toBe("md3");
+    vi.stubGlobal("document", { documentElement: root, fonts: { add: vi.fn() },
+      getElementById: () => null, createElement: () => ({ id: "", textContent: "" }), head: { append: vi.fn() } });
+    applySkin("org.zroutery.theme.md3");
+    expect(root.dataset.pluginTheme).toBe("org.zroutery.theme.md3");
     applySkin("industrial");
     expect(root.dataset.skin).toBeUndefined();
+    expect(root.dataset.pluginTheme).toBeUndefined();
   });
 });

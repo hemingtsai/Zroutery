@@ -24,6 +24,8 @@ use super::Desktop;
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct ClientSetupOptions {
+    /// Usage class or exact exposed model id. The wire name stays compatible
+    /// with saved selections written by earlier releases.
     pub default_class: Option<String>,
     /// Explicit development handoff; never inferred from a failed main port.
     #[serde(default)]
@@ -142,6 +144,10 @@ impl Desktop {
     /// user's behalf; the gateway contract leaves model selection to the
     /// client or to Zroutery's per-client policy.
     pub(crate) fn gateway_target(&self) -> Option<GatewayTarget> {
+        self.gateway_target_with_models(false)
+    }
+
+    fn gateway_target_with_models(&self, include_exact: bool) -> Option<GatewayTarget> {
         let config = self.core.config();
         let token = config.server.auth_token.trim();
         if token.is_empty() {
@@ -157,7 +163,7 @@ impl Desktop {
         // inheriting its siblings' levels. Requests that carry an effort
         // anyway are still narrowed per request by the pipeline; the picker
         // just stops advertising what the class cannot commonly deliver.
-        let classes: Vec<TierClass> = ModelTier::ALL
+        let mut classes: Vec<TierClass> = ModelTier::ALL
             .iter()
             .filter_map(|tier| {
                 let members: Vec<&zroutery_core::config::ModelEntry> = config
@@ -238,6 +244,39 @@ impl Desktop {
                 })
             })
             .collect();
+        // Exact selections and their capability evidence must come from the
+        // same configuration snapshot as the usage pools.
+        if include_exact {
+            for model in &config.models {
+                let Some(provider) = config
+                    .provider(&model.provider_id)
+                    .filter(|provider| provider.enabled && !provider.kind.is_decision())
+                else {
+                    continue;
+                };
+                let id = model.exposed_id();
+                if !model.enabled || classes.iter().any(|class| class.model == id) {
+                    continue;
+                }
+                classes.push(TierClass {
+                    model: id,
+                    display_name: format!(
+                        "{} · {}",
+                        provider.name,
+                        model
+                            .display_name
+                            .as_deref()
+                            .unwrap_or(&model.upstream_model)
+                    ),
+                    effort_levels: model.effective_effort_levels(provider),
+                    capabilities: model.capabilities.clone(),
+                    context_window: model.context_window,
+                    max_output_tokens: model.max_output_tokens,
+                    capability_source: "configured exact provider/model; no shared pool inference"
+                        .into(),
+                });
+            }
+        }
         if classes.is_empty() {
             return None;
         }
@@ -273,7 +312,12 @@ impl Desktop {
         agent: AgentType,
         options: Option<&ClientSetupOptions>,
     ) -> Option<GatewayTarget> {
-        let mut target = self.gateway_target()?;
+        let mut target = self.gateway_target_with_models(true)?;
+        // Publish exact ids alongside pools. Untiered models are still callable
+        // directly and must not require an artificial tier assignment for setup.
+        if agent == AgentType::OpenCode {
+            target.classes.retain(|class| !class.model.contains('.'));
+        }
         let saved = self.setup_options(agent);
         let options = options.unwrap_or(&saved);
         target.default_class = options.default_class.clone();
@@ -293,7 +337,7 @@ impl Desktop {
         let adapter = adapter_for(agent).ok_or("this client is not supported for setup")?;
         let target = self
             .target_for(agent, Some(options))
-            .ok_or("configure the gateway token and at least one tier first")?;
+            .ok_or("configure the gateway token and at least one enabled model first")?;
         let snapshot = adapter.read_config()?;
         let fields = takeover_fields(agent, &target, Some(&snapshot.raw))?;
         let paths: Vec<_> = fields.iter().map(|field| field.path.clone()).collect();
@@ -321,6 +365,9 @@ impl Desktop {
         }
         if agent == AgentType::Codex {
             notes.push("Codex applies model_catalog_json at process startup; reopen the client after synchronizing".into());
+        }
+        if agent == AgentType::OpenCode {
+            notes.push("Exact model ids containing dots are not offered in this menu because the current ownership adapter uses dots as field-path separators; those models remain callable through the gateway".into());
         }
         if target
             .classes
@@ -504,7 +551,7 @@ impl Desktop {
             .ok_or_else(|| format!("this build has no takeover adapter for {agent:?}"))?;
         let target = self.target_for(agent, Some(options)).ok_or_else(|| {
             "Zroutery is not ready to serve a client yet: set the gateway token in Settings and \
-             assign at least one enabled model to a tier"
+             configure at least one enabled model"
                 .to_string()
         })?;
 
@@ -726,6 +773,43 @@ mod verification_tests {
     use zroutery_core::stats::Stats;
 
     #[test]
+    fn setup_offers_exact_untiered_models_and_excludes_disabled_providers() {
+        let config = serde_json::from_value(serde_json::json!({
+            "server":{"auth_token":"fixture-local-token"},
+            "providers":[
+                {"id":"p", "name":"Provider", "kind":"openai_compatible", "base_url":"https://example.invalid"},
+                {"id":"off", "name":"Disabled", "kind":"openai_compatible", "base_url":"https://example.invalid", "enabled":false}],
+            "models":[
+                {"provider_id":"p", "upstream_model":"model.v2", "capabilities":{"thinking":true}, "effort_levels":["high"], "context_window":64000},
+                {"provider_id":"p", "upstream_model":"disabled", "enabled":false},
+                {"provider_id":"off", "upstream_model":"hidden"}]
+        })).unwrap();
+        let (desktop, directory) = super::super::tests::desktop_with(config);
+        let options = ClientSetupOptions {
+            default_class: Some("p-model.v2".into()),
+            standby: false,
+        };
+        for agent in [AgentType::Claude, AgentType::Codex] {
+            let target = desktop.target_for(agent, Some(&options)).unwrap();
+            assert_eq!(target.classes.len(), 1);
+            assert_eq!(target.classes[0].model, "p-model.v2");
+            assert_eq!(target.classes[0].context_window, Some(64000));
+            let fields = takeover_fields(agent, &target, None).unwrap();
+            assert!(fields
+                .iter()
+                .any(|field| field.path == "model" && field.value == "p-model.v2"));
+            assert!(!fields
+                .iter()
+                .any(|field| field.path.contains("approval") || field.path.contains("sandbox")));
+            let mut stale = target;
+            stale.default_class = Some("off-hidden".into());
+            assert!(takeover_fields(agent, &stale, None).is_err());
+        }
+        drop(desktop);
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
     fn setup_fingerprint_covers_desired_values_catalogue_and_ownership() {
         let (desktop, directory) = super::super::tests::desktop_with(Default::default());
         let (mut target, _, _, _) = fixture();
@@ -761,6 +845,18 @@ mod verification_tests {
         assert_eq!(fingerprint(&target), original);
         target.default_class = Some("standard-class".into());
         assert_ne!(fingerprint(&target), original);
+        target.default_class = None;
+        target.classes.push(TierClass {
+            model: "fixture-exact".into(),
+            display_name: "Exact model".into(),
+            ..Default::default()
+        });
+        target.default_class = Some("fixture-exact".into());
+        let exact_selection = fingerprint(&target);
+        assert_ne!(exact_selection, original);
+        target.classes[1].context_window = Some(64000);
+        assert_ne!(fingerprint(&target), exact_selection);
+        target.classes.pop();
         target.default_class = None;
         std::fs::create_dir_all(directory.join("takeover")).unwrap();
         std::fs::write(

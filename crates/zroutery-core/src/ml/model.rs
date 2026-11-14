@@ -730,9 +730,9 @@ mod tests {
 
     fn random_like_features(seed: u64) -> RoutingFeatures {
         let mut f = RoutingFeatures::default();
-        for i in 0..FEATURE_DIMENSION {
+        for (i, value) in f.values.iter_mut().enumerate() {
             // Simple deterministic pseudo-random in [0, 1]
-            f.values[i] = ((seed.wrapping_mul(i as u64 + 1) % 1000) as f32) / 1000.0;
+            *value = ((seed.wrapping_mul(i as u64 + 1) % 1000) as f32) / 1000.0;
         }
         f
     }
@@ -875,9 +875,7 @@ mod tests {
         let features = {
             let mut f = RoutingFeatures::default();
             // Set some features to non-zero so weights can take effect
-            for i in 0..FEATURE_DIMENSION {
-                f.values[i] = 0.5;
-            }
+            f.values.fill(0.5);
             f
         };
 

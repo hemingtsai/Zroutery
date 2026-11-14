@@ -166,6 +166,43 @@ impl AppConfig {
 
     pub fn validate(&self) -> Vec<ConfigIssue> {
         let mut issues = Vec::new();
+        let mut plugin_ids = std::collections::BTreeSet::new();
+        for instance in &self.plugin_instances {
+            let collision = self.providers.iter().any(|provider| {
+                #[cfg(feature = "plugin")]
+                {
+                    provider.id == instance.id && provider.plugin_binding.is_none()
+                }
+                #[cfg(not(feature = "plugin"))]
+                {
+                    provider.id == instance.id
+                }
+            });
+            if instance.id.is_empty() || !plugin_ids.insert(&instance.id) || collision {
+                issues.push(ConfigIssue {
+                    severity: IssueSeverity::Error,
+                    code: "plugin.instance_conflict".into(),
+                    message:
+                        "Plugin instance IDs must be unique and cannot shadow a native provider"
+                            .into(),
+                    subject: Some(instance.id.clone()),
+                });
+            }
+            if uuid::Uuid::parse_str(&instance.installation_id).is_err()
+                || instance.package_digest.len() != 64
+                || !instance
+                    .package_digest
+                    .bytes()
+                    .all(|c| c.is_ascii_hexdigit())
+            {
+                issues.push(ConfigIssue {
+                    severity: IssueSeverity::Error,
+                    code: "plugin.invalid_binding".into(),
+                    message: "Plugin installation identity and content digest are invalid".into(),
+                    subject: Some(instance.id.clone()),
+                });
+            }
+        }
         let mut seen_ids: BTreeMap<String, usize> = BTreeMap::new();
         let mut seen_providers: BTreeMap<String, usize> = BTreeMap::new();
 
@@ -326,8 +363,17 @@ impl AppConfig {
             }
             if self.provider(&m.provider_id).is_none() {
                 issues.push(ConfigIssue {
-                    severity: IssueSeverity::Error,
-                    code: "model.orphan".into(),
+                    severity: if self.plugin_instances.iter().any(|i| i.id == m.provider_id) {
+                        IssueSeverity::Warning
+                    } else {
+                        IssueSeverity::Error
+                    },
+                    code: if self.plugin_instances.iter().any(|i| i.id == m.provider_id) {
+                        "plugin.instance_unavailable"
+                    } else {
+                        "model.orphan"
+                    }
+                    .into(),
                     message: format!(
                         "Model `{}` points at missing provider `{}`",
                         m.upstream_model, m.provider_id

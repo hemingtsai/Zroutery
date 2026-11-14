@@ -1,0 +1,22 @@
+[package]
+name = "zroutery-plugin-host"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "Default-deny package, grant and worker lifecycle broker"
+
+[dependencies]
+zroutery-plugin-api = { path = "../zroutery-plugin-api" }
+serde = { workspace = true }
+serde_json = { workspace = true }
+uuid = { workspace = true }
+sha2 = "0.10.9"
+semver = "1"
+zip = { version = "=6.0.0", default-features = false, features = ["deflate-flate2-zlib-rs"] }
+
+[target.'cfg(target_os = "windows")'.dependencies]
+windows-sys = { version = "0.60", features = ["Win32_Foundation", "Win32_Security", "Win32_Security_Authorization", "Win32_Security_Isolation", "Win32_System_Threading", "Win32_System_JobObjects", "Win32_System_Pipes", "Win32_System_Memory", "Win32_Storage_FileSystem"] }
+
+[dev-dependencies]
+tempfile = "3"

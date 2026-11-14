@@ -36,6 +36,18 @@ impl AppState {
     /// Swap in a new configuration, rebuilding the lookup tables once here
     /// instead of per request. In-flight requests keep their snapshot.
     pub fn set_config(&self, config: AppConfig) {
+        #[cfg(feature = "plugin")]
+        let config = {
+            let mut config = config;
+            config
+                .providers
+                .retain(|provider| provider.plugin_binding.is_none());
+            if let Some(port) = crate::sync::read(&self.plugin_port).as_ref() {
+                let providers = port.synthesize(&config);
+                config.providers.extend(providers);
+            }
+            config
+        };
         self.stats.set_limit(config.server.log_limit);
         // The shadow switch and retention are a running engine's configuration,
         // so a swap has to reach the engine instead of only the next process.
@@ -103,6 +115,14 @@ impl AppState {
 
     /// Resolve a provider's secret, failing loudly when one is expected but absent.
     pub fn api_key(&self, provider: &ProviderConfig) -> Result<Option<String>> {
+        #[cfg(feature = "plugin")]
+        if let Some(binding) = &provider.plugin_binding {
+            let operation = binding.operation_for_url(&provider.chat_url())?;
+            binding.authorize(operation)?;
+            // Secret injection happens only in the final authorized operation,
+            // not through the unscoped native SecretStore or its cache.
+            return Ok(None);
+        }
         if provider.kind == ProviderKind::OpenCodeZenFree {
             return Ok(Some("public".into()));
         }
@@ -128,6 +148,12 @@ impl AppState {
         &self,
         provider: &ProviderConfig,
     ) -> Result<(String, Option<String>)> {
+        #[cfg(feature = "plugin")]
+        if provider.plugin_binding.is_some() {
+            return Err(Error::NoCandidate(
+                "persistent plugin OAuth rotation service is unavailable".into(),
+            ));
+        }
         crate::opencode::console::resolve(self.secrets.as_ref(), &provider.key_ref).await
     }
 
@@ -236,6 +262,17 @@ impl AppState {
         }
         self.router.set_election(election);
         true
+    }
+}
+
+#[cfg(feature = "plugin")]
+impl AppState {
+    pub fn attach_plugin_port(&self, port: Arc<dyn crate::plugin::PluginPort>) {
+        *crate::sync::write(&self.plugin_port) = Some(port);
+        self.set_config((*self.config()).clone());
+    }
+    pub fn refresh_plugin_bindings(&self) {
+        self.set_config((*self.config()).clone());
     }
 }
 

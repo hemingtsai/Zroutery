@@ -1,0 +1,72 @@
+{
+  "note": "Official implementation sources for ThemeV1 packs (MD3/Fluent). Snapshots are pinned to one commit per repo; values in plugins/theme-*/theme.json must be derivable from these files plus the recorded rulings in docs/development/skin-spec-md3-fluent.md. Re-fetch only with a reviewed manifest change: python scripts/plugin_theme_source_check.py --fetch",
+  "repos": {
+    "material-web": {
+      "repo": "material-components/material-web",
+      "sha": "37aa14b843dcaeb3a46f898679fa6fcd109b1905"
+    },
+    "material-tokens": {
+      "repo": "material-foundation/material-tokens",
+      "sha": "4da7518146b2e9fd6ce7d84670ffd48b4fc1cded"
+    },
+    "fluentui": {
+      "repo": "microsoft/fluentui",
+      "sha": "f9720c35ba893c9630f4c0389d07dc6d6fd6068d"
+    },
+    "winui": {
+      "repo": "microsoft/microsoft-ui-xaml",
+      "sha": "9402930972f25cfcad82abc9f82ecab29936f404"
+    }
+  },
+  "files": [
+    { "snapshot": "md-ref-palette.scss", "repo": "material-web", "path": "tokens/versions/v0_192/_md-ref-palette.scss" },
+    { "snapshot": "md-ref-typeface.scss", "repo": "material-web", "path": "tokens/versions/v0_192/_md-ref-typeface.scss" },
+    { "snapshot": "md-sys-color.scss", "repo": "material-web", "path": "tokens/versions/v0_192/_md-sys-color.scss" },
+    { "snapshot": "md-sys-shape.scss", "repo": "material-web", "path": "tokens/versions/v0_192/_md-sys-shape.scss" },
+    { "snapshot": "md-sys-state.scss", "repo": "material-web", "path": "tokens/versions/v0_192/_md-sys-state.scss" },
+    { "snapshot": "md-sys-elevation.scss", "repo": "material-web", "path": "tokens/versions/v0_192/_md-sys-elevation.scss" },
+    { "snapshot": "md-sys-typescale.scss", "repo": "material-web", "path": "tokens/versions/v0_192/_md-sys-typescale.scss" },
+    { "snapshot": "md-comp-filled-button.scss", "repo": "material-web", "path": "tokens/versions/v0_192/_md-comp-filled-button.scss" },
+    { "snapshot": "md-comp-filled-tonal-button.scss", "repo": "material-web", "path": "tokens/versions/v0_192/_md-comp-filled-tonal-button.scss" },
+    { "snapshot": "md-comp-outlined-button.scss", "repo": "material-web", "path": "tokens/versions/v0_192/_md-comp-outlined-button.scss" },
+    { "snapshot": "md-comp-text-button.scss", "repo": "material-web", "path": "tokens/versions/v0_192/_md-comp-text-button.scss" },
+    { "snapshot": "md-comp-filled-text-field.scss", "repo": "material-web", "path": "tokens/versions/v0_192/_md-comp-filled-text-field.scss" },
+    { "snapshot": "md-comp-outlined-text-field.scss", "repo": "material-web", "path": "tokens/versions/v0_192/_md-comp-outlined-text-field.scss" },
+    { "snapshot": "md-comp-filled-select.scss", "repo": "material-web", "path": "tokens/versions/v0_192/_md-comp-filled-select.scss" },
+    { "snapshot": "md-comp-outlined-select.scss", "repo": "material-web", "path": "tokens/versions/v0_192/_md-comp-outlined-select.scss" },
+    { "snapshot": "md-comp-checkbox.scss", "repo": "material-web", "path": "tokens/versions/v0_192/_md-comp-checkbox.scss" },
+    { "snapshot": "md-comp-switch.scss", "repo": "material-web", "path": "tokens/versions/v0_192/_md-comp-switch.scss" },
+    { "snapshot": "md-comp-dialog.scss", "repo": "material-web", "path": "tokens/versions/v0_192/_md-comp-dialog.scss" },
+    { "snapshot": "md-comp-menu.scss", "repo": "material-web", "path": "tokens/versions/v0_192/_md-comp-menu.scss" },
+    { "snapshot": "md-comp-snackbar.scss", "repo": "material-web", "path": "tokens/versions/v0_192/_md-comp-snackbar.scss" },
+    { "snapshot": "md-comp-navigation-drawer.scss", "repo": "material-web", "path": "tokens/versions/v0_192/_md-comp-navigation-drawer.scss" },
+    { "snapshot": "md-comp-outlined-segmented-button.scss", "repo": "material-web", "path": "tokens/versions/v0_192/_md-comp-outlined-segmented-button.scss" },
+    { "snapshot": "md-comp-list.scss", "repo": "material-web", "path": "tokens/versions/v0_192/_md-comp-list.scss" },
+    { "snapshot": "md-comp-badge.scss", "repo": "material-web", "path": "tokens/versions/v0_192/_md-comp-badge.scss" },
+    { "snapshot": "md-comp-banner.scss", "repo": "material-web", "path": "tokens/versions/v0_192/_md-comp-banner.scss" },
+    { "snapshot": "md-comp-data-table.scss", "repo": "material-web", "path": "tokens/versions/v0_192/_md-comp-data-table.scss" },
+    { "snapshot": "md-comp-scrim.scss", "repo": "material-web", "path": "tokens/versions/v0_192/_md-comp-scrim.scss" },
+    { "snapshot": "md-comp-filled-card.scss", "repo": "material-web", "path": "tokens/versions/v0_192/_md-comp-filled-card.scss" },
+    { "snapshot": "md-comp-elevated-card.scss", "repo": "material-web", "path": "tokens/versions/v0_192/_md-comp-elevated-card.scss" },
+    { "snapshot": "md-comp-primary-navigation-tab.scss", "repo": "material-web", "path": "tokens/versions/v0_192/_md-comp-primary-navigation-tab.scss" },
+    { "snapshot": "md-comp-radio-button.scss", "repo": "material-web", "path": "tokens/versions/v0_192/_md-comp-radio-button.scss" },
+    { "snapshot": "mt-state.css", "repo": "material-tokens", "path": "css/state.css" },
+    { "snapshot": "mt-elevation.css", "repo": "material-tokens", "path": "css/elevation.css" },
+    { "snapshot": "fui-light-color.ts", "repo": "fluentui", "path": "packages/tokens/src/alias/lightColor.ts" },
+    { "snapshot": "fui-dark-color.ts", "repo": "fluentui", "path": "packages/tokens/src/alias/darkColor.ts" },
+    { "snapshot": "fui-light-color-palette.ts", "repo": "fluentui", "path": "packages/tokens/src/alias/lightColorPalette.ts" },
+    { "snapshot": "fui-dark-color-palette.ts", "repo": "fluentui", "path": "packages/tokens/src/alias/darkColorPalette.ts" },
+    { "snapshot": "fui-global-colors.ts", "repo": "fluentui", "path": "packages/tokens/src/global/colors.ts" },
+    { "snapshot": "fui-global-color-palette.ts", "repo": "fluentui", "path": "packages/tokens/src/global/colorPalette.ts" },
+    { "snapshot": "fui-status-color-mapping.ts", "repo": "fluentui", "path": "packages/tokens/src/statusColorMapping.ts" },
+    { "snapshot": "fui-global-fonts.ts", "repo": "fluentui", "path": "packages/tokens/src/global/fonts.ts" },
+    { "snapshot": "fui-global-typography-styles.ts", "repo": "fluentui", "path": "packages/tokens/src/global/typographyStyles.ts" },
+    { "snapshot": "fui-global-border-radius.ts", "repo": "fluentui", "path": "packages/tokens/src/global/borderRadius.ts" },
+    { "snapshot": "fui-global-stroke-widths.ts", "repo": "fluentui", "path": "packages/tokens/src/global/strokeWidths.ts" },
+    { "snapshot": "fui-global-brand-colors.ts", "repo": "fluentui", "path": "packages/tokens/src/global/brandColors.ts" },
+    { "snapshot": "fui-utils-shadows.ts", "repo": "fluentui", "path": "packages/tokens/src/utils/shadows.ts" },
+    { "snapshot": "fui-create-light-theme.ts", "repo": "fluentui", "path": "packages/tokens/src/utils/createLightTheme.ts" },
+    { "snapshot": "fui-create-dark-theme.ts", "repo": "fluentui", "path": "packages/tokens/src/utils/createDarkTheme.ts" },
+    { "snapshot": "winui-themeresources.xaml", "repo": "winui", "path": "controls/dev/CommonStyles/Common_themeresources_any.xaml" }
+  ]
+}

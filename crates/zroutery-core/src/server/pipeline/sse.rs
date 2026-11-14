@@ -195,7 +195,7 @@ impl SseState {
                 if !valid {
                     tracing::warn!(
                         model = %self.lifecycle.served_model(),
-                        "streamed classifier response carried no <block> verdict"
+                        "streamed classifier response did not satisfy its verdict contract"
                     );
                 }
             }

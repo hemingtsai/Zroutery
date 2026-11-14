@@ -70,6 +70,14 @@ impl StreamEncoder for GeminiStreamEncoder {
                 });
                 out
             }
+            StreamEvent::ThinkingDelta { text, .. } => {
+                let mut out = self.flush_tools();
+                out.push(SseFrame {
+                    event: None,
+                    data: json!({"candidates":[{"content":{"role":"model", "parts":[{"text":text, "thought":true}]}}]}).to_string(),
+                });
+                out
+            }
             StreamEvent::ToolUseStart {
                 index, id, name, ..
             } => {

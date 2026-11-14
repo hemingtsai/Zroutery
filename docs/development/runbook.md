@@ -112,4 +112,5 @@ gate you did not run. A development build is not an authorized deployment.
 - Bundle targets and signing: `src-tauri/tauri.conf.json::bundle`.
 - Learned-model rollback: `crates/zroutery-core/src/server/ml_state.rs::rollback_active_model`.
 - Migration state and rollback: `crates/zroutery-core/src/migration/state.rs::MigrationState`.
+- Plugin and theme surfaces: `crates/zroutery-core/src/config/plugin.rs::PluginInstanceConfig`, `ui/src/themes/registry.ts`, `scripts/plugin_theme_test.py`.
 - Takeover release state: `crates/zroutery-core/src/agent_takeover/ownership.rs::OwnershipState`.

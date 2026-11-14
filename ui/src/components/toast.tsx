@@ -3,6 +3,13 @@
  * for state a user must act on (exposed gateway, failed saves); toasts are
  * for confirmations the user would otherwise have to take on faith — a
  * copy that worked, an import that landed.
+ *
+ * The region semantics — a live viewport, keyboard focus cycling, Escape,
+ * swipe — are Radix's (@radix-ui/react-toast). The lifetime is still ours:
+ * the dedup window below is deliberately the same number as the lifetime
+ * ("this exact message is already on screen" is true exactly while its toast
+ * is displayed), so one owner must run both clocks. Radix's own timer is set
+ * past any real lifetime and never fires.
  */
 import {
   createContext,
@@ -14,6 +21,7 @@ import {
   useState,
   type ReactNode,
 } from "react";
+import * as ToastPrimitive from "@radix-ui/react-toast";
 import { useI18n } from "../i18n";
 import { createToastDedup } from "../toastDedup";
 
@@ -33,6 +41,10 @@ type Toast = { id: number; kind: ToastKind; text: string; timer: number };
  * as an `ok` — both are transient confirmations, differing only in colour.
  */
 const TOAST_LIFETIME_MS: Record<ToastKind, number> = { ok: 3200, error: 6000, info: 3200 };
+
+/** Radix's own timer, parked past the 32-bit setTimeout ceiling — ours owns
+ *  the lifetime so the dedup window and it can never disagree. */
+const TOAST_RADIX_TIMER_MS = 2_147_483_647;
 
 const ToastContext = createContext<(kind: ToastKind, text: string) => void>(() => {});
 
@@ -94,37 +106,47 @@ export function ToastProvider({ children }: { children: ReactNode }) {
     ]);
   }, []);
 
-  const dismiss = (toast: Toast) => {
-    window.clearTimeout(toast.timer);
-    timers.current.delete(toast.id);
-    setToasts((current) => current.filter((t) => t.id !== toast.id));
-  };
+  const dismiss = useCallback((id: number) => {
+    const toast = timers.current.get(id);
+    if (toast !== undefined) {
+      window.clearTimeout(toast);
+      timers.current.delete(id);
+    }
+    setToasts((current) => current.filter((t) => t.id !== id));
+  }, []);
 
   return (
     <ToastContext.Provider value={notify}>
       {children}
-      <div className="toast-host" role="status" aria-live="polite">
+      <ToastPrimitive.Provider duration={TOAST_RADIX_TIMER_MS} label={t("toast.region")}>
         {toasts.map((toast) => (
-          /*
-           * The message is the name; "Dismiss" is the tooltip.
-           *
-           * `aria-label` replaces the content for the accessibility tree, so
-           * with one on the button the live region announced "Dismiss" — for
-           * every toast in the app. A copy confirmation, a failed check-in, the
-           * outcome of a cutover: all of them were announced as the word
-           * "Dismiss", and a screen-reader user was told nothing about what had
-           * happened.
-           */
-          <button type="button"
+          <ToastPrimitive.Root
             key={toast.id}
             className={`toast toast-${toast.kind}`}
-            onClick={() => dismiss(toast)}
+            duration={TOAST_RADIX_TIMER_MS}
             title={t("common.dismiss")}
+            onClick={() => dismiss(toast.id)}
+            onOpenChange={(open) => {
+              // Radix closes a toast on Escape (focused) and on swipe; either
+              // way the toast leaves the state through the same door.
+              if (!open) dismiss(toast.id);
+            }}
           >
+            {/*
+             * The message is the name; "Dismiss" is the tooltip.
+             *
+             * `aria-label` replaces the content for the accessibility tree, so
+             * with one on the toast the live region announced "Dismiss" — for
+             * every toast in the app. A copy confirmation, a failed check-in,
+             * the outcome of a cutover: all of them were announced as the word
+             * "Dismiss", and a screen-reader user was told nothing about what
+             * had happened.
+             */}
             {toast.text}
-          </button>
+          </ToastPrimitive.Root>
         ))}
-      </div>
+        <ToastPrimitive.Viewport className="toast-host" />
+      </ToastPrimitive.Provider>
     </ToastContext.Provider>
   );
 }

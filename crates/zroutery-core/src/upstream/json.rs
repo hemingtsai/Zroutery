@@ -6,7 +6,7 @@ use serde_json::Value;
 
 use super::catalogue::extract_model_list;
 use super::errors::truncate;
-use super::{build_headers, DiscoveredModel, Upstream};
+use super::{DiscoveredModel, Upstream};
 use crate::billing::{Balance, BalanceProbe};
 use crate::config::ProviderConfig;
 use crate::error::{Error, Result};
@@ -29,8 +29,14 @@ impl Upstream {
         // context and output windows, and the reasoning-effort levels a client
         // picker may offer. Manual corrections happen after import and are not
         // touched here.
-        if let Err(e) = crate::models_dev::enrich(&mut models, provider).await {
-            tracing::warn!(provider = %provider.name, "models.dev enrichment failed: {e}");
+        #[cfg(feature = "plugin")]
+        let native = provider.plugin_binding.is_none();
+        #[cfg(not(feature = "plugin"))]
+        let native = true;
+        if native {
+            if let Err(e) = crate::models_dev::enrich(&mut models, provider).await {
+                tracing::warn!(provider = %provider.name, "models.dev enrichment failed: {e}");
+            }
         }
         models.sort_by(|a, b| a.id.cmp(&b.id));
         models.dedup_by(|a, b| a.id == b.id);
@@ -72,19 +78,16 @@ impl Upstream {
         url: &str,
         timeout_secs: u64,
     ) -> Result<Value> {
+        let identity = super::headers::anonymous_identity(provider);
+        let request = self
+            .request_for(provider, url, reqwest::Method::GET, api_key, &identity)
+            .await?;
         let response = tokio::time::timeout(
             Duration::from_secs(timeout_secs),
-            self.client_for(provider)
-                .get(url)
-                .headers(build_headers(provider, api_key)?)
-                .send(),
+            self.execute_request(provider, url, request),
         )
         .await
-        .map_err(|_| Error::Timeout(timeout_secs))?
-        .map_err(|source| Error::Transport {
-            provider: provider.name.clone(),
-            source,
-        })?;
+        .map_err(|_| Error::Timeout(timeout_secs))??;
 
         let status = response.status();
         // The body gets the same bound as the handshake: a stalled metadata

@@ -259,6 +259,12 @@ impl AppState {
         provider: &ProviderConfig,
         declaration: &AccountConfig,
     ) -> Box<dyn DynAccountProvider> {
+        #[cfg(feature = "plugin")]
+        if provider.plugin_binding.is_some() {
+            // A native account adapter takes a raw cached credential/client.
+            // Do not advertise it as plugin-safe until its transport port exists.
+            return Box::new(UnreachableProvider::no_backend(&provider.id));
+        }
         let credential = self.credential_for(provider, declaration);
         newapi_adapter(provider, declaration, &credential)
     }
@@ -295,6 +301,10 @@ pub(crate) fn resolve_credential(
     provider: &ProviderConfig,
     declaration: &AccountConfig,
 ) -> String {
+    #[cfg(feature = "plugin")]
+    if provider.plugin_binding.is_some() {
+        return String::new();
+    }
     let key_ref = if declaration.key_ref.trim().is_empty() {
         provider.key_ref.as_str()
     } else {

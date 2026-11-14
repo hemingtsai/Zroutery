@@ -21,6 +21,7 @@ tokio = { workspace = true }
 tower-http = { workspace = true }
 tracing = { workspace = true }
 uuid = { workspace = true }
+zroutery-plugin-api = { path = "../zroutery-plugin-api", optional = true }
 
 [dev-dependencies]
 tempfile = "3"
@@ -34,3 +35,4 @@ ml = []
 # OpenCode Zen gateway providers (anonymous free tier + Console OAuth). Opt-in:
 # the default build ships neither the shaping nor the provider kinds' behaviour.
 opencode = []
+plugin = ["dep:zroutery-plugin-api"]

@@ -8,10 +8,8 @@ Human onboarding. The rules live in [AGENTS.md](AGENTS.md),
 ## Read first
 
 1. [AGENTS.md](AGENTS.md) — agent and contributor boundaries.
-2. [docs/development/verification.md](docs/development/verification.md) — the only
-   toolchain and gate definitions.
-3. [docs/development/architecture.md](docs/development/architecture.md) — layers
-   and invariants.
+2. [docs/development/verification.md](docs/development/verification.md) — toolchain and gates.
+3. [docs/development/architecture.md](docs/development/architecture.md) — layers and invariants.
 
 ## Toolchain
 
@@ -30,7 +28,8 @@ The declared minimum (`Cargo.toml::rust-version`) is a separate check:
 cargo +1.90.0 check --workspace --all-targets --locked
 ```
 
-The frontend is Node 22 with the pinned pnpm (`package.json::packageManager`).
+The frontend is Node 22 with the pinned pnpm (`package.json::packageManager`),
+and the workspace also carries the plugin crates (`Cargo.toml::workspace`).
 
 ## Commit format
 

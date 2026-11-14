@@ -6,7 +6,8 @@ use super::request_in::gemini_schema_from_json;
 
 use crate::error::Result;
 use crate::ir::{
-    ChatRequest, ContentBlock, MediaSource, Role, StructuredOutput, ToolChoice, ToolResultPart,
+    ChatRequest, ContentBlock, Dialect, MediaSource, Role, StructuredOutput, ToolChoice,
+    ToolResultPart,
 };
 use crate::protocol::apply_content_policy;
 // --------------------------------------------------------------- request out
@@ -91,7 +92,19 @@ pub fn encode_request(req: &ChatRequest, upstream_model: &str) -> Result<Value> 
                         "functionResponse": {"id": tool_use_id, "name": name, "response": {"text": text_parts.join("\n")}}
                     }));
                 }
-                ContentBlock::Thinking { .. } | ContentBlock::RedactedThinking { .. } => {
+                ContentBlock::Thinking { text, signature } => {
+                    // Thinking text is representable as a native thought part.
+                    // Only Gemini-issued signatures belong on this wire; an
+                    // Anthropic signature is not valid Gemini authentication.
+                    let mut part = json!({"text": text, "thought": true});
+                    if req.source_dialect == Dialect::Gemini {
+                        if let Some(signature) = signature.as_ref().filter(|s| !s.is_empty()) {
+                            part["thoughtSignature"] = json!(signature);
+                        }
+                    }
+                    parts.push(part);
+                }
+                ContentBlock::RedactedThinking { .. } => {
                     if let Some(replacement) =
                         apply_content_policy(req.unsupported_content_policy, b)?
                     {

@@ -62,6 +62,8 @@ pub struct Snapshot {
     pub config: AppConfig,
     /// Opaque compare-and-swap token for full-document saves across windows.
     pub config_revision: String,
+    pub plugin_providers: Vec<PluginProviderView>,
+    pub safe_appearance: bool,
     /// The exposed id of every entry in `config.models`, in the same order.
     ///
     /// The dashboard renders these instead of deriving ids itself, so the
@@ -161,6 +163,19 @@ pub struct Snapshot {
     /// Per-account balances, for every declared account of an enabled provider.
     #[cfg(feature = "newapi")]
     pub account_balances: Vec<AccountBalanceView>,
+}
+
+/// How much durable history the operator has, as bytes and as a record count.
+#[derive(Debug, Clone, Serialize)]
+pub struct PluginProviderView {
+    pub provider: zroutery_core::config::ProviderConfig,
+    pub plugin_origin: PluginOrigin,
+}
+#[derive(Debug, Clone, Serialize)]
+pub struct PluginOrigin {
+    pub installation_id: String,
+    pub contribution_id: String,
+    pub package_digest: String,
 }
 
 /// How much durable history the operator has, as bytes and as a record count.

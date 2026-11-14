@@ -74,6 +74,10 @@ that registry.
 | `docs/development/codex-auto-rectifier.md` | `records/codex-auto-rectifier.md` | B | `reference/providers.md` |
 | `docs/development/routing-data-collection-guide.md` | `records/routing-data-collection-guide.md` | B | `reference/routing-data.md` |
 | `docs/development/skin-spec-md3-fluent.md` | `records/skin-spec-md3-fluent.md` | B | `reference/ui-design-system.md` |
+| `docs/development/agentrouter-checkin-cdp-flow.md` | `records/agentrouter-checkin-cdp-flow.md` | A | report to user |
+| `docs/development/commit-integration-2026-11-14.md` | `records/commit-integration-2026-11-14.md` | A | report to user |
+| `docs/development/plugin-api-design.md` | `plans/plugin-api-design.md` | B | report to user |
+| `docs/development/takeover-conversion-fix-2026-11-14.md` | `records/takeover-conversion-fix-2026-11-14.md` | A | report to user |
 | `docs/development/node-status/` (84 JSON) | `records/node-status/` | D | `no-successor:legacy-node-orchestration` |
 
 ## Rules

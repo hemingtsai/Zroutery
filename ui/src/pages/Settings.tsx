@@ -20,6 +20,8 @@ import {
 import { useI18n, describeBackendError } from "../i18n";
 import type { UiMode } from "../mode";
 import type { Skin } from "../skin";
+import { themeEntries } from "../themes/registry";
+import PluginManager from "../plugins/manager";
 /**
  * Settings is deliberately the most conventional page: gateway transport,
  * spending limits, and the deep knobs. Nothing here is needed to understand
@@ -191,8 +193,10 @@ export default function Settings({
                 onChange={onSkinChange}
                 options={[
                   { value: "industrial", label: t("skin.industrial") },
-                  { value: "md3", label: t("skin.md3") },
-                  { value: "fluent", label: t("skin.fluent") },
+                  ...themeEntries().filter((entry) => entry.enabled).map((entry) => ({
+                    value: entry.id,
+                    label: entry.name[lang === "zh" ? "zh-CN" : lang],
+                  })),
                 ]}
               />
             </div>
@@ -561,9 +565,9 @@ export default function Settings({
     </>
   );
 
-  const [tab, setTab] = useState<"general" | "gateway">("general");
+  const [tab, setTab] = useState<"general" | "gateway" | "plugins">("general");
   useEffect(() => {
-    if (simpleOnly && tab !== "general") setTab("general");
+    if (simpleOnly && tab === "gateway") setTab("general");
   }, [simpleOnly, tab]);
 
   return (
@@ -573,15 +577,19 @@ export default function Settings({
       <PageHead lede={t("settings.lede")} />
 
       <Tabs
-        value={simpleOnly ? "general" : tab}
+        value={simpleOnly && tab === "gateway" ? "general" : tab}
         onChange={(next) => setTab(next as typeof tab)}
         ariaLabel={t("settings.tab_group")}
         tabs={
           simpleOnly
-            ? [{ value: "general", label: t("settings.tab_general"), content: generalPane }]
+             ? [
+                { value: "general", label: t("settings.tab_general"), content: generalPane },
+                { value: "plugins", label: t("plugins.title"), content: <PluginManager /> },
+              ]
             : [
                 { value: "general", label: t("settings.tab_general"), content: generalPane },
                 { value: "gateway", label: t("settings.tab_gateway"), content: gatewayPane },
+                { value: "plugins", label: t("plugins.title"), content: <PluginManager /> },
               ]
         }
       />

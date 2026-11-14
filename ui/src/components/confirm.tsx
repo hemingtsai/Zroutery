@@ -2,11 +2,19 @@
  * A modal question the user must answer before something happens. Used for
  * everything irreversible — removals, token regeneration — because a
  * one-click destructive action is one mis-click away from data loss.
+ *
+ * The modal behaviour is Radix's (@radix-ui/react-dialog): portal, veil,
+ * focus trap and restore, Escape layering (a confirmation raised from inside
+ * a drawer is a nested layer, and only the top one answers Escape). What this
+ * file owns is the surface's own classes, the alertdialog role, the
+ * security-exclusion mark the theme compiler keys on, and focusing the
+ * confirm button rather than the first tabbable control — the safe default
+ * for a dialog whose whole point is a deliberate choice.
  */
-import { useEffect, useRef, type ReactNode } from "react";
+import { useRef, type ReactNode } from "react";
+import * as DialogPrimitive from "@radix-ui/react-dialog";
 import { useI18n } from "../i18n";
 import { Button } from "./atoms";
-import { claimFocus, popOverlay, pushOverlay, topOverlay } from "./overlay";
 
 export type ConfirmRequest = {
   title: string;
@@ -25,137 +33,74 @@ export function ConfirmDialog({
   request: ConfirmRequest | null;
   onClose: () => void;
 }) {
-  const confirmRef = useRef<HTMLButtonElement>(null);
-  const panelRef = useRef<HTMLDivElement>(null);
+  const { t } = useI18n();
+  /*
+   * Focus comes back out when the dialog closes — to whatever held it when
+   * the request first appeared. Captured during the open transition's render,
+   * before Radix's FocusScope moves the focus in: effects run too late, the
+   * focus is already inside the dialog by then. The transition is tracked in
+   * a ref because the request object can be replaced while the dialog stays
+   * open, and re-capturing then would target an element inside the dialog.
+   */
   const restoreTo = useRef<Element | null>(null);
   const wasOpen = useRef(false);
-  const overlayId = useRef<symbol | null>(null);
-  if (overlayId.current === null) overlayId.current = Symbol("confirm");
-  const { t } = useI18n();
-
-  /*
-   * Focus goes in when the dialog opens and comes back out when it closes.
-   *
-   * It used to only go in, and a keyboard user who dismissed the dialog — with
-   * Escape, or with Cancel — was left with focus on the document body. The
-   * next Tab then started from the top of the page, which is a long way from
-   * the button they had just used, and nothing on screen says that happened.
-   * `Drawer` has always done this; the dialog is now the same.
-   *
-   * The open/closed transition is tracked in a ref rather than read from the
-   * effect's cleanup, because the cleanup also runs when the request object is
-   * replaced while the dialog stays open — and restoring focus at that moment
-   * would throw the user out of a dialog they were still using.
-   */
-  useEffect(() => {
-    if (request) {
-      if (wasOpen.current) return;
+  if (request) {
+    if (!wasOpen.current) {
       wasOpen.current = true;
-      const previous = document.activeElement;
-      restoreTo.current = previous instanceof HTMLElement ? previous : null;
-      confirmRef.current?.focus();
-    } else if (wasOpen.current) {
-      wasOpen.current = false;
-      const target = restoreTo.current;
-      if (target instanceof HTMLElement && target.isConnected) target.focus();
+      restoreTo.current =
+        document.activeElement instanceof HTMLElement ? document.activeElement : null;
     }
-  }, [request]);
-
-  useEffect(() => {
-    if (!request) return;
-    const id = overlayId.current!;
-    pushOverlay(id);
-    const onKey = (e: KeyboardEvent) => {
-      // Only the top overlay answers Escape. A confirmation raised from inside
-      // a drawer would otherwise be dismissed together with the drawer, which
-      // is two things happening from one keypress.
-      if (e.key === "Escape" && topOverlay() === id) onClose();
-    };
-    window.addEventListener("keydown", onKey);
-    return () => {
-      window.removeEventListener("keydown", onKey);
-      popOverlay(id);
-    };
-  }, [request, onClose]);
-
-  /*
-   * Nothing behind the dialog may hold focus while it is open, and Tab has to
-   * cycle inside it rather than walk out into the page behind.
-   *
-   * Both halves are the `Drawer`'s, for the same reason: a modal that leaks
-   * focus is not modal, and a screen-reader user who tabs past the dialog
-   * lands on content they cannot see. The veil already marks the rest of the
-   * page as inert to a pointer; this makes it inert to a keyboard too.
-   */
-  useEffect(() => {
-    if (!request) return;
-    const id = overlayId.current!;
-    const keepInside = (event: FocusEvent) => {
-      claimFocus(panelRef.current, id, event);
-    };
-    document.addEventListener("focusin", keepInside);
-    const onTab = (e: KeyboardEvent) => {
-      if (e.key !== "Tab") return;
-      // The top overlay traps the keyboard. A dialog below one would otherwise
-      // pull the focus back as the user tabbed out of the dialog above it.
-      if (topOverlay() !== id) return;
-      const root = panelRef.current;
-      if (!root) return;
-      const focusable = Array.from(
-        root.querySelectorAll<HTMLElement>(
-          "a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex='-1'])",
-        ),
-      ).filter((el) => el.offsetParent !== null || el === document.activeElement);
-      if (focusable.length === 0) return;
-      const first = focusable[0];
-      const last = focusable[focusable.length - 1];
-      const active = document.activeElement;
-      if (e.shiftKey && (active === first || !root.contains(active))) {
-        e.preventDefault();
-        last.focus();
-      } else if (!e.shiftKey && active === last) {
-        e.preventDefault();
-        first.focus();
-      }
-    };
-    window.addEventListener("keydown", onTab, true);
-    return () => {
-      document.removeEventListener("focusin", keepInside);
-      window.removeEventListener("keydown", onTab, true);
-    };
-  }, [request]);
-
-  if (!request) return null;
+  } else {
+    wasOpen.current = false;
+  }
 
   return (
-    <>
-      <div className="drawer-veil" onClick={onClose} aria-hidden />
-      <div
-        className="confirm"
-        ref={panelRef}
-        role="alertdialog"
-        aria-modal
-        aria-label={request.title}
-        tabIndex={-1}
-      >
-        <h2 className="confirm-title">{request.title}</h2>
-        {request.body && <div className="confirm-body">{request.body}</div>}
-        <div className="confirm-actions">
-          <Button kind="ghost" onClick={onClose}>
-            {t("common.cancel")}
-          </Button>
-          <Button
-            buttonRef={confirmRef}
-            kind={request.danger ? "danger" : "primary"}
-            onClick={() => {
-              request.onConfirm();
-              onClose();
-            }}
-          >
-            {request.confirmLabel ?? request.title}
-          </Button>
-        </div>
-      </div>
-    </>
+    <DialogPrimitive.Root
+      open={request !== null}
+      onOpenChange={(open) => {
+        if (!open) onClose();
+      }}
+    >
+      <DialogPrimitive.Portal>
+        <DialogPrimitive.Overlay className="drawer-veil" aria-hidden />
+        <DialogPrimitive.Content
+          className="confirm"
+          tabIndex={-1}
+          /*
+           * The security root keeps its mark: the theme compiler excludes
+           * every recipe from a data-host-security subtree, so a confirmation
+           * of a destructive action never borrows an external skin's colours.
+           */
+          data-host-security="true"
+          role="alertdialog"
+          onCloseAutoFocus={(event) => {
+            const target = restoreTo.current;
+            restoreTo.current = null;
+            if (target instanceof HTMLElement && target.isConnected) target.focus();
+            event.preventDefault();
+          }}
+        >
+          <DialogPrimitive.Title className="confirm-title">
+            {request?.title}
+          </DialogPrimitive.Title>
+          {request?.body && <div className="confirm-body">{request.body}</div>}
+          <div className="confirm-actions">
+            <Button kind="ghost" onClick={onClose}>
+              {t("common.cancel")}
+            </Button>
+            <Button
+              autoFocus
+              kind={request?.danger ? "danger" : "primary"}
+              onClick={() => {
+                request?.onConfirm();
+                onClose();
+              }}
+            >
+              {request?.confirmLabel ?? request?.title}
+            </Button>
+          </div>
+        </DialogPrimitive.Content>
+      </DialogPrimitive.Portal>
+    </DialogPrimitive.Root>
   );
 }

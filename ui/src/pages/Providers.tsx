@@ -18,6 +18,7 @@ import { ProviderRow } from "./providers/ProviderRow";
 import { hasBalanceSource } from "./providers/balance";
 import { needsKey } from "./providers/kindMeta";
 import { ProviderDrawer } from "./providers/ProviderDrawer";
+import { PluginProviderDrawer, PluginProviderPicker } from "../plugins/provider";
 
 /**
  * The provider list. A provider is a connection to one upstream — endpoint,
@@ -285,6 +286,7 @@ export default function Providers({
               openProvider(id);
             }}
           />
+          <PluginProviderPicker run={run} />
         </div>
       )}
 
@@ -394,7 +396,9 @@ export default function Providers({
         </Section>
       )}
 
-      {open && (
+      {open?.plugin_origin && <PluginProviderDrawer id={open.id} name={open.name} installationId={open.plugin_origin.installation_id}
+        contributionId={open.plugin_origin.contribution_id} snapshot={snapshot} run={run} onClose={() => setOpenId(null)} />}
+      {open && !open.plugin_origin && (
         <ProviderDrawer
           key={open.id}
           provider={open}

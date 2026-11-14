@@ -27,5 +27,9 @@
   "docs/development/codex-auto-rectifier.md": "docs/archive/records/codex-auto-rectifier.md",
   "docs/development/routing-data-collection-guide.md": "docs/archive/records/routing-data-collection-guide.md",
   "docs/development/skin-spec-md3-fluent.md": "docs/archive/records/skin-spec-md3-fluent.md",
-  "docs/development/node-status/*": "docs/archive/records/node-status/*"
+  "docs/development/node-status/*": "docs/archive/records/node-status/*",
+  "docs/development/agentrouter-checkin-cdp-flow.md": "docs/archive/records/agentrouter-checkin-cdp-flow.md",
+  "docs/development/commit-integration-2026-11-14.md": "docs/archive/records/commit-integration-2026-11-14.md",
+  "docs/development/plugin-api-design.md": "docs/archive/plans/plugin-api-design.md",
+  "docs/development/takeover-conversion-fix-2026-11-14.md": "docs/archive/records/takeover-conversion-fix-2026-11-14.md"
 }

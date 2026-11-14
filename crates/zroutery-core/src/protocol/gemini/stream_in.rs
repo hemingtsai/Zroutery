@@ -16,6 +16,7 @@ pub struct GeminiStreamParser {
     normal_terminal: bool,
     next_index: u32,
     text_index: Option<u32>,
+    text_is_thought: bool,
     open_blocks: Vec<u32>,
     usage: Usage,
     /// The declaration events already published, so a chunk that restates the
@@ -33,6 +34,7 @@ impl GeminiStreamParser {
             normal_terminal: false,
             next_index: 0,
             text_index: None,
+            text_is_thought: false,
             open_blocks: Vec::new(),
             usage: Usage::default(),
             last_declared: (None, None),
@@ -109,6 +111,14 @@ impl StreamParser for GeminiStreamParser {
             {
                 for part in parts {
                     if let Some(text) = part.get("text").and_then(Value::as_str) {
+                        let thought = part.get("thought").and_then(Value::as_bool) == Some(true);
+                        if thought != self.text_is_thought {
+                            if let Some(index) = self.text_index.take() {
+                                self.open_blocks.retain(|i| *i != index);
+                                out.push(StreamEvent::BlockStop { index });
+                            }
+                            self.text_is_thought = thought;
+                        }
                         let index = match self.text_index {
                             Some(i) => i,
                             None => {
@@ -119,10 +129,27 @@ impl StreamParser for GeminiStreamParser {
                                 i
                             }
                         };
-                        out.push(StreamEvent::TextDelta {
-                            index,
-                            text: text.to_string(),
+                        out.push(if thought {
+                            StreamEvent::ThinkingDelta {
+                                index,
+                                text: text.to_string(),
+                            }
+                        } else {
+                            StreamEvent::TextDelta {
+                                index,
+                                text: text.to_string(),
+                            }
                         });
+                        if thought {
+                            if let Some(signature) =
+                                part.get("thoughtSignature").and_then(Value::as_str)
+                            {
+                                out.push(StreamEvent::ThinkingSignature {
+                                    index,
+                                    signature: signature.to_string(),
+                                });
+                            }
+                        }
                     } else if let Some(call) = part.get("functionCall") {
                         // Close the open text block if any.
                         if let Some(text_idx) = self.text_index.take() {

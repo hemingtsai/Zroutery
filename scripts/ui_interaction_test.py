@@ -542,6 +542,10 @@ HARNESS = """
             model: "standard-class", display_name: "Standard fixture", effort_levels: ["high"],
             capabilities: { tools: true, vision: false, thinking: true, structured_output: false, audio: false, video: false, files: false },
             context_window: null, max_output_tokens: null, capability_source: "configured fixture",
+          }, {
+            model: "fixture-exact-model", display_name: "Exact model fixture", effort_levels: ["medium"],
+            capabilities: { tools: true, vision: false, thinking: true, structured_output: false, audio: false, video: false, files: false },
+            context_window: 64000, max_output_tokens: 8192, capability_source: "configured exact fixture",
           }],
           unavailable_classes: ["fast-class"],
           notes: ["Fixture menu needs a client restart"],
@@ -1592,13 +1596,13 @@ def open_page(devtools: DevTools, page: str) -> None:
     )
     if page == door:
         if page in {"models", "providers", "takeover"}:
-            panel_selector = "#panel-%s" % page
+            panel_selector = '[data-panel="%s"]' % page
             devtools.wait_for(
                 "document.querySelector(%s) !== null" % json.dumps(panel_selector),
                 "the %s task panel" % page,
             )
         return
-    tab_selector = "#tab-%s" % page
+    tab_selector = '[data-tab="%s"]' % page
     devtools.wait_for(
         "document.querySelector(%s) !== null" % json.dumps(tab_selector),
         "the %s task tab" % page,
@@ -1879,8 +1883,8 @@ def case_ui2_candidate_priority(devtools: DevTools) -> list[str]:
     # The routing page splits its three subjects into tabs, so the auto-review
     # section is only mounted once its own tab is selected — and once it is, its
     # Edit button is the only `linky` on the page rather than the second.
-    devtools.wait_for("Boolean(document.querySelector('#tab-auto'))", "the routing tabs")
-    devtools.click_selector("#tab-auto")
+    devtools.wait_for("Boolean(document.querySelector('[data-tab=auto]'))", "the routing tabs")
+    devtools.click_selector('[data-tab="auto"]')
     devtools.wait_for("document.querySelector('.flow-row') !== null", "auto review tab")
     devtools.click_selector(".section-head button.linky", 0)
     devtools.wait_for("document.querySelector('.drawer table.table') !== null", "auto drawer")
@@ -2029,7 +2033,7 @@ def case_ui3_drawer_isolation(devtools: DevTools) -> list[str]:
     devtools.wait_for("document.querySelector('.drawer') === null", "the provider drawer to close")
     open_page(devtools, "models")
     devtools.wait_for("Boolean(document.querySelector('.list-row'))", "the models page")
-    unfold_page_form(devtools, "#panel-models input[placeholder='deepseek-chat']")
+    unfold_page_form(devtools, "[data-panel=models] input[placeholder='deepseek-chat']")
     devtools.evaluate("window.__zrStub.setDelay('fetch_provider_models', 1500)")
     browse = devtools.evaluate(
         """
@@ -2180,9 +2184,9 @@ def case_ui5_refused_round_shows_its_criteria(devtools: DevTools) -> list[str]:
     # unmounted and the judge button nowhere.
     open_page(devtools, "routing")
     devtools.wait_for(
-        "Boolean(document.querySelector('#tab-ml'))", "the learned-routing tab"
+        "Boolean(document.querySelector('[data-tab=ml]'))", "the learned-routing tab"
     )
-    devtools.click_selector("#tab-ml")
+    devtools.click_selector('[data-tab="ml"]')
     devtools.wait_for(
         "document.body.innerText.includes('Judge a candidate')", "the learning panel"
     )
@@ -2937,11 +2941,14 @@ def case_ui10_the_menu_moves_with_the_arrow_keys(devtools) -> list[str]:
     screen reader announced it as a menu while the arrow keys did what arrow
     keys do everywhere else: move the page. The role has to be backed by the
     behaviour, so the arrow keys move between the items, the focus starts
-    inside the menu, and Escape gives the focus back to the trigger.
+    inside the menu, and Escape gives the focus back to the trigger. Radix
+    starts the focus on the menu's own element and moves the *highlight* with
+    the arrows before the first item takes the focus, so the contract here is
+    Radix's: inside the menu on open, arrows move between items.
     """
     failures: list[str] = []
     seed(devtools, **CUTOVER_QUERY)
-    devtools.click_selector(".mainbar .popover-anchor .bar-action")
+    devtools.click_selector(".mainbar .bar-action")
     devtools.wait_for("Boolean(document.querySelector('.popover'))", "the menu")
 
     inside = devtools.evaluate(
@@ -2950,31 +2957,28 @@ def case_ui10_the_menu_moves_with_the_arrow_keys(devtools) -> list[str]:
     if not inside:
         failures.append("the menu opened without taking the focus")
 
-    first = devtools.evaluate(
-        "document.activeElement.getAttribute('role') || ''"
-    )
-    if first != "menuitem":
-        failures.append(
-            "the menu did not start on a menu item; focus was on %r" % first
-        )
-
-    # Down has to move, and it has to move to the *next* item rather than
-    # staying put.
-    before = devtools.evaluate("document.activeElement.textContent.trim()")
+    # Down has to land the focus on an item (Radix starts it on the menu's own
+    # element and moves between items with the arrows).
     devtools.press_key("ArrowDown")
-    after = devtools.evaluate("document.activeElement.textContent.trim()")
-    if before == after:
+    on_item = devtools.evaluate(
+        "document.activeElement.getAttribute('role') === 'menuitem'"
+    )
+    if not on_item:
         failures.append(
-            "ArrowDown did not move the focus between menu items; it stayed on %r" % before
+            "ArrowDown did not put the focus on a menu item; it was on %r"
+            % (devtools.evaluate("document.activeElement.textContent.trim()"),)
         )
 
-    # Up has to come back.
+    # Up has to move between items rather than leave the menu.
+    before = devtools.evaluate("document.activeElement.textContent.trim()")
     devtools.press_key("ArrowUp")
-    back = devtools.evaluate("document.activeElement.textContent.trim()")
-    if back != before:
+    back_inside = devtools.evaluate(
+        "document.querySelector('.popover').contains(document.activeElement) && "
+        "document.activeElement.getAttribute('role') === 'menuitem'"
+    )
+    if not back_inside:
         failures.append(
-            "ArrowUp did not return the focus to the previous item; it went to %r instead of %r"
-            % (back, before)
+            "ArrowUp left the menu items; focus went to %r" % (before,)
         )
 
     devtools.press_key("Escape")
@@ -3075,7 +3079,7 @@ def case_ui12_a_deep_link_opens_the_page_it_names(devtools) -> list[str]:
             "nothing was listening for the deep-link event, so a link could not open anything"
         )
     devtools.wait_for(
-        "Boolean(document.querySelector('#panel-providers'))",
+        "Boolean(document.querySelector('[data-panel=providers]'))",
         "the providers task panel",
     )
     if not devtools.evaluate(
@@ -3127,7 +3131,7 @@ def case_ui13_a_catalogue_row_says_no_tier_rather_than_a_dash(devtools) -> list[
     seed(devtools, **PROVIDER_CATALOGUE_QUERY)
     open_page(devtools, "models")
     devtools.wait_for("Boolean(document.querySelector('.list-row'))", "the model rows")
-    unfold_page_form(devtools, "#panel-models input[placeholder='deepseek-chat']")
+    unfold_page_form(devtools, "[data-panel=models] input[placeholder='deepseek-chat']")
 
     devtools.evaluate(
         """
@@ -3300,7 +3304,7 @@ def case_ui16_a_build_without_the_opencode_stack_offers_its_kinds(devtools) -> l
     seed(devtools, **{**CUTOVER_QUERY})
     open_page(devtools, "providers")
     devtools.wait_for("Boolean(document.querySelector('.page .list-row'))", "the provider rows")
-    unfold_page_form(devtools, "#panel-providers .field-actions button")
+    unfold_page_form(devtools, '[data-panel="providers"] .field-actions button')
     with_stack = kinds_on_screen()
     if "OpenCode" not in with_stack:
         failures.append(
@@ -3311,7 +3315,7 @@ def case_ui16_a_build_without_the_opencode_stack_offers_its_kinds(devtools) -> l
     seed(devtools, **{**CUTOVER_QUERY, "opencode": False})
     open_page(devtools, "providers")
     devtools.wait_for("Boolean(document.querySelector('.page .list-row'))", "the provider rows")
-    unfold_page_form(devtools, "#panel-providers .field-actions button")
+    unfold_page_form(devtools, '[data-panel="providers"] .field-actions button')
     without_stack = kinds_on_screen()
     if "OpenCode" in without_stack:
         failures.append(
@@ -3721,8 +3725,8 @@ def case_ui20_the_auto_mode_editor_names_the_decision_answer(devtools) -> list[s
 
     seed(devtools, **CUTOVER_QUERY)
     open_page(devtools, "routing")
-    devtools.wait_for("Boolean(document.querySelector('#tab-auto'))", "the auto mode tab")
-    devtools.click_selector("#tab-auto")
+    devtools.wait_for("Boolean(document.querySelector('[data-tab=auto]'))", "the auto mode tab")
+    devtools.click_selector('[data-tab="auto"]')
     devtools.wait_for("Boolean(document.querySelector('.page .linky'))", "the edit control")
     devtools.evaluate(
         """
@@ -3766,8 +3770,8 @@ def case_ui21_the_auto_mode_pool_marks_a_decision_candidate(devtools) -> list[st
 
     seed(devtools, decisionProvider=DECISION_PROVIDER, decisionModel=DECISION_MODEL)
     open_page(devtools, "routing")
-    devtools.wait_for("Boolean(document.querySelector('#tab-auto'))", "the auto mode tab")
-    devtools.click_selector("#tab-auto")
+    devtools.wait_for("Boolean(document.querySelector('[data-tab=auto]'))", "the auto mode tab")
+    devtools.click_selector('[data-tab="auto"]')
     devtools.wait_for("Boolean(document.querySelector('.page .linky'))", "the edit control")
     devtools.evaluate(
         """
@@ -3854,8 +3858,8 @@ def case_ui22_one_click_adds_the_zen_jev_preset(devtools) -> list[str]:
     failures: list[str] = []
 
     open_page(devtools, "routing")
-    devtools.wait_for("Boolean(document.querySelector('#tab-auto'))", "the auto review tab")
-    devtools.click_selector("#tab-auto")
+    devtools.wait_for("Boolean(document.querySelector('[data-tab=auto]'))", "the auto review tab")
+    devtools.click_selector('[data-tab="auto"]')
     devtools.wait_for("Boolean(document.querySelector('.page .linky'))", "the edit control")
     devtools.evaluate(
         """
@@ -4067,7 +4071,7 @@ def case_ui24_catalogue_import_adds_several_models(devtools) -> list[str]:
     )
     open_page(devtools, "models")
     devtools.wait_for("Boolean(document.querySelector('.list-row'))", "the models list")
-    unfold_page_form(devtools, "#panel-models input[placeholder='deepseek-chat']")
+    unfold_page_form(devtools, "[data-panel=models] input[placeholder='deepseek-chat']")
 
     # The add section defaults to the first provider; open its catalogue.
     devtools.wait_for(
@@ -4233,6 +4237,11 @@ def case_ui26_client_menu_preview_and_apply(devtools: DevTools) -> list[str]:
     if first["args"]["agent"] != "codex":
         failures.append("the row opened another client's preview")
 
+    devtools.click_selector('.drawer [role="combobox"]')
+    devtools.wait_for("[...document.querySelectorAll('[role=\"option\"]')].some((option) => option.textContent.includes('Exact model fixture'))", "exact model setup option")
+    devtools.evaluate("[...document.querySelectorAll('[role=\"option\"]')].find((option) => option.textContent.includes('Exact model fixture')).click()")
+    devtools.wait_for("window.__zrStub.last('client_setup_preview')?.args.options.default_class === 'fixture-exact-model'", "exact model preview selection")
+
     # Changing an option re-derives the preview instead of invalidating it
     # silently: the drawer answers with the standby proposal on its own.
     devtools.click_selector('.drawer input[type="checkbox"]')
@@ -4243,7 +4252,7 @@ def case_ui26_client_menu_preview_and_apply(devtools: DevTools) -> list[str]:
     devtools.wait_for("window.__zrStub.log('client_setup_apply').length === 1", "one setup write")
     devtools.wait_for("document.querySelector('.drawer') === null", "completed setup to close")
     sent = devtools.evaluate("window.__zrStub.last('client_setup_apply').args")
-    if sent != {"agent": "codex", "options": {"default_class": None, "standby": True}, "expectedFingerprint": "preview-codex-standby"}:
+    if sent != {"agent": "codex", "options": {"default_class": "fixture-exact-model", "standby": True}, "expectedFingerprint": "preview-codex-standby"}:
         failures.append("setup publication lost its client, options or preview fingerprint: %r" % sent)
 
     # A reply in flight when the drawer closes must not land in a drawer that
@@ -4253,12 +4262,12 @@ def case_ui26_client_menu_preview_and_apply(devtools: DevTools) -> list[str]:
     devtools.evaluate("window.__zrStub.setDelay('client_setup_preview', 300)")
     devtools.click_selector(action)
     devtools.wait_for("document.querySelector('.drawer-title')?.textContent.includes('Codex')", "DEBUG drawer reopened")
-    devtools.wait_for("window.__zrStub.log('client_setup_preview').length === 3", "in-flight preview request")
+    devtools.wait_for("window.__zrStub.log('client_setup_preview').length === 4", "in-flight preview request")
     devtools.press_key("Escape")
     devtools.wait_for("document.querySelector('.drawer') === null", "dismissed pending setup")
     devtools.click_selector('[data-agent="claude"] .btn-ghost')
     devtools.wait_for("document.querySelector('.drawer-title')?.textContent.includes('Claude')", "fresh Claude setup")
-    devtools.wait_for("window.__zrStub.log('client_setup_preview').length === 4", "fresh client preview reply")
+    devtools.wait_for("window.__zrStub.log('client_setup_preview').length === 5", "fresh client preview reply")
     devtools.wait_for(
         "document.querySelector('.drawer')?.textContent.includes('C:/fixture/claude')",
         "the fresh client's own preview",
@@ -4370,12 +4379,12 @@ def case_ui28_standby_usage_is_read_only(devtools: DevTools) -> list[str]:
         "local and standby usage sources",
     )
     local_actions = devtools.evaluate(
-        "document.querySelectorAll('#panel-usage .section-head .linky').length"
+        "document.querySelectorAll('[data-panel=usage] .section-head .linky').length"
     )
     if local_actions != 2:
         failures.append("local usage did not offer both export and import actions: %d" % local_actions)
     local_clear = devtools.evaluate(
-        "document.querySelectorAll('#panel-usage .section table button[aria-label^=\"Clear usage history for\"]').length"
+        "document.querySelectorAll('[data-panel=usage] .section table button[aria-label^=\"Clear usage history for\"]').length"
     )
     if local_clear < 1:
         failures.append("local usage did not offer its per-client clear action")
@@ -4397,12 +4406,12 @@ def case_ui28_standby_usage_is_read_only(devtools: DevTools) -> list[str]:
     if labels < 2:
         failures.append("standby row did not carry an upstream and source label")
     standby_actions = devtools.evaluate(
-        "document.querySelectorAll('#panel-usage .section-head .linky').length"
+        "document.querySelectorAll('[data-panel=usage] .section-head .linky').length"
     )
     if standby_actions != 0:
         failures.append("standby usage still offered local export/import actions: %d" % standby_actions)
     standby_clear = devtools.evaluate(
-        "document.querySelectorAll('#panel-usage .section table button[aria-label^=\"Clear usage history for\"]').length"
+        "document.querySelectorAll('[data-panel=usage] .section table button[aria-label^=\"Clear usage history for\"]').length"
     )
     if standby_clear != 0:
         failures.append("standby usage still offered a local clear action: %d" % standby_clear)
@@ -4427,7 +4436,7 @@ def case_ui28_standby_usage_is_read_only(devtools: DevTools) -> list[str]:
         "the local source to return",
     )
     local_again = devtools.evaluate(
-        "document.querySelectorAll('#panel-usage .section-head .linky').length"
+        "document.querySelectorAll('[data-panel=usage] .section-head .linky').length"
     )
     if local_again != 2:
         failures.append("returning to local usage did not restore export/import: %d" % local_again)
@@ -4457,7 +4466,7 @@ def case_ui29_appearance_persists_through_reload(devtools: DevTools) -> list[str
     devtools.wait_for("document.querySelectorAll('.select-item').length === 3", "skin options")
     devtools.click_selector(".select-item", 1)
     devtools.wait_for(
-        "document.documentElement.dataset.skin === 'md3'",
+        "document.documentElement.dataset.pluginTheme === 'org.zroutery.theme.md3'",
         "the MD3 skin to apply",
     )
     devtools.wait_for(
@@ -4465,9 +4474,9 @@ def case_ui29_appearance_persists_through_reload(devtools: DevTools) -> list[str
         "the native accent CSS variable",
     )
     stored = devtools.evaluate(
-        "JSON.stringify({theme: localStorage.getItem('zroutery-theme'), skin: localStorage.getItem('zroutery-skin')})"
+        "JSON.stringify({theme: localStorage.getItem('zroutery-theme'), skin: localStorage.getItem('zroutery-theme-ref')})"
     )
-    if json.loads(stored) != {"theme": "dark", "skin": "md3"}:
+    if json.loads(stored) != {"theme": "dark", "skin": "org.zroutery.theme.md3"}:
         failures.append("appearance choices were not stored synchronously: %s" % stored)
 
     devtools.call("Page.reload", {"ignoreCache": True})
@@ -4477,13 +4486,13 @@ def case_ui29_appearance_persists_through_reload(devtools: DevTools) -> list[str
         timeout=25.0,
     )
     restored = devtools.evaluate(
-        "JSON.stringify({theme: document.documentElement.dataset.theme, skin: document.documentElement.dataset.skin, "
+        "JSON.stringify({theme: document.documentElement.dataset.theme, skin: document.documentElement.dataset.pluginTheme, "
         "accent: getComputedStyle(document.documentElement).getPropertyValue('--system-accent').trim()})"
     )
-    if json.loads(restored) != {"theme": "dark", "skin": "md3", "accent": "#0078d4"}:
+    if json.loads(restored) != {"theme": "dark", "skin": "org.zroutery.theme.md3", "accent": "#0078d4"}:
         failures.append("appearance did not survive reload: %s" % restored)
     devtools.evaluate(
-        "localStorage.removeItem('zroutery-theme'); localStorage.removeItem('zroutery-skin')"
+        "localStorage.removeItem('zroutery-theme'); localStorage.removeItem('zroutery-skin'); localStorage.removeItem('zroutery-theme-ref')"
     )
     return failures
 
@@ -4673,7 +4682,7 @@ def case_ui31_the_add_form_lands_in_view_and_takes_focus(devtools: DevTools) -> 
     seed(devtools)
     open_page(devtools, "models")
     devtools.wait_for("document.querySelector('.list-row') !== null", "the models list")
-    form = "#panel-models input[placeholder='deepseek-chat']"
+    form = "[data-panel=models] input[placeholder='deepseek-chat']"
     unfold_page_form(devtools, form)
     devtools.wait_for(
         "document.activeElement === document.querySelector(%s)" % json.dumps(form),

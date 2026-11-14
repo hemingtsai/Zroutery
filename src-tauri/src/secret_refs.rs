@@ -28,6 +28,13 @@ pub(crate) fn referenced_secrets(config: &AppConfig) -> BTreeSet<String> {
             }
         }
     }
+    for instance in &config.plugin_instances {
+        for credential in &instance.credentials {
+            if !credential.key_ref.is_empty() {
+                refs.insert(credential.key_ref.clone());
+            }
+        }
+    }
     refs
 }
 
