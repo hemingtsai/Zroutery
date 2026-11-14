@@ -15,16 +15,16 @@ as of `2026-11-14` · branch `dev` · verified code head `26d887f`
 | frontend tests | **pass** | `pnpm --dir ui test` | 86 passed |
 | command surface | **pass** | `python3 -B scripts/command_surface_test.py` | 90 interface commands, 254 registered |
 | documentation contracts | **pass** | `python3 -B scripts/docs_contracts.py` | all docs gates; CI runs range impact with --base/--head |
-| documentation impact (range) | **unverified** | `python3 -B scripts/docs_contracts.py` | UNVERIFIED (range check disabled with --no-range) (9c6a043) |
-| documentation sources | **pass** | `python3 -B scripts/docs_contracts.py` | docs-sources: 799 anchor(s) resolved in 36 active document(s) (9c6a043) |
-| markdown structure | **pass** | `python3 -B scripts/docs_contracts.py` | markdown-check: fenced blocks and tables are well formed (9c6a043) |
-| documentation check | **pass** | `python3 -B scripts/docs_contracts.py` | docs-check: 47 active document(s), 0 pending, 0 warning(s), all checks passed (9c6a043) |
+| documentation impact (range) | **unverified** | `python3 -B scripts/docs_contracts.py` | UNVERIFIED (range check disabled with --no-range) (668bce5) |
+| documentation sources | **pass** | `python3 -B scripts/docs_contracts.py` | docs-sources: 799 anchor(s) resolved in 36 active document(s) (668bce5) |
+| markdown structure | **pass** | `python3 -B scripts/docs_contracts.py` | markdown-check: fenced blocks and tables are well formed (668bce5) |
+| documentation check | **pass** | `python3 -B scripts/docs_contracts.py` | docs-check: 47 active document(s), 0 pending, 0 warning(s), all checks passed (668bce5) |
 | documentation impact self-test | **pass** | `python3 -B scripts/docs_impact.py --base <base> --head HEAD` | the self-test passes; the range check is enforced in CI with --base/--head |
-| documentation parity | **pass** | `python3 -B scripts/docs_contracts.py` | docs-parity: the three READMEs have matching headings, fences, images and source anchors (9c6a043) |
-| module coverage | **pass** | `python3 -B scripts/docs_contracts.py` | coverage-check: 37 top-level modules (36 owned, 1 covered elsewhere, 0 unowned) (9c6a043) |
-| rendered state | **pass** | `python3 -B scripts/docs_contracts.py` | current-state: clean (9c6a043) |
-| invariant evidence | **pass** | `python3 -B scripts/docs_contracts.py` | invariant-check: 15 invariants, 13 with test anchors, 2 explicitly untested (9c6a043) |
-| state schema | **pass** | `python3 -B scripts/docs_contracts.py` | state-check: 27 gates, 4 blockers; schema and blockers valid (9c6a043) |
+| documentation parity | **pass** | `python3 -B scripts/docs_contracts.py` | docs-parity: the three READMEs have matching headings, fences, images and source anchors (668bce5) |
+| module coverage | **pass** | `python3 -B scripts/docs_contracts.py` | coverage-check: 37 top-level modules (36 owned, 1 covered elsewhere, 0 unowned) (668bce5) |
+| rendered state | **pass** | `python3 -B scripts/docs_contracts.py` | current-state: clean (668bce5) |
+| invariant evidence | **pass** | `python3 -B scripts/docs_contracts.py` | invariant-check: 15 invariants, 13 with test anchors, 2 explicitly untested (668bce5) |
+| state schema | **pass** | `python3 -B scripts/docs_contracts.py` | state-check: 27 gates, 4 blockers; schema and blockers valid (668bce5) |
 | whitespace | **pass** | `git diff --check` | no trailing whitespace damage |
 | orchestration docs (legacy) | **retired** | `scripts/orch_docs_test.py (not run)` | legacy node and evidence records are archived; validation retired |
 | UI budget | **pass** | `python3 -B scripts/ui_budget_test.py` | 734,994 B JS of 742,000 |
@@ -33,8 +33,8 @@ as of `2026-11-14` · branch `dev` · verified code head `26d887f`
 | UI interaction | **unrun** | `python3 -B scripts/ui_interaction_test.py` | timed out after 900s on Helium 0.21.2; not a pass and not a product failure (quarantined) |
 | Rust advisories | **fail** | `cargo audit --file Cargo.lock` | 5 vulnerabilities, 18 warnings |
 | frontend advisories | **pass** | `pnpm audit --prod` |  |
-| freshness | **pass** | `python3 -B scripts/docs_contracts.py` | freshness: 33 documents; no source changed after its review commit (9c6a043) |
-| rules registry | **pass** | `python3 -B scripts/docs_contracts.py` | docs-rules: 15 rules; 13 machine, 11 executed gates covered (9c6a043) |
+| freshness | **pass** | `python3 -B scripts/docs_contracts.py` | freshness: 33 documents; no source changed after its review commit (668bce5) |
+| rules registry | **pass** | `python3 -B scripts/docs_contracts.py` | docs-rules: 15 rules; 13 machine, 11 executed gates covered (668bce5) |
 
 ## Blockers
 

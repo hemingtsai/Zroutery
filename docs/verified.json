@@ -81,7 +81,7 @@
       "python3 -B scripts/commit_contract_test.py --self-test"
     ],
     "note": "The allowlists and trailer keys are owned by the validator; the document points at them instead of copying them.",
-    "reviewed_commit": "9b926ef"
+    "reviewed_commit": "668bce5"
   },
   "docs/development/architecture.md": {
     "verified_at": "2026-11-14",
@@ -628,6 +628,6 @@
       "python3 -B scripts/docs_contracts.py"
     ],
     "note": "The registry and the executed STEPS list are the two sides this page describes.",
-    "reviewed_commit": "9c6a043"
+    "reviewed_commit": "668bce5"
   }
 }
