@@ -21,13 +21,10 @@ STATE = Path("docs/development/state.json")
 SCHEMA = Path("docs/development/state.schema.json")
 DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 HEAD_RE = re.compile(r"^[0-9a-f]{7,40}$")
-URL_RE = re.compile(r"^https://github\.com/hemingtsai/Zroutery/issues/(\d+)$")
 STATUSES = {"pass", "fail", "unverified", "unrun", "retired"}
-ISSUE_STATES = {"open", "closed"}
 BLOCKER_STATES = {"partial", "blocked", "ready", "done", "open"}
 GATE_KEYS = {"name", "status", "command", "detail", "quarantine"}
-ISSUE_KEYS = {"number", "title", "state", "url", "labels"}
-BLOCKER_KEYS = {"id", "status", "summary", "issue", "blocked_by"}
+BLOCKER_KEYS = {"id", "status", "summary", "blocked_by"}
 
 
 def git(root: Path, *args: str) -> subprocess.CompletedProcess:
@@ -91,35 +88,6 @@ def validate(state: dict, schema: dict, root: Path = ROOT, git_check: bool = Tru
         if "quarantine" in gate and not isinstance(gate["quarantine"], bool):
             errors.append(f"gates[{index}]: quarantine must be a boolean")
 
-    issues = state.get("issues", [])
-    if not isinstance(issues, list):
-        errors.append("issues must be an array")
-        issues = []
-    issue_numbers = set()
-    for index, issue in enumerate(issues):
-        if not isinstance(issue, dict):
-            errors.append(f"issues[{index}]: must be an object")
-            continue
-        for key in sorted(set(issue) - ISSUE_KEYS):
-            errors.append(f"issues[{index}]: unknown key `{key}`")
-        number = issue.get("number")
-        if not isinstance(number, int) or number < 1 or number in issue_numbers:
-            errors.append(f"issues[{index}]: number is invalid or duplicated")
-        issue_numbers.add(number)
-        if issue.get("state") not in ISSUE_STATES:
-            errors.append(f"issues[{index}]: state {issue.get('state')!r} is not {sorted(ISSUE_STATES)}")
-        url = issue.get("url")
-        if not isinstance(url, str) or not URL_RE.match(url):
-            errors.append(f"issues[{index}]: url is not a repository issue URL")
-        elif isinstance(number, int) and int(URL_RE.match(url).group(1)) != number:
-            errors.append(f"issues[{index}]: url number does not match number {number}")
-        if not isinstance(issue.get("title"), str) or not issue["title"]:
-            errors.append(f"issues[{index}]: title is empty")
-        if "labels" in issue and (
-            not isinstance(issue["labels"], list) or not all(isinstance(label, str) for label in issue["labels"])
-        ):
-            errors.append(f"issues[{index}]: labels must be an array of strings")
-
     blockers = state.get("blockers", [])
     if not isinstance(blockers, list):
         errors.append("blockers must be an array")
@@ -137,9 +105,6 @@ def validate(state: dict, schema: dict, root: Path = ROOT, git_check: bool = Tru
         blocker_ids.add(identifier)
         if blocker.get("status") not in BLOCKER_STATES:
             errors.append(f"blockers[{index}]: status {blocker.get('status')!r} is not {sorted(BLOCKER_STATES)}")
-        issue = blocker.get("issue")
-        if issue is not None and issue not in issue_numbers:
-            errors.append(f"blockers[{index}]: issue #{issue} is not in issues[]")
         if not isinstance(blocker.get("summary"), str) or not blocker["summary"]:
             errors.append(f"blockers[{index}]: summary is empty")
         if "blocked_by" in blocker and (
@@ -190,8 +155,7 @@ def self_test() -> int:
         "head": "26d887f",
         "branch": "dev",
         "gates": [{"name": "tests", "status": "pass", "command": "cargo test"}],
-        "issues": [{"number": 1, "title": "x", "state": "open", "url": "https://github.com/hemingtsai/Zroutery/issues/1"}],
-        "blockers": [{"id": "7F", "status": "partial", "summary": "x", "issue": 1}],
+        "blockers": [{"id": "7F", "status": "partial", "summary": "x"}],
         "flaky": [],
         "last_full_green": None,
     }
@@ -201,12 +165,11 @@ def self_test() -> int:
         return 1
     bad = json.loads(json.dumps(good))
     bad["gates"][0]["status"] = "green"
-    bad["issues"][0]["url"] = "https://github.com/hemingtsai/Zroutery/issues/2"
-    bad["blockers"][0]["issue"] = 99
+    bad["blockers"][0]["blocked_by"] = ["missing"]
     if not validate(bad, schema, git_check=False):
         print("state-check self-test: bad state was NOT caught", file=sys.stderr)
         return 1
-    print("state-check: self-test passed (rejects an invalid enum, a mismatched issue URL and a missing issue link)")
+    print("state-check: self-test passed (rejects an invalid enum and a missing blocker dependency)")
     return 0
 
 
@@ -224,7 +187,7 @@ def main(argv: list[str] | None = None) -> int:
         for error in errors:
             print(f"state-check: {error}", file=sys.stderr)
         return 1
-    print(f"state-check: {len(state['gates'])} gates, {len(state['issues'])} issues, {len(state['blockers'])} blockers; schema and links valid")
+    print(f"state-check: {len(state['gates'])} gates, {len(state['blockers'])} blockers; schema and links valid")
     return 0
 
 

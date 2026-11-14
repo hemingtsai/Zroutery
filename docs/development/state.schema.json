@@ -9,7 +9,6 @@
     "head",
     "branch",
     "gates",
-    "issues",
     "blockers",
     "flaky",
     "last_full_green"
@@ -67,45 +66,6 @@
         "additionalProperties": false
       }
     },
-    "issues": {
-      "type": "array",
-      "items": {
-        "type": "object",
-        "required": [
-          "number",
-          "title",
-          "state",
-          "url"
-        ],
-        "properties": {
-          "number": {
-            "type": "integer",
-            "minimum": 1
-          },
-          "title": {
-            "type": "string",
-            "minLength": 1
-          },
-          "state": {
-            "enum": [
-              "open",
-              "closed"
-            ]
-          },
-          "url": {
-            "type": "string",
-            "pattern": "^https://github\\.com/hemingtsai/Zroutery/issues/[0-9]+$"
-          },
-          "labels": {
-            "type": "array",
-            "items": {
-              "type": "string"
-            }
-          }
-        },
-        "additionalProperties": false
-      }
-    },
     "blockers": {
       "type": "array",
       "items": {
@@ -132,10 +92,6 @@
           "summary": {
             "type": "string",
             "minLength": 1
-          },
-          "issue": {
-            "type": "integer",
-            "minimum": 1
           },
           "blocked_by": {
             "type": "array",

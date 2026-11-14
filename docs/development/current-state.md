@@ -32,19 +32,12 @@ as of `2026-11-14` · branch `dev` · verified code head `26d887f`
 | Rust advisories | **fail** | `cargo audit --file Cargo.lock` | 5 vulnerabilities, 18 warnings |
 | frontend advisories | **pass** | `pnpm audit --prod` |  |
 
-## Open issues
-
-- [#1](https://github.com/hemingtsai/Zroutery/issues/1) — 7F: real-traffic shadow is PARTIAL
-- [#2](https://github.com/hemingtsai/Zroutery/issues/2) — 7G: controlled takeover is blocked by 7F
-- [#3](https://github.com/hemingtsai/Zroutery/issues/3) — 7H: bounded exploration is blocked by 7G
-- [#4](https://github.com/hemingtsai/Zroutery/issues/4) — Rust advisories: 5 vulnerabilities and 18 warnings
-
 ## Blockers
 
-- 7F real-traffic shadow: PARTIAL ([#1](https://github.com/hemingtsai/Zroutery/issues/1))
-- 7G controlled takeover: BLOCKED; blocked by 7F ([#2](https://github.com/hemingtsai/Zroutery/issues/2))
-- 7H bounded exploration: BLOCKED; blocked by 7G ([#3](https://github.com/hemingtsai/Zroutery/issues/3))
-- ADV Rust advisories: OPEN ([#4](https://github.com/hemingtsai/Zroutery/issues/4))
+- 7F real-traffic shadow: PARTIAL
+- 7G controlled takeover: BLOCKED; blocked by 7F
+- 7H bounded exploration: BLOCKED; blocked by 7G
+- ADV Rust advisories: OPEN
 
 ## Known flaky
 

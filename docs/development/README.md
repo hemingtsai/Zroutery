@@ -30,7 +30,7 @@ This directory holds the current development documentation. The generated map is
 
 Historical audits, plans, execution records, node status and the evidence
 registry live under `docs/archive/`. They are not current fact; audits and
-findings are discussed in GitHub Issues.
+findings are reported to the user; Issues are opened only on request.
 
 ## Adding a document
 

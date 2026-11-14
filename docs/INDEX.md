@@ -6,7 +6,7 @@ This file is generated from `docs/docs.manifest.json`. Do not edit it.
 
 ## Legend
 
-`normative` rules win over `guide`; `fact` is generated current truth; `reference` describes one subsystem; `record`/`historical` are evidence, never current fact. Audits live in GitHub Issues.
+`normative` rules win over `guide`; `fact` is generated current truth; `reference` describes one subsystem; `record`/`historical` are evidence, never current fact. Findings are reported to the user.
 
 ## Reading paths
 
@@ -75,9 +75,9 @@ None. Every document is either current or archived.
 
 Historical documents live under `docs/archive/`. They are not current fact and are not read by default. See `docs/archive/README.md` for the index and redirects.
 
-## Issues
+## Findings
 
-Audits, findings, triage and risk discussions live in GitHub Issues. Use the `audit` and `finding/*` labels; `current-state.md` links open issues and carries at most a one-line status projection, never the issue body.
+Findings are reported to the user in the conversation. GitHub Issues are opened only on explicit request, never proactively.
 
 ## Health
 

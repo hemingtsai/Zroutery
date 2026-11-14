@@ -52,11 +52,11 @@ not restate them.
 - Every factual sentence in a normative or reference document cites a source
   read in the same change (`path::symbol` or `path#Lx`). Old documents are leads,
   never sources. See [docs/DOCUMENTATION.md](docs/DOCUMENTATION.md).
-- Audits, findings and triage are GitHub Issues, not files under `docs/`. An
-  audit that yields a decision writes an ADR; one that yields a durable fact
-  updates the relevant document. Ask for an issue body rather than inventing it.
+- Do not open GitHub Issues proactively. Report findings to the user; open an
+  Issue only when explicitly asked. An audit that yields a decision writes an
+  ADR; one that yields a durable fact updates the relevant document.
 - `state.json` may carry a one-line status projection; `current_state.py`
-  renders it. The finding and its discussion stay in the Issue.
+  renders it. A finding is reported to the user, not filed unless asked.
 - Node status, the evidence registry and execution records are archived legacy
   history. Do not add records there.
 
@@ -82,8 +82,8 @@ gate.
 - Format: `<type>(<scope>): <imperative summary>`, lowercase, at most 72
   characters. `scripts/commit_contract_test.py` is authoritative.
 - Validate the range: `python3 -B scripts/commit_contract_test.py --base <start> --head HEAD`.
-- Plans, test transcripts and delivery status belong in Issues or
-  `docs/development/`, never in commit subjects or long bodies.
+- Plans, test transcripts and delivery status belong in `docs/development/` or
+  the conversation, never in commit subjects or long bodies.
 
 ## Stop and report
 

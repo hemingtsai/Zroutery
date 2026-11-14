@@ -93,7 +93,8 @@ The default body limit is 32 MiB (`crates/zroutery-core/src/config/server.rs::Se
 
 ## Audits and findings live in issues
 
-- Audits, reviews, triage and risk discussions are GitHub Issues, not files under
+- Findings are reported to the user; GitHub Issues are opened only on explicit
+  request, not proactively. Audits, reviews and risk discussions are not files under
   `docs/`.
 - An audit that produces a decision writes an ADR; an audit that produces a
   durable fact updates a `reference` or `normative` document. Everything else

@@ -146,7 +146,7 @@ Consequences, stated rather than discovered:
 - `current_state.py --check` fails when `current-state.md` is not the render of
   `state.json`; hand edits are not a source.
 - `state_check.py` validates `state.json` against `state.schema.json` and checks
-  issue links, blocker dependencies and cycles.
+  blocker dependencies and cycles.
 - `docs_parity.py` checks that the three READMEs have matching headings, fences,
   images and source anchors; prose may differ, shape may not.
 - `docs_check.py` compares `docs/verified.json` source content hashes with

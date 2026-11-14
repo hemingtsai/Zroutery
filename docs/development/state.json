@@ -141,56 +141,16 @@
       "command": "pnpm audit --prod"
     }
   ],
-  "issues": [
-    {
-      "number": 1,
-      "title": "7F: real-traffic shadow is PARTIAL",
-      "state": "open",
-      "url": "https://github.com/hemingtsai/Zroutery/issues/1",
-      "labels": [
-        "enhancement"
-      ]
-    },
-    {
-      "number": 2,
-      "title": "7G: controlled takeover is blocked by 7F",
-      "state": "open",
-      "url": "https://github.com/hemingtsai/Zroutery/issues/2",
-      "labels": [
-        "enhancement"
-      ]
-    },
-    {
-      "number": 3,
-      "title": "7H: bounded exploration is blocked by 7G",
-      "state": "open",
-      "url": "https://github.com/hemingtsai/Zroutery/issues/3",
-      "labels": [
-        "enhancement"
-      ]
-    },
-    {
-      "number": 4,
-      "title": "Rust advisories: 5 vulnerabilities and 18 warnings",
-      "state": "open",
-      "url": "https://github.com/hemingtsai/Zroutery/issues/4",
-      "labels": [
-        "bug"
-      ]
-    }
-  ],
   "blockers": [
     {
       "id": "7F",
       "status": "partial",
-      "summary": "real-traffic shadow",
-      "issue": 1
+      "summary": "real-traffic shadow"
     },
     {
       "id": "7G",
       "status": "blocked",
       "summary": "controlled takeover",
-      "issue": 2,
       "blocked_by": [
         "7F"
       ]
@@ -199,7 +159,6 @@
       "id": "7H",
       "status": "blocked",
       "summary": "bounded exploration",
-      "issue": 3,
       "blocked_by": [
         "7G"
       ]
@@ -207,8 +166,7 @@
     {
       "id": "ADV",
       "status": "open",
-      "summary": "Rust advisories",
-      "issue": 4
+      "summary": "Rust advisories"
     }
   ],
   "flaky": [
