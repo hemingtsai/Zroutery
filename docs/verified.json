@@ -1,4 +1,24 @@
 {
+  "docs/development/reference/accounting.md": {
+    "verified_at": "2026-11-14",
+    "sources": {
+      "crates/zroutery-core/src/ir/mod.rs": "sha256:8ce5ac6f85259c3c2265ebdf1f91e306857b9d053b14317e487b4b4f1c85ab0a",
+      "crates/zroutery-core/src/billing.rs": "sha256:56e93b1bad31236f842e1f134677c34e261dfcf2c472ac1dc72603087c3ed538",
+      "crates/zroutery-core/src/accounting.rs": "sha256:3569d4043744bf2ea5e570280110e0c47b9184a8f80db15ba2da01e2daef423e",
+      "crates/zroutery-core/src/server/pipeline/lifecycle.rs": "sha256:d09be55d5471810747ae16ab614d1e406642b509d1a66c439d9873311bd4fbbb",
+      "crates/zroutery-core/src/budget.rs": "sha256:fa64323b90ed7c04dec0cafcb412a191c1aa82d10f4e3f28f7186cf0edec4bac",
+      "crates/zroutery-core/src/server/state.rs": "sha256:a78f46084c009851f9928c8cab36207b82234a2ac252d49bfc7ff29cfb2fc8f6",
+      "crates/zroutery-core/src/server/ledger.rs": "sha256:864851873235028aeb378d94ad99ca57e76a16c4554177960d832a1697d68fc0",
+      "crates/zroutery-core/src/runtime_store.rs": "sha256:aae22be67ec6374ee9c733e40bf329d1f9a6a2b71552819c2e4cf1d86baefce9",
+      "src-tauri/src/state/budget.rs": "sha256:3609c1eba978b666ff8a92cf27e91f50c751212b5397f566539a5a79b29c7601",
+      "src-tauri/src/store.rs": "sha256:05701f3f4375c52e4ee1e4fd6d1c41566777992edcb0f12e72ac14d8f0dfd12c"
+    },
+    "commands": [
+      "cargo test --workspace --all-features --locked",
+      "cargo test -p zroutery-core --all-features billing::"
+    ],
+    "note": "The settlement and budget invariants are executed by the workspace suite; this page names the symbols that carry them."
+  },
   "docs/development/reference/ipc.md": {
     "verified_at": "2026-11-14",
     "sources": {
