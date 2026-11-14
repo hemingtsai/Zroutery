@@ -85,6 +85,8 @@ permission and process.
   `docs/`. An audit that yields a decision writes an ADR; one that yields a
   durable fact updates the relevant document. If you cannot read the issue
   tracker, ask the user for the issue body; do not invent it.
+- `current-state.md` may carry a one-line status projection (a red gate, a
+  blocker, a quarantine); the finding and its discussion stay in the Issue.
 - `docs/development/node-status/`, the evidence registry and the execution
   records are legacy history. Do not add new records there; they are being
   archived. The current facts live in `current-state.md`.
@@ -95,10 +97,10 @@ The toolchain and every gate are defined once in
 [docs/development/verification.md](docs/development/verification.md). Do not
 copy the commands here.
 
-- Resolve the CI compiler first: `python3 -B scripts/toolchain_gate.py`; use the
-  version it reports for clippy and tests. `1.90.0` is the separate MSRV check.
-- Tier 1 is blocking on every change. Tier 2 is surface-specific: the budget and
-  overflow rows block the reachability job; layout and interaction are local-only.
+- Resolve the CI compiler first; `verification.md` names the resolver and the
+  version to use. `1.90.0` is the separate MSRV check.
+- Tier 1 is blocking on every change. Tier 2 is surface-specific; `verification.md`
+  says which rows block a CI job and which are local-only.
 - A gate that could not run is **unrun**, not passed. Record the reason.
 - A known-red gate is in `current-state.md`; report it, do not silently fix an
   unrelated red gate.

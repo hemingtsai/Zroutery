@@ -5,19 +5,19 @@
   "gates": [
     {
       "name": "fmt",
-      "status": "pass",
+      "status": "unverified",
       "command": "cargo fmt --all -- --check",
       "detail": "ran on local rustc 1.98.0; the CI-resolved toolchain was not available, so this is not a CI-toolchain pass"
     },
     {
       "name": "clippy (workspace, all targets, all features)",
-      "status": "pass",
+      "status": "unverified",
       "command": "cargo clippy --workspace --all-targets --all-features --locked -- -D warnings",
       "detail": "ran on local rustc 1.98.0; the CI-resolved toolchain was not available, so this is not a CI-toolchain pass"
     },
     {
       "name": "tests (workspace, all features)",
-      "status": "pass",
+      "status": "unverified",
       "command": "cargo test --workspace --all-features --locked",
       "detail": "3478 passed, 0 failed, 22 ignored, 110 suites; ran on local rustc 1.98.0; the CI-resolved toolchain was not available, so this is not a CI-toolchain pass"
     },
@@ -51,8 +51,8 @@
     {
       "name": "documentation impact",
       "status": "pass",
-      "command": "python3 -B scripts/docs_impact.py --self-test",
-      "detail": "self-test passes; CI blocks on an affected document that did not change"
+      "command": "python3 -B scripts/docs_impact.py --base <base> --head HEAD",
+      "detail": "self-test passes; the CI range check blocks on an affected document that did not change"
     },
     {
       "name": "orchestration docs (legacy)",
