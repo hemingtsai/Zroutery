@@ -59,6 +59,9 @@
           },
           "detail": {
             "type": "string"
+          },
+          "quarantine": {
+            "type": "boolean"
           }
         },
         "additionalProperties": false

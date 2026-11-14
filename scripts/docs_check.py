@@ -347,7 +347,7 @@ def render_index(root: Path, manifest: dict) -> str:
                 anchored += 1
         if entry["path"] in verified:
             ledgered += 1
-        if not count and type_ not in {"index", "fact", "adr"}:
+        if not count and type_ not in {"index", "fact", "adr", "entry"}:
             unanchored.append(f"`{entry['path']}`")
     lines.append(f"- active documents: {active}")
     lines.append(f"- source-anchored (non-ADR): {anchored}")

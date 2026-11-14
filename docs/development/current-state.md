@@ -15,16 +15,16 @@ as of `2026-11-14` · branch `dev` · verified code head `26d887f`
 | frontend tests | **pass** | `pnpm --dir ui test` | 86 passed |
 | command surface | **pass** | `python3 -B scripts/command_surface_test.py` | 90 interface commands, 254 registered |
 | documentation sources | **pass** | `python3 -B scripts/docs_sources.py --check` |  |
-| documentation check | **pass** | `python3 -B scripts/docs_check.py` | 44 active, 0 pending, 0 warnings |
-| documentation impact | **pass** | `python3 -B scripts/docs_impact.py --base <base> --head HEAD` | self-test passes; the CI range check blocks on an affected document that did not change |
+| documentation check | **pass** | `python3 -B scripts/docs_check.py` | 45 active, 0 pending, 0 warnings |
+| documentation impact self-test | **pass** | `python3 -B scripts/docs_impact.py --base <base> --head HEAD` | the self-test passes; the range check is enforced in CI with --base/--head |
 | documentation parity | **pass** | `python3 -B scripts/docs_parity.py --check` | three READMEs have matching headings, fences, images and anchors |
 | module coverage | **pass** | `python3 -B scripts/coverage_check.py` | 36 public Core modules owned |
 | whitespace | **pass** | `git diff --check` | no trailing whitespace damage |
 | orchestration docs (legacy) | **retired** | `scripts/orch_docs_test.py (not run)` | legacy node and evidence records are archived; validation retired |
 | UI budget | **pass** | `python3 -B scripts/ui_budget_test.py` | 734,994 B JS of 742,000 |
 | UI layout | **pass** | `python3 -B scripts/ui_layout_test.py` | 12 surfaces, 79 controls |
-| UI overflow | **fail** | `python3 -B scripts/ui_overflow_test.py` | routing tab timeout; lazy page stuck on Helium 0.21.2 |
-| UI interaction | **unrun** | `python3 -B scripts/ui_interaction_test.py` | timed out after 900s on Helium 0.21.2; not a pass and not a product failure |
+| UI overflow | **fail** | `python3 -B scripts/ui_overflow_test.py` | routing tab timeout; lazy page stuck on Helium 0.21.2 (quarantined) |
+| UI interaction | **unrun** | `python3 -B scripts/ui_interaction_test.py` | timed out after 900s on Helium 0.21.2; not a pass and not a product failure (quarantined) |
 | Rust advisories | **fail** | `cargo audit --file Cargo.lock` | 5 vulnerabilities, 18 warnings |
 | frontend advisories | **pass** | `pnpm audit --prod` |  |
 

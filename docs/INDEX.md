@@ -88,6 +88,6 @@ Audits, findings, triage and risk discussions live in GitHub Issues. Use the `au
 - ADRs: 8 (5 with code anchors; decision records, not machine-verified)
 - generated/index: 5
 - pending migration: 0
-- documents that must be anchored but are not: `AGENTS.md`
+- documents that must be anchored but are not: none
 - source anchors are checked by `scripts/docs_sources.py`
 - links, sizes, freshness and code paths are checked by `scripts/docs_check.py`

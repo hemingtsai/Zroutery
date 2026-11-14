@@ -39,12 +39,15 @@ def render(state: dict) -> str:
         "|---|---|---|---|",
     ]
     for gate in state.get("gates", []):
+        detail = gate.get("detail", "")
+        if gate.get("quarantine"):
+            detail = f"{detail} (quarantined)" if detail else "quarantined"
         lines.append(
             "| {name} | **{status}** | `{command}` | {detail} |".format(
                 name=gate.get("name", "?"),
                 status=gate.get("status", "unknown"),
                 command=gate.get("command", ""),
-                detail=gate.get("detail", ""),
+                detail=detail,
             )
         )
     lines += ["", "## Open issues", ""]
