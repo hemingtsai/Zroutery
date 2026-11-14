@@ -54,9 +54,9 @@
     },
     {
       "name": "orchestration docs (legacy)",
-      "status": "pass",
-      "command": "python3 -B scripts/orch_docs_test.py",
-      "detail": "84 nodes, 122 edges, 196 evidence IDs, 8 ADRs"
+      "status": "retired",
+      "command": "scripts/orch_docs_test.py (not run)",
+      "detail": "legacy node and evidence records are archived; validation retired"
     },
     {
       "name": "UI budget",

@@ -93,7 +93,7 @@ deliberately not flattering.
 | UI interaction | — | **no** | local only |
 | MSRV check | `msrv` | yes | 1.90.0, locked, all targets |
 | commit contract | `contracts` | yes | range check |
-| orchestration docs | `contracts` | yes | legacy node records |
+| orchestration docs | — | no | retired; node and evidence records are archived |
 | command surface | `contracts` | yes | |
 | docs checks | `contracts` | yes | anchors, index, impact |
 | Rust advisories | `audit` | nightly; warning on PR | `continue-on-error` on pull requests |

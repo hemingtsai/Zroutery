@@ -157,11 +157,6 @@ jobs:
           echo "validating every non-merge commit in ${BASE_SHA}..HEAD"
           python3 scripts/commit_contract_test.py --base "$BASE_SHA" --head HEAD
 
-      - name: Orchestration docs, DAG and evidence registry
-        run: |
-          set -euo pipefail
-          python3 scripts/orch_docs_test.py
-
       # The documentation contract: anchors resolve, links and sizes hold,
       # generated files are current, and every source that a document cites
       # forced that document to change in this range. The self-tests prove the

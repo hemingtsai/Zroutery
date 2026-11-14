@@ -6,7 +6,9 @@
       "crates/zroutery-core/src/agent_takeover/ownership.rs": "sha256:29be578e89eaa58afa7f343f8aeffb5980bbfc6d882499ddf4bc57996e9cd594",
       "src-tauri/src/takeover_commands.rs": "sha256:a3113e7a4e3ecff39306855f16b0a980415e0537fcc7a5651d59c54c41fe70f9"
     },
-    "commands": ["cargo test --workspace --all-features --locked"],
+    "commands": [
+      "cargo test --workspace --all-features --locked"
+    ],
     "note": "The ownership state machine and manifest are the source; the production takeover status is deliberately not claimed."
   },
   "docs/development/reference/ml-routing.md": {
@@ -21,7 +23,9 @@
       "crates/zroutery-core/src/server/ml_state.rs": "sha256:3b7a4a6e92058113ad7031fa747ff5fc563cc677066173c792476441fc0fa0bf",
       "crates/zroutery-core/src/server/handlers.rs": "sha256:fab479470870597d7be4b37a27948754140d49963d8ccf0d089b5dc514b27681"
     },
-    "commands": ["cargo test --workspace --all-features --locked"],
+    "commands": [
+      "cargo test --workspace --all-features --locked"
+    ],
     "note": "The reference states the mechanism and the gate defaults; production benefit is not claimed, and current status stays in current-state.md."
   },
   "docs/development/reference/accounting.md": {
@@ -57,7 +61,9 @@
       "ui/mock-bridge.ts": "sha256:c02046bd6b49047c2e66a2535dc835c03cc3ad2b67daa5656775e3029a7d02ed",
       "scripts/command_surface_test.py": "sha256:8e603b9a8a873aca86721b128780ad2a14675fe550f11a45b353a4a1b33d8001"
     },
-    "commands": ["python3 -B scripts/command_surface_test.py"],
+    "commands": [
+      "python3 -B scripts/command_surface_test.py"
+    ],
     "note": "The command-surface gate is the executable check; the reference explains the boundary it enforces."
   },
   "docs/development/WORKFLOW.md": {
@@ -65,9 +71,11 @@
     "sources": {
       "scripts/commit_contract_test.py": "sha256:a853098040da40b7f2a0cec3878f19a9079bbb938ae3ad2de62c7af76bb4255b",
       "scripts/docs_impact.py": "sha256:294ed119ad409be3d1acd9767c3229cca6d3c11f8042b48f8a626cc40740a021",
-      ".github/workflows/ci.yml": "sha256:324f1f2575475151ae56bd31e27423c47052635603d6a0847837ee0a93f8440c"
+      ".github/workflows/ci.yml": "sha256:d53064e5b08812aea7f7969190f290bc9664d1ce91c68bd87eb95e0570d024d8"
     },
-    "commands": ["python3 -B scripts/commit_contract_test.py --self-test"],
+    "commands": [
+      "python3 -B scripts/commit_contract_test.py --self-test"
+    ],
     "note": "The allowlists and trailer keys are owned by the validator; the document points at them instead of copying them."
   },
   "docs/development/architecture.md": {
@@ -119,7 +127,9 @@
       "src-tauri/build.rs": "sha256:bfcdc780b6631d9f6032cfc6021f654d7801d10290067b2ea5679e888ab3d323",
       "src-tauri/capabilities/default.json": "sha256:16cc97d7b8f2068ebed1bf7fae50843dea4793c8981f63146a89ce4a6db43257"
     },
-    "commands": ["python3 -B scripts/command_surface_test.py"],
+    "commands": [
+      "python3 -B scripts/command_surface_test.py"
+    ],
     "note": "The command-registration rule is read from build.rs and the capability list; the symbol check resolves both."
   },
   "CONTRIBUTING.md": {
@@ -129,7 +139,9 @@
       "package.json": "sha256:2bafd104472c12f8b42245d383d2669b84b5a832e22a5c8c80f9fd28b7da0418",
       "scripts/commit_contract_test.py": "sha256:a853098040da40b7f2a0cec3878f19a9079bbb938ae3ad2de62c7af76bb4255b"
     },
-    "commands": ["python3 -B scripts/commit_contract_test.py --self-test"],
+    "commands": [
+      "python3 -B scripts/commit_contract_test.py --self-test"
+    ],
     "note": "Toolchain and pnpm pins are read from the manifests; the commit allowlists are owned by the validator and are not copied into prose."
   },
   "docs/DOCUMENTATION.md": {
@@ -137,13 +149,15 @@
     "sources": {
       "crates/zroutery-core/src/config/server.rs": "sha256:bee183e115f654014ef4c5a5c271d8561b33bda7fd55f88bcac1b37468d0d532"
     },
-    "commands": ["python3 -B scripts/docs_check.py --self-test"],
+    "commands": [
+      "python3 -B scripts/docs_check.py --self-test"
+    ],
     "note": "The example anchor is resolved by the checker; the surrounding rules are normative, not factual claims."
   },
   "docs/development/verification.md": {
     "verified_at": "2026-11-14",
     "sources": {
-      ".github/workflows/ci.yml": "sha256:324f1f2575475151ae56bd31e27423c47052635603d6a0847837ee0a93f8440c",
+      ".github/workflows/ci.yml": "sha256:d53064e5b08812aea7f7969190f290bc9664d1ce91c68bd87eb95e0570d024d8",
       ".github/workflows/packaging.yml": "sha256:608c228f3dbe16fc9dc2ba1cc80679ff2984f42323a6ae392a65dd27a316e6d2",
       "scripts/toolchain_gate.py": "sha256:69296c7d0c28caf3edd88e858ff384913fe2ea931041de4e3be459584d7c7e43",
       "scripts/command_surface_test.py": "sha256:8e603b9a8a873aca86721b128780ad2a14675fe550f11a45b353a4a1b33d8001",

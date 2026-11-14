@@ -17,7 +17,7 @@ as of `2026-11-14` · branch `dev` · head `26d887f`
 | documentation sources | **pass** | `python3 -B scripts/docs_sources.py --check` |  |
 | documentation check | **pass** | `python3 -B scripts/docs_check.py` |  |
 | documentation impact | **pass** | `python3 -B scripts/docs_impact.py --self-test` | self-test passes; CI blocks on an affected document that did not change |
-| orchestration docs (legacy) | **pass** | `python3 -B scripts/orch_docs_test.py` | 84 nodes, 122 edges, 196 evidence IDs, 8 ADRs |
+| orchestration docs (legacy) | **retired** | `scripts/orch_docs_test.py (not run)` | legacy node and evidence records are archived; validation retired |
 | UI budget | **pass** | `python3 -B scripts/ui_budget_test.py` | 734,994 B JS of 742,000 |
 | UI layout | **pass** | `python3 -B scripts/ui_layout_test.py` | 12 surfaces, 79 controls |
 | UI overflow | **fail** | `python3 -B scripts/ui_overflow_test.py` | routing tab timeout; lazy page stuck on Helium 0.21.2 |
