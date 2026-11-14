@@ -128,7 +128,9 @@ Consequences, stated rather than discovered:
 ## Documentation gates
 
 - `docs_contracts.py` is the single entry point: it runs every documentation
-  contract below, including `freshness_report.py --check`.
+  contract below, including `freshness_report.py --check`. Branch protection
+  must require the `Documentation contracts` job; `--no-range` is for local
+  diagnosis only, never for CI.
 - `markdown_check.py` enforces fenced-code closure and table structure without
   a third-party parser.
 - `docs_sources.py --check` resolves every `path::symbol` and `path#Lx` anchor in
