@@ -417,6 +417,20 @@
       "owner": "backend",
       "summary": "Local trust boundary: auth, CORS, secrets, webview capabilities, redirects and error redaction.",
       "max_lines": 300
+    },
+    {
+      "path": "docs/development/reference/rectifier.md",
+      "title": "Rectifier Reference",
+      "type": "reference",
+      "authority": "reference",
+      "audience": [
+        "human",
+        "agent"
+      ],
+      "status": "active",
+      "owner": "backend",
+      "summary": "Request-shape repairs, the repair loop, Codex Auto and the breaker exception.",
+      "max_lines": 300
     }
   ],
   "pending": [],

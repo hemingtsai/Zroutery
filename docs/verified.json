@@ -458,5 +458,22 @@
       "python3 -B scripts/command_surface_test.py"
     ],
     "note": "The auth layer, capabilities and redaction are the source; the threat model is stated rather than implied."
+  },
+  "docs/development/reference/rectifier.md": {
+    "verified_at": "2026-11-14",
+    "sources": {
+      "crates/zroutery-core/src/rectifier/mod.rs": "sha256:34e0df8e31f50b659f1dcd9873bc5668a367935f7e9460a6c39b197fb7991ac4",
+      "crates/zroutery-core/src/rectifier/thinking_signature.rs": "sha256:b63fb074bce3f1e6c6aaaf90a189358abcd612041b8d21324119e266c7f0c2b6",
+      "crates/zroutery-core/src/rectifier/media_fallback.rs": "sha256:d81bad504af579780ea5709ec752b3831827ef8bd09364652d2b97f2fd919a05",
+      "crates/zroutery-core/src/rectifier/thinking_budget.rs": "sha256:824b8b94e45f60fe14273573d3db7d41c38d6b3224d3ce4c7144645706972856",
+      "crates/zroutery-core/src/rectifier/codex_metadata.rs": "sha256:f2c9ca3f2f817d379ea3c825829961fa563e7695b27ac225d2037c184ba4f200",
+      "crates/zroutery-core/src/rectifier/codex_auto.rs": "sha256:12005f4c4b69912edc318744e11f178deedd4f6aa8ae6fe98be3f990502d2c24",
+      "crates/zroutery-core/src/config/routing.rs": "sha256:5867f6a23b6568bbe71957a4bb9c776d5d4686f67c2dfd922f95f4d0c14f77e3",
+      "crates/zroutery-core/src/server/pipeline/repair.rs": "sha256:4459bd0c6a77791c34ba2e1495b9b20e42d62460506586c7061ad09feba3ba0b"
+    },
+    "commands": [
+      "cargo test --workspace --all-features --locked"
+    ],
+    "note": "The repair loop and its breaker exception are the source; no retry is described as health-affecting."
   }
 }

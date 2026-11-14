@@ -56,6 +56,7 @@ This file is generated from `docs/docs.manifest.json`. Do not edit it.
 | [docs/development/reference/observability.md](development/reference/observability.md) | reference | reference | backend | Request records, health and latency state, activity projection and in-memory sessions. |
 | [docs/development/reference/config.md](development/reference/config.md) | reference | reference | backend | Defaults, validation, normalisation, persistence, secret boundary and feature gates. |
 | [docs/development/reference/security.md](development/reference/security.md) | reference | reference | backend | Local trust boundary: auth, CORS, secrets, webview capabilities, redirects and error redaction. |
+| [docs/development/reference/rectifier.md](development/reference/rectifier.md) | reference | reference | backend | Request-shape repairs, the repair loop, Codex Auto and the breaker exception. |
 
 ## Pending migration
 
@@ -73,9 +74,9 @@ Audits, findings, triage and risk discussions live in GitHub Issues. Use the `au
 
 ## Health
 
-- active documents: 37
-- source-anchored (non-ADR): 25
-- hash-ledgered: 25
+- active documents: 38
+- source-anchored (non-ADR): 26
+- hash-ledgered: 26
 - guides: 5
 - ADRs: 8 (5 with code anchors; decision records, not machine-verified)
 - generated/index: 4
