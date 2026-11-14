@@ -1,0 +1,164 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/hemingtsai/Zroutery/docs/development/state.schema.json",
+  "title": "Zroutery current state",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "as_of",
+    "head",
+    "branch",
+    "gates",
+    "issues",
+    "blockers",
+    "flaky",
+    "last_full_green"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": 1
+    },
+    "as_of": {
+      "type": "string",
+      "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"
+    },
+    "head": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{7,40}$"
+    },
+    "branch": {
+      "type": "string",
+      "minLength": 1
+    },
+    "gates": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "name",
+          "status",
+          "command"
+        ],
+        "properties": {
+          "name": {
+            "type": "string",
+            "minLength": 1
+          },
+          "status": {
+            "enum": [
+              "pass",
+              "fail",
+              "unverified",
+              "unrun",
+              "retired"
+            ]
+          },
+          "command": {
+            "type": "string",
+            "minLength": 1
+          },
+          "detail": {
+            "type": "string"
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    "issues": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "number",
+          "title",
+          "state",
+          "url"
+        ],
+        "properties": {
+          "number": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "title": {
+            "type": "string",
+            "minLength": 1
+          },
+          "state": {
+            "enum": [
+              "open",
+              "closed"
+            ]
+          },
+          "url": {
+            "type": "string",
+            "pattern": "^https://github\\.com/hemingtsai/Zroutery/issues/[0-9]+$"
+          },
+          "labels": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    "blockers": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "id",
+          "status",
+          "summary"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "pattern": "^[0-9A-Za-z-]+$"
+          },
+          "status": {
+            "enum": [
+              "partial",
+              "blocked",
+              "ready",
+              "done"
+            ]
+          },
+          "summary": {
+            "type": "string",
+            "minLength": 1
+          },
+          "issue": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "blocked_by": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    "flaky": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "last_full_green": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"
+    },
+    "$schema": {
+      "type": "string"
+    }
+  },
+  "additionalProperties": false
+}

@@ -109,14 +109,65 @@
       "command": "pnpm audit --prod"
     }
   ],
-  "issues": [],
+  "issues": [
+    {
+      "number": 1,
+      "title": "7F: real-traffic shadow is PARTIAL",
+      "state": "open",
+      "url": "https://github.com/hemingtsai/Zroutery/issues/1",
+      "labels": [
+        "enhancement"
+      ]
+    },
+    {
+      "number": 2,
+      "title": "7G: controlled takeover is blocked by 7F",
+      "state": "open",
+      "url": "https://github.com/hemingtsai/Zroutery/issues/2",
+      "labels": [
+        "enhancement"
+      ]
+    },
+    {
+      "number": 3,
+      "title": "7H: bounded exploration is blocked by 7G",
+      "state": "open",
+      "url": "https://github.com/hemingtsai/Zroutery/issues/3",
+      "labels": [
+        "enhancement"
+      ]
+    }
+  ],
   "blockers": [
-    "7F real-traffic shadow: PARTIAL",
-    "7G controlled takeover: BLOCKED by 7F",
-    "7H bounded exploration: BLOCKED by 7G"
+    {
+      "id": "7F",
+      "status": "partial",
+      "summary": "real-traffic shadow",
+      "issue": 1
+    },
+    {
+      "id": "7G",
+      "status": "blocked",
+      "summary": "controlled takeover",
+      "issue": 2,
+      "blocked_by": [
+        "7F"
+      ]
+    },
+    {
+      "id": "7H",
+      "status": "blocked",
+      "summary": "bounded exploration",
+      "issue": 3,
+      "blocked_by": [
+        "7G"
+      ]
+    }
   ],
   "flaky": [
     "ui_overflow_test.py and ui_interaction_test.py on Helium 0.21.2 (Chromium 157): runtime modulepreload links are not fetched after the initial parse, so lazy pages stay on the loading fallback. Quarantined 2026-11-14; owner frontend; review by 2026-11-21."
   ],
-  "last_full_green": null
+  "last_full_green": null,
+  "$schema": "state.schema.json",
+  "schema_version": 1
 }

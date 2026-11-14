@@ -29,13 +29,15 @@ as of `2026-11-14` · branch `dev` · verified code head `26d887f`
 
 ## Open issues
 
-No GitHub issue number is linked in this snapshot. Findings belong in Issues; the blockers below are recorded here until they are filed.
+- [#1](https://github.com/hemingtsai/Zroutery/issues/1) — 7F: real-traffic shadow is PARTIAL
+- [#2](https://github.com/hemingtsai/Zroutery/issues/2) — 7G: controlled takeover is blocked by 7F
+- [#3](https://github.com/hemingtsai/Zroutery/issues/3) — 7H: bounded exploration is blocked by 7G
 
 ## Blockers
 
-- 7F real-traffic shadow: PARTIAL
-- 7G controlled takeover: BLOCKED by 7F
-- 7H bounded exploration: BLOCKED by 7G
+- 7F real-traffic shadow: PARTIAL ([#1](https://github.com/hemingtsai/Zroutery/issues/1))
+- 7G controlled takeover: BLOCKED; blocked by 7F ([#2](https://github.com/hemingtsai/Zroutery/issues/2))
+- 7H bounded exploration: BLOCKED; blocked by 7G ([#3](https://github.com/hemingtsai/Zroutery/issues/3))
 
 ## Known flaky
 

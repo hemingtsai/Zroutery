@@ -51,12 +51,29 @@ def render(state: dict) -> str:
     issues = state.get("issues", [])
     if issues:
         for issue in issues:
-            lines.append(f"- #{issue.get('number')} — {issue.get('title', '')}")
+            url = issue.get("url")
+            title = issue.get("title", "")
+            number = issue.get("number")
+            if url:
+                lines.append(f"- [#{number}]({url}) — {title}")
+            else:
+                lines.append(f"- #{number} — {title}")
     else:
         lines.append("No GitHub issue number is linked in this snapshot. Findings belong in Issues; the blockers below are recorded here until they are filed.")
     lines += ["", "## Blockers", ""]
     blockers = state.get("blockers", [])
-    lines += [f"- {item}" for item in blockers] if blockers else ["None."]
+    if blockers:
+        for blocker in blockers:
+            identifier = blocker.get("id", "?")
+            summary = blocker.get("summary", "")
+            status = blocker.get("status", "unknown")
+            issue = blocker.get("issue")
+            suffix = f" ([#{issue}](https://github.com/hemingtsai/Zroutery/issues/{issue}))" if issue else ""
+            blocked_by = blocker.get("blocked_by") or []
+            blocked = f"; blocked by {', '.join(blocked_by)}" if blocked_by else ""
+            lines.append(f"- {identifier} {summary}: {status.upper()}{blocked}{suffix}")
+    else:
+        lines.append("None.")
     lines += ["", "## Known flaky", ""]
     flaky = state.get("flaky", [])
     lines += [f"- {item}" for item in flaky] if flaky else ["None."]

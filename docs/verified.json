@@ -71,7 +71,7 @@
     "sources": {
       "scripts/commit_contract_test.py": "sha256:a853098040da40b7f2a0cec3878f19a9079bbb938ae3ad2de62c7af76bb4255b",
       "scripts/docs_impact.py": "sha256:294ed119ad409be3d1acd9767c3229cca6d3c11f8042b48f8a626cc40740a021",
-      ".github/workflows/ci.yml": "sha256:556df6049dd3550fc1c819eecf404b64b460334943fcfd79243faba16dd7cc95"
+      ".github/workflows/ci.yml": "sha256:58a96de29f1412babe92a52c4d3d3c65246e22f754eec1c6026cc8da900de175"
     },
     "commands": [
       "python3 -B scripts/commit_contract_test.py --self-test"
@@ -157,7 +157,7 @@
   "docs/development/verification.md": {
     "verified_at": "2026-11-14",
     "sources": {
-      ".github/workflows/ci.yml": "sha256:556df6049dd3550fc1c819eecf404b64b460334943fcfd79243faba16dd7cc95",
+      ".github/workflows/ci.yml": "sha256:58a96de29f1412babe92a52c4d3d3c65246e22f754eec1c6026cc8da900de175",
       ".github/workflows/packaging.yml": "sha256:608c228f3dbe16fc9dc2ba1cc80679ff2984f42323a6ae392a65dd27a316e6d2",
       "scripts/toolchain_gate.py": "sha256:69296c7d0c28caf3edd88e858ff384913fe2ea931041de4e3be459584d7c7e43",
       "scripts/command_surface_test.py": "sha256:8e603b9a8a873aca86721b128780ad2a14675fe550f11a45b353a4a1b33d8001",
@@ -246,7 +246,7 @@
     "sources": {
       "Cargo.toml": "sha256:ce0ae62212c2262d2d937127a803bb2f277f5198df56bd88ef976f0f3b490f86",
       "package.json": "sha256:2bafd104472c12f8b42245d383d2669b84b5a832e22a5c8c80f9fd28b7da0418",
-      ".github/workflows/ci.yml": "sha256:556df6049dd3550fc1c819eecf404b64b460334943fcfd79243faba16dd7cc95",
+      ".github/workflows/ci.yml": "sha256:58a96de29f1412babe92a52c4d3d3c65246e22f754eec1c6026cc8da900de175",
       "crates/zroutery-core/src/config/server.rs": "sha256:bee183e115f654014ef4c5a5c271d8561b33bda7fd55f88bcac1b37468d0d532",
       "crates/zroutery-core/src/server/handlers.rs": "sha256:fab479470870597d7be4b37a27948754140d49963d8ccf0d089b5dc514b27681",
       "src-tauri/tauri.conf.json": "sha256:ba1bd4d259ff2a0fc355e3e5a075da8a2c3f64fd27ae289a9565942042c14782",
@@ -266,7 +266,7 @@
     "sources": {
       "Cargo.toml": "sha256:ce0ae62212c2262d2d937127a803bb2f277f5198df56bd88ef976f0f3b490f86",
       "package.json": "sha256:2bafd104472c12f8b42245d383d2669b84b5a832e22a5c8c80f9fd28b7da0418",
-      ".github/workflows/ci.yml": "sha256:556df6049dd3550fc1c819eecf404b64b460334943fcfd79243faba16dd7cc95",
+      ".github/workflows/ci.yml": "sha256:58a96de29f1412babe92a52c4d3d3c65246e22f754eec1c6026cc8da900de175",
       "crates/zroutery-core/src/config/server.rs": "sha256:bee183e115f654014ef4c5a5c271d8561b33bda7fd55f88bcac1b37468d0d532",
       "crates/zroutery-core/src/server/handlers.rs": "sha256:fab479470870597d7be4b37a27948754140d49963d8ccf0d089b5dc514b27681",
       "src-tauri/tauri.conf.json": "sha256:ba1bd4d259ff2a0fc355e3e5a075da8a2c3f64fd27ae289a9565942042c14782",
@@ -286,7 +286,7 @@
     "sources": {
       "Cargo.toml": "sha256:ce0ae62212c2262d2d937127a803bb2f277f5198df56bd88ef976f0f3b490f86",
       "package.json": "sha256:2bafd104472c12f8b42245d383d2669b84b5a832e22a5c8c80f9fd28b7da0418",
-      ".github/workflows/ci.yml": "sha256:556df6049dd3550fc1c819eecf404b64b460334943fcfd79243faba16dd7cc95",
+      ".github/workflows/ci.yml": "sha256:58a96de29f1412babe92a52c4d3d3c65246e22f754eec1c6026cc8da900de175",
       "crates/zroutery-core/src/config/server.rs": "sha256:bee183e115f654014ef4c5a5c271d8561b33bda7fd55f88bcac1b37468d0d532",
       "crates/zroutery-core/src/server/handlers.rs": "sha256:fab479470870597d7be4b37a27948754140d49963d8ccf0d089b5dc514b27681",
       "src-tauri/tauri.conf.json": "sha256:ba1bd4d259ff2a0fc355e3e5a075da8a2c3f64fd27ae289a9565942042c14782",
