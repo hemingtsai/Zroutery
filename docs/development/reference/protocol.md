@@ -95,6 +95,15 @@ zero by `crates/zroutery-core/src/ir/mod.rs::Usage::fresh_input_tokens`, never w
   (`crates/zroutery-core/src/protocol/reasoning_bridge.rs::encode_thinking_block`).
 - An explicit client disable clears thinking; the pipeline does not re-enable it
   for a candidate (`crates/zroutery-core/src/server/pipeline/mod.rs::handle_chat`).
+- Gemini thinking round-trips: `thought` parts decode into thinking blocks and
+  encode back, and `thoughtSignature` is forwarded only for Gemini-origin
+  history; streaming emits thinking deltas with their signature
+  (`crates/zroutery-core/src/protocol/gemini/request_in.rs::decode_request`,
+  `crates/zroutery-core/src/protocol/gemini/request_out.rs::encode_request`,
+  `crates/zroutery-core/src/protocol/gemini/stream_in.rs`).
+- An unsigned or empty-signature thinking block is emitted to Responses as a
+  plain reasoning summary item instead of being policy-replaced or rejected
+  (`crates/zroutery-core/src/protocol/responses/request_out.rs::encode_request`).
 
 ## Media and vision fallback
 
@@ -157,3 +166,8 @@ zero by `crates/zroutery-core/src/ir/mod.rs::Usage::fresh_input_tokens`, never w
 - `crates/zroutery-core/src/config/provider.rs::ApiSurface`
 - `crates/zroutery-core/src/config/registry.rs::ProviderConfig`
 - `crates/zroutery-core/src/config/provider.rs::ProviderKind`
+- `crates/zroutery-core/src/protocol/gemini/request_in.rs::decode_request`
+- `crates/zroutery-core/src/protocol/gemini/request_out.rs::encode_request`
+- `crates/zroutery-core/src/protocol/gemini/stream_in.rs`
+- `crates/zroutery-core/src/protocol/responses/request_out.rs::encode_request`
+- `crates/zroutery-core/tests/thinking_history_test.rs`

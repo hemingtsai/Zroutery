@@ -65,6 +65,10 @@ A request reaches exactly one terminal state and is charged once
   other attempt
   (`crates/zroutery-core/src/server/pipeline/auxiliary.rs::AuxiliaryAttempt`,
   `crates/zroutery-core/src/server/accounting.rs::persist_attempt`).
+- An attempt's `ExecutionSnapshot` carries `plugin_origin` (installation,
+  contribution, digest, grant epoch, transport profile); it is durable and
+  survives the `safe` projection, and plugin-served traffic settles on the same
+  path (`crates/zroutery-core/src/accounting.rs::ExecutionSnapshot`).
 
 ## Budgets
 
@@ -139,3 +143,4 @@ rather than tier policy. Global and provider limits still apply
 - `src-tauri/src/state/budget.rs::flush_ledger`
 - `src-tauri/src/store.rs::save_ledger`
 - `crates/zroutery-core/src/runtime_store.rs::RuntimeStore`
+- `crates/zroutery-core/src/accounting.rs::ExecutionSnapshot`

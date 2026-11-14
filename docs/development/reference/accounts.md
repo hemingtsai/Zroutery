@@ -17,6 +17,11 @@ An account is a declaration on a provider
   (`crates/zroutery-core/src/config/registry.rs::InferenceKeyConfig`);
 - `maintenance` carries the check-in and panel options
   (`crates/zroutery-core/src/config/registry.rs::MaintenanceConfig`).
+- a plugin instance can declare its own `accounts`, but those are forced to
+  `probe_kind: None` with cleared key and maintenance, so the native probe and
+  check-in path never sees them
+  (`crates/zroutery-core/src/config/plugin.rs::PluginInstanceConfig`,
+  `src-tauri/src/plugins/bindings.rs`).
 
 The document stores references, not secrets. A panel token and an inference key
 are different credentials with different lifetimes; replacing one must not
@@ -135,3 +140,5 @@ only the minted durable token is stored.
 - `src-tauri/src/token_capture/mod.rs::start_token_capture`
 - `src-tauri/src/token_capture/mod.rs::complete_token_capture`
 - `src-tauri/src/token_capture/mod.rs::TokenCaptureView`
+- `crates/zroutery-core/src/config/plugin.rs::PluginInstanceConfig`
+- `src-tauri/src/plugins/bindings.rs`

@@ -46,11 +46,28 @@ not restate them.
   action that already executed
   (`crates/zroutery-core/src/server/pipeline/lifecycle.rs::RequestLifecycle`).
 
+## Plugin boundary
+
+- Declarations are data: `crates/zroutery-plugin-api` holds the manifest,
+  capability and transport contracts and executes nothing; the host
+  (`crates/zroutery-plugin-host`) owns grants, install, activation and the OS
+  sandbox; the worker (`crates/zroutery-plugin-worker`) is a separate restricted
+  process.
+- The Core bridge maps verified declarations onto existing codecs, `Upstream` and
+  settlement (`crates/zroutery-core/src/plugin/mod.rs`); a plugin provider is a
+  `PluginBinding`, never a new `ProviderKind`.
+- The shell is the broker and keeps plugin credentials scoped
+  (`src-tauri/src/plugins/mod.rs`).
+
 ## Client takeover
 
 - Preserve unrelated edits, support preview and stale-file detection, and make a
   release apply the computed conflict resolution
   (`crates/zroutery-core/src/agent_takeover/ownership.rs::OwnershipManifest`).
+- Takeover publishes exact model ids alongside usage classes; an exact selection
+  writes `model` and restores the previous client default, and the OpenCode
+  adapter excludes dotted ids (`src-tauri/src/state/takeover.rs`,
+  `crates/zroutery-core/src/agent_takeover/gateway.rs`).
 - File-writing tests run against isolated temporary roots; multi-file writes use
   the recoverable transaction (`crates/zroutery-core/src/file_transaction.rs::commit`).
 
@@ -102,3 +119,10 @@ not restate them.
 - `ui/src/i18n/en.ts`
 - `ui/src/i18n/zh.ts`
 - `ui/src/i18n.zhTW.ts`
+- `crates/zroutery-plugin-api/src/lib.rs`
+- `crates/zroutery-plugin-host/src/lib.rs`
+- `crates/zroutery-plugin-worker/src/main.rs`
+- `crates/zroutery-core/src/plugin/mod.rs`
+- `src-tauri/src/plugins/mod.rs`
+- `src-tauri/src/state/takeover.rs`
+- `crates/zroutery-core/src/agent_takeover/gateway.rs`

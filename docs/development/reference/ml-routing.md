@@ -85,7 +85,7 @@ configuration identity, so a decision can be re-derived rather than trusted
   endpoints; installation and rollback are explicit calls, not a background
   loop (`crates/zroutery-core/src/server/handlers.rs::ml_promote`). A build
   without `ml` registers the same routes, but they are inert stubs
-  (`crates/zroutery-core/src/server/handlers.rs::ml_promote`).
+  (`crates/zroutery-core/src/server/handlers.rs::ml_status`).
 
 ## Failure modes
 

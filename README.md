@@ -150,7 +150,7 @@ MIT (see the `license` field in `Cargo.toml`).
 - Default bind address, port and body limit: `crates/zroutery-core/src/config/server.rs::ServerConfig`.
 - HTTP routes: `crates/zroutery-core/src/server/handlers.rs::build_app`.
 - Upstream protocol kinds and surfaces: `crates/zroutery-core/src/config/provider.rs::ProviderKind`, `crates/zroutery-core/src/config/provider.rs::ApiSurface`, `crates/zroutery-core/src/config/provider.rs::ProviderKind::is_decision`, `crates/zroutery-core/src/config/registry.rs::ProviderConfig::dialect`.
-- Theme and plugin surfaces: `crates/zroutery-plugin-api/src/capability.rs::Capability`, `crates/zroutery-plugin-api/src/manifest.rs::PluginManifestV1`, `crates/zroutery-core/src/config/plugin.rs::PluginInstanceConfig`, `ui/src/themes/registry.ts`, `scripts/plugin_theme_test.py`.
+- Theme and plugin surfaces: `crates/zroutery-plugin-api/src/capability.rs::Capability`, `crates/zroutery-plugin-api/src/manifest.rs::PluginManifestV1`, `crates/zroutery-core/src/config/plugin.rs::PluginInstanceConfig`, `ui/src/themes/registry.ts`, `scripts/plugin_theme_test.py`, `scripts/theme_sources/manifest.json`.
 - Bundle targets: `src-tauri/tauri.conf.json::bundle`.
 - Config file and gateway token: `src-tauri/src/store.rs::FILE_NAME`, `src-tauri/src/store.rs::generate_token`.
 - Linux credential dependency: `src-tauri/Cargo.toml::keyring`.

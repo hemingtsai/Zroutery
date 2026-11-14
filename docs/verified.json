@@ -45,8 +45,8 @@
       "without `ml` registers the same routes, but they are inert stubs",
       "`crates/zroutery-core/src/ml/round.rs::run_promotion_round`"
     ],
-    "reviewed_sha": "sha256:1454050af528c2a69bbdfbd9f2a6645c3fc3419e5a055d965a5d571122632a65",
-    "reviewed_note": "model=deepseek-flash; session=v-20261114-c"
+    "reviewed_sha": "sha256:5b720f8dec41defac1def927ef026dcac500d9ff741a317f7c68ced82bd88a89",
+    "reviewed_note": "model=deepseek-flash; session=v-20261114-g"
   },
   "docs/development/reference/accounting.md": {
     "verified_at": "2026-11-14",
@@ -70,15 +70,16 @@
       "cargo test -p zroutery-core --all-features billing::"
     ],
     "note": "The settlement and budget invariants are executed by the workspace suite; this page names the symbols that carry them.",
-    "reviewed_commit": "753dbe9c962a4352843d763c0282638153010ded",
-    "reviewed_by": "second-reader",
+    "reviewed_commit": "ad22f8d2894d81e601ec966d797e9fc87081365f",
+    "reviewed_by": "verifier-agent",
     "reviewed_at": "2026-11-14",
     "sample": [
+      "`crates/zroutery-core/src/runtime_store/accounting.rs::settle`",
       "The desktop writes the spend projection through `flush_ledger` and `save_ledger`",
-      "`crates/zroutery-core/src/budget.rs::Ledger` is the value type the check reads.",
-      "(`crates/zroutery-core/src/ir/mod.rs::Usage::fresh_input_tokens`)."
+      "`RequestAccounting` aggregates the attempts, separating known cost from"
     ],
-    "reviewed_sha": "sha256:f4a5078f8d4cc69826d1b83ad840e3a52286f231579ef358d570771e5d376354"
+    "reviewed_sha": "sha256:4a5880f6c9fa94a49e0df307e7e9a0c0bfb5384cf3ec695d5b82b71c4d872a29",
+    "reviewed_note": "model=deepseek-flash; session=v-20261114-g"
   },
   "docs/development/reference/ipc.md": {
     "verified_at": "2026-11-14",
@@ -396,11 +397,11 @@
     "reviewed_at": "2026-11-14",
     "sample": [
       "There is no Linux packaging target; the credential-store dependency for Linux is compiled in `src-tauri/Cargo.toml`, so a source build may run, but it is not tested or shipped.",
-      "Point `ZROUTERY_CONFIG_DIR` at a custom config directory.",
-      "Desktop builds include the `ml` module, disabled by default: no collection, no training, no effect on routing."
+      "Theme and plugin surfaces: `crates/zroutery-plugin-api/src/capability.rs::Capability`, `crates/zroutery-plugin-api/src/manifest.rs::PluginManifestV1`, `crates/zroutery-core/src/config/plugin.rs::PluginInstanceConfig`, `ui/src/themes/registry.ts`, `scripts/plugin_theme_test.py`, `scripts/theme_sources/manifest.json`.",
+      "Point `ZROUTERY_CONFIG_DIR` at a custom config directory."
     ],
-    "reviewed_sha": "sha256:6392259b755e6f99f251abb9322f4fd08d1707509d3d3f0c09103da8e27aafac",
-    "reviewed_note": "model=deepseek-flash; session=v-20261114-c"
+    "reviewed_sha": "sha256:afdbf5ec9fbfade3f38b436a5d4719b60692d66569ef161f54c772946c9fa207",
+    "reviewed_note": "model=deepseek-flash; session=v-20261114-g"
   },
   "README.zh-CN.md": {
     "verified_at": "2026-11-14",
@@ -434,8 +435,8 @@
       "\u63d0\u4ea4\u4fe1\u606f\u6309 Conventional Commits \u4e66\u5199\uff0cCI \u4f1a\u9010\u6761\u68c0\u67e5\u3002\u67b6\u6784\u51b3\u7b56\u548c\u5404\u9636\u6bb5\u7684\u8bb0\u5f55\u5728 `docs/development/`\uff1b\u6539\u4ee3\u7801\u524d\u5148\u770b `CONTRIBUTING.md` \u548c `AGENTS.md`\u3002",
       "\u6253\u5305\u76ee\u6807\uff1a`src-tauri/tauri.conf.json::bundle`\u3002"
     ],
-    "reviewed_sha": "sha256:53a031e872382fab3b4cb4af80027ab5e29c4e60f61196c9e268796c1005a349",
-    "reviewed_note": "model=deepseek-flash; session=v-20261114-c"
+    "reviewed_sha": "sha256:2ad51d5a73661b12ce66045c0881c8d8c09b5ace39d4177bcef8d03c0213e67a",
+    "reviewed_note": "model=deepseek-flash; session=v-20261114-g"
   },
   "README.zh-TW.md": {
     "verified_at": "2026-11-14",
@@ -469,8 +470,8 @@
       "\u53e6\u5916\u6709 `GET /v1/models`\uff08\u5217\u51fa\u6240\u6709\u53ef\u547c\u53eb\u7684 id\uff09\u3001`GET /v1/status` \u548c `GET /health`\uff08\u552f\u4e00\u4e0d\u9700\u8981\u9a57\u8b49\u7684\u4ecb\u9762\uff09\u3002\u9a57\u8b49\u652f\u63f4 `x-api-key` \u548c `Authorization: Bearer`\uff0ctoken \u5728\u300c\u9598\u9053\u300d\u9078\u55ae\u88e1\u8907\u88fd\u3002",
       "[![release](https://img.shields.io/badge/release-1.0.0--rc.2-blue)](https://github.com/hemingtsai/Zroutery/releases)"
     ],
-    "reviewed_sha": "sha256:1d5518c1d9a9e1d86c027a302d4d3f1d6f4fc14370e9ad2e71b444f2332884ed",
-    "reviewed_note": "model=deepseek-flash; session=v-20261114-c"
+    "reviewed_sha": "sha256:5cf308007bf78854a2e906a2d9f85a4bbcf5cd80a4aebb17164a1539f6b6cab5",
+    "reviewed_note": "model=deepseek-flash; session=v-20261114-g"
   },
   "docs/development/runbook.md": {
     "verified_at": "2026-11-14",
@@ -529,6 +530,7 @@
     "sources": {
       "crates/zroutery-core/src/account/store.rs": "sha256:0b4b7cd86cbab923d37a0b9ada4d8ea3d225b6f76087ffd5ad0b021865a80251",
       "crates/zroutery-core/src/account/types.rs": "sha256:4371384f3422f6cabe378e8623b62e0ec8390582e52041ddf3bd12ffc6b72fca",
+      "crates/zroutery-core/src/config/plugin.rs": "sha256:a8dd503076c1eb444d93955dea3ce817e29c933f51245de521498bbd9593c92c",
       "crates/zroutery-core/src/config/registry.rs": "sha256:58971e31d044907188d2ad9be770bf3185dcbdb173e67224546725286bcb9c16",
       "src-tauri/src/account_binding.rs": "sha256:a8b5e75fc93b6a654898f269b6bc1c3bbb97248d59191f18ad782c68e34c0835",
       "src-tauri/src/checkin/cdp.rs": "sha256:1b7650860564b66aa342886f398e0d9923460373f3ecbba03444d1d14068931b",
@@ -549,8 +551,8 @@
       "`maintenance` carries the check-in and panel options",
       "(`crates/zroutery-core/src/config/registry.rs::AccountConfig`):"
     ],
-    "reviewed_sha": "sha256:fb65d360a0df0f5a6c7da3a810e53356ec388640b38bc12978717a1a705e5910",
-    "reviewed_note": "model=deepseek-flash; session=v-20261114-c"
+    "reviewed_sha": "sha256:0216c5906d78e004b19c327b1b351cb30b33fdd2bebc8043b733718c6a12f2e7",
+    "reviewed_note": "model=deepseek-flash; session=v-20261114-g"
   },
   "docs/development/reference/protocol.md": {
     "verified_at": "2026-11-14",
@@ -581,15 +583,16 @@
       "cargo test --workspace --all-features --locked"
     ],
     "note": "The decoders and encoders are the source; Usage normalisation is the invariant they preserve.",
-    "reviewed_commit": "753dbe9c962a4352843d763c0282638153010ded",
-    "reviewed_by": "second-reader",
+    "reviewed_commit": "ad22f8d2894d81e601ec966d797e9fc87081365f",
+    "reviewed_by": "verifier-agent",
     "reviewed_at": "2026-11-14",
     "sample": [
+      "`crates/zroutery-core/src/error.rs::stream_payload`",
       "`crates/zroutery-core/src/ir/mod.rs::ThinkingConfig`).",
-      "zero by `crates/zroutery-core/src/ir/mod.rs::Usage::fresh_input_tokens`, never wrapped",
-      "`encode_response` (`crates/zroutery-core/src/protocol/mod.rs::decode_request`,"
+      "`crates/zroutery-core/src/ir/mod.rs::Usage`"
     ],
-    "reviewed_sha": "sha256:b8b0afe016a3f0d5e56b15e7ed64a70b601e3a190afb4c049b2e3560660c5c9e"
+    "reviewed_sha": "sha256:be8ae2fa40a528152fdb9453b587eec54668fa364151174031f65181e319676e",
+    "reviewed_note": "model=deepseek-flash; session=v-20261114-g"
   },
   "docs/development/reference/routing-policy.md": {
     "verified_at": "2026-11-14",
@@ -906,15 +909,16 @@
       "cargo test --workspace --all-features --locked"
     ],
     "note": "AGENTS routes here; the contracts are anchored to the modules that enforce them.",
-    "reviewed_commit": "753dbe9c962a4352843d763c0282638153010ded",
-    "reviewed_by": "second-reader",
+    "reviewed_commit": "ad22f8d2894d81e601ec966d797e9fc87081365f",
+    "reviewed_by": "verifier-agent",
     "reviewed_at": "2026-11-14",
     "sample": [
       "controls (`crates/zroutery-core/src/ir/mod.rs::ChatRequest`,",
-      "`crates/zroutery-core/src/outcome/attempt.rs::Attempt`).",
-      "`crates/zroutery-core/src/outcome/mod.rs::Outcome`)."
+      "`crates/zroutery-core/src/plugin/mod.rs`",
+      "`crates/zroutery-core/src/outcome/attempt.rs::Attempt`)."
     ],
-    "reviewed_sha": "sha256:d68173a9ab953960a237b74d745275f6793c111c11a47cbe3ab18fecaca8b5e5"
+    "reviewed_sha": "sha256:698b69c43051894c80ae5dd69b8e525bf03c81a2a8701e385c393169792bef59",
+    "reviewed_note": "model=deepseek-flash; session=v-20261114-g"
   },
   "docs/development/reference/documentation-rules.md": {
     "verified_at": "2026-11-14",
