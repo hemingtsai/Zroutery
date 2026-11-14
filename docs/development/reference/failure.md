@@ -1,0 +1,98 @@
+# Failure Reference
+
+> Authority: reference · Owner: backend · Last verified: 2026-11-14 · Verified by: `cargo test --workspace --all-features --locked`
+
+This page describes how an error becomes a classification, a retry decision and
+a terminal state. It does not describe accounting; a failed attempt's known cost
+is covered by [accounting.md](accounting.md).
+
+## One classification
+
+The error's `classified` method is the single mapping from an error to a
+`ClassifiedFailure` (`crates/zroutery-core/src/error.rs::classified`).
+
+- `FailureClass` names the cause: transport, timeout, rate limit,
+  authentication, provider unavailable, provider rejected, protocol, capability,
+  invalid request, client cancelled, missing key
+  (`crates/zroutery-core/src/failure.rs::FailureClass`).
+- `FailureImpact` carries the decisions as four bits: affects observation,
+  affects the circuit breaker, retryable on the same candidate, fallbackable to
+  another candidate, and whether it is a provider fault
+  (`crates/zroutery-core/src/failure.rs::FailureImpact`).
+- A caller derives retry and failover behaviour from the impact, not from a
+  second string match on the error (`crates/zroutery-core/src/failure.rs::ClassifiedFailure`).
+
+## Retry and failover
+
+`retry_advice` decides whether the same candidate is retried, the next candidate
+is tried, or the failure is returned
+(`crates/zroutery-core/src/upstream/errors.rs::retry_advice`):
+
+- a session-binding invalidation is never retried;
+- the total retry count is capped by `MAX_TOTAL_RETRIES`
+  (`crates/zroutery-core/src/upstream/errors.rs::MAX_TOTAL_RETRIES`);
+- when another candidate is available, failover wins over waiting: one account's
+  rate limit says nothing about the next account;
+- a rate-limit error is not slept on by the gateway; the upstream's
+  `Retry-After` is returned to the caller as a floor, never violated;
+- authentication, quota/budget exhaustion, a malformed request and a
+  deterministic content rejection are returned immediately;
+- a history/resource error can be a legitimate retry despite a 400
+  (`crates/zroutery-core/src/failure.rs::upstream_payload_status`).
+
+A provider that rejects the gateway's translated body is `ProviderRejected`: it
+is fallbackable (another candidate may accept the shape) but not retryable
+against the same provider.
+
+## Wire versus log
+
+- The client-facing message is `safe_message`: provider name and status, never
+  the upstream body
+  (`crates/zroutery-core/src/error.rs::safe_message`).
+- An internal error is flattened to "internal error"; a malformed payload to
+  "upstream returned malformed data".
+- An explicit SSE error envelope retains bounded `code`/`type`/`message` for
+  classification; the body is still not echoed to the client
+  (`crates/zroutery-core/src/error.rs::stream_payload`).
+
+## Terminal states
+
+A failed request is not a success, and a client that walks away is not a served
+request (`crates/zroutery-core/src/server/pipeline/lifecycle.rs::TerminalKind`):
+
+| Terminal | Meaning |
+|---|---|
+| `Served` | the upstream answer was delivered |
+| `Failed` | a canonical failure class ended the request |
+| `ClientDisconnected` | the client left; output may be truncated |
+| `ClientCancelled` | the client asked to cancel |
+| `InterruptedStream` | the upstream ended before a normal terminal; output already sent is kept |
+
+## Session binding
+
+Some relays invalidate a session's model binding (code `30013`). The gateway maps
+that to a client error with a new-session instruction, rather than retrying the
+same binding (`crates/zroutery-core/src/failure.rs::is_session_binding_invalidated_value`,
+`crates/zroutery-core/src/error.rs::is_session_binding_invalidated`).
+
+## Not implemented
+
+- No retry of an upstream or tool action that already executed; a local
+  persistence failure is terminal, not a replay.
+- No retry that ignores the upstream's `Retry-After` floor.
+- No second classifier in a caller; the error's `classified` method is the authority.
+
+## Sources
+
+- `crates/zroutery-core/src/failure.rs::FailureClass`
+- `crates/zroutery-core/src/failure.rs::FailureImpact`
+- `crates/zroutery-core/src/failure.rs::ClassifiedFailure`
+- `crates/zroutery-core/src/failure.rs::is_session_binding_invalidated_value`
+- `crates/zroutery-core/src/failure.rs::upstream_payload_status`
+- `crates/zroutery-core/src/error.rs::classified`
+- `crates/zroutery-core/src/error.rs::safe_message`
+- `crates/zroutery-core/src/error.rs::is_session_binding_invalidated`
+- `crates/zroutery-core/src/error.rs::stream_payload`
+- `crates/zroutery-core/src/upstream/errors.rs::retry_advice`
+- `crates/zroutery-core/src/upstream/errors.rs::MAX_TOTAL_RETRIES`
+- `crates/zroutery-core/src/server/pipeline/lifecycle.rs::TerminalKind`

@@ -386,5 +386,18 @@
       "cargo test --workspace --all-features --locked"
     ],
     "note": "The plan builder and breaker are the source; the reference does not claim a specific provider's latency."
+  },
+  "docs/development/reference/failure.md": {
+    "verified_at": "2026-11-14",
+    "sources": {
+      "crates/zroutery-core/src/failure.rs": "sha256:642038c6e4f0868c37e9fdc8166792c09d92fd6d5d41f615adc9c501c4130e4d",
+      "crates/zroutery-core/src/error.rs": "sha256:81cc8c251bc9f6cba72b525fd7361979faf4425b0e32c323cee3c0b7da241c7d",
+      "crates/zroutery-core/src/upstream/errors.rs": "sha256:2303a35619f0ba68716ea5f7a9cfd0e2f447fb4a7685e7f3f67f0a4a860017b9",
+      "crates/zroutery-core/src/server/pipeline/lifecycle.rs": "sha256:d09be55d5471810747ae16ab614d1e406642b509d1a66c439d9873311bd4fbbb"
+    },
+    "commands": [
+      "cargo test --workspace --all-features --locked"
+    ],
+    "note": "FailureClass and FailureImpact are the authority; the reference does not add a second classifier."
   }
 }
