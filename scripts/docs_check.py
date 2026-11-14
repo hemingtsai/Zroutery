@@ -196,12 +196,14 @@ def render_index(root: Path, manifest: dict) -> str:
         "",
         "These documents are still in the legacy shape. Each is either archived or rewritten to the source-verified format; the count must reach zero.",
         "",
-        "| Document |",
-        "|---|",
     ]
-    for path in pending:
-        link = os.path.relpath(path, "docs")
-        lines.append(f"| [{path}]({link}) |")
+    if pending:
+        lines += ["| Document |", "|---|"]
+        for path in pending:
+            link = os.path.relpath(path, "docs")
+            lines.append(f"| [{path}]({link}) |")
+    else:
+        lines.append("None. Every document is either current or archived.")
     lines += [
         "",
         "## Archive",

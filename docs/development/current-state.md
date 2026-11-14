@@ -2,7 +2,7 @@
 
 # Current state
 
-as of `2026-11-14` · branch `dev` · head `26d887f`
+as of `2026-11-14` · branch `dev` · verified code head `26d887f`
 
 ## Gates
 

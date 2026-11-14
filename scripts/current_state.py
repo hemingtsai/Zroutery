@@ -31,7 +31,7 @@ def render(state: dict) -> str:
         "",
         "# Current state",
         "",
-        f"as of `{state.get('as_of', 'unknown')}` · branch `{state.get('branch', 'unknown')}` · head `{state.get('head', 'unknown')}`",
+        f"as of `{state.get('as_of', 'unknown')}` · branch `{state.get('branch', 'unknown')}` · verified code head `{state.get('head', 'unknown')}`",
         "",
         "## Gates",
         "",

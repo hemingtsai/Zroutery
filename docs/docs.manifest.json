@@ -311,7 +311,6 @@
   "ignore": [
     "docs/images/**",
     "docs/licenses/**",
-    "docs/development/node-status/**",
     "node_modules/**",
     "target/**",
     "docs/archive/**"

@@ -53,8 +53,7 @@ This file is generated from `docs/docs.manifest.json`. Do not edit it.
 
 These documents are still in the legacy shape. Each is either archived or rewritten to the source-verified format; the count must reach zero.
 
-| Document |
-|---|
+None. Every document is either current or archived.
 
 ## Archive
 

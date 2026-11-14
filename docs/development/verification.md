@@ -125,7 +125,8 @@ Consequences, stated rather than discovered:
 - `docs_sources.py --check` resolves every `path::symbol` and `path#Lx` anchor in
   active documents.
 - `docs_check.py` enforces manifest coverage, links, banners, size budgets and
-  generated-file freshness.
+  generated-file freshness. A zero-pending migration renders as complete rather
+  than as an empty table.
 - `docs_check.py` compares `docs/verified.json` source content hashes with
   the current tree. A moved source means the document must be re-read.
 - `docs_impact.py` fails when a changed source file is cited by a document that
