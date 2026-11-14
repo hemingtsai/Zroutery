@@ -14,17 +14,17 @@ as of `2026-11-14` · branch `dev` · verified code head `26d887f`
 | frontend build | **pass** | `pnpm --dir ui build` |  |
 | frontend tests | **pass** | `pnpm --dir ui test` | 86 passed |
 | command surface | **pass** | `python3 -B scripts/command_surface_test.py` | 90 interface commands, 254 registered |
-| documentation contracts | **pass** | `python3 -B scripts/docs_contracts.py` | all docs gates; CI runs range impact with --base/--head |
-| documentation impact (range) | **unverified** | `python3 -B scripts/docs_contracts.py` | UNVERIFIED (range check disabled with --no-range) (c31056a) |
-| documentation sources | **pass** | `python3 -B scripts/docs_contracts.py` | docs-sources: 799 anchor(s) resolved in 36 active document(s) (c31056a) |
-| markdown structure | **pass** | `python3 -B scripts/docs_contracts.py` | markdown-check: fenced blocks and tables are well formed (c31056a) |
-| documentation check | **pass** | `python3 -B scripts/docs_contracts.py` | docs-check: 47 active document(s), 0 pending, 0 warning(s), all checks passed (c31056a) |
+| documentation contracts | **unverified** | `python3 -B scripts/docs_contracts.py` | all docs gates, including range |
+| documentation impact (range) | **unverified** | `python3 -B scripts/docs_contracts.py --base <base> --head HEAD` | UNVERIFIED (range check disabled with --no-range) (fa7a122) |
+| documentation sources | **pass** | `python3 -B scripts/docs_sources.py --check` | docs-sources: 799 anchor(s) resolved in 36 active document(s) (fa7a122) |
+| markdown structure | **pass** | `python3 -B scripts/markdown_check.py` | markdown-check: fenced blocks and tables are well formed (fa7a122) |
+| documentation check | **pass** | `python3 -B scripts/docs_check.py` | docs-check: 47 active document(s), 0 pending, 0 warning(s), all checks passed (fa7a122) |
 | documentation impact self-test | **pass** | `python3 -B scripts/docs_impact.py --base <base> --head HEAD` | the self-test passes; the range check is enforced in CI with --base/--head |
-| documentation parity | **pass** | `python3 -B scripts/docs_contracts.py` | docs-parity: the three READMEs have matching headings, fences, images and source anchors (c31056a) |
-| module coverage | **pass** | `python3 -B scripts/docs_contracts.py` | coverage-check: 37 top-level modules (36 owned, 1 covered elsewhere, 0 unowned) (c31056a) |
-| rendered state | **pass** | `python3 -B scripts/docs_contracts.py` | current-state: clean (c31056a) |
-| invariant evidence | **pass** | `python3 -B scripts/docs_contracts.py` | invariant-check: 15 invariants, 13 with test anchors, 2 explicitly untested (c31056a) |
-| state schema | **pass** | `python3 -B scripts/docs_contracts.py` | state-check: 27 gates, 4 blockers; schema and blockers valid (c31056a) |
+| documentation parity | **pass** | `python3 -B scripts/docs_parity.py --check` | docs-parity: the three READMEs have matching headings, fences, images and source anchors (fa7a122) |
+| module coverage | **pass** | `python3 -B scripts/coverage_check.py` | coverage-check: 37 top-level modules (36 owned, 1 covered elsewhere, 0 unowned) (fa7a122) |
+| rendered state | **pass** | `python3 -B scripts/current_state.py --check` | current-state: clean (fa7a122) |
+| invariant evidence | **pass** | `python3 -B scripts/invariant_check.py` | invariant-check: 15 invariants, 13 with test anchors, 2 explicitly untested (fa7a122) |
+| state schema | **pass** | `python3 -B scripts/state_check.py` | state-check: 28 gates, 4 blockers; schema and blockers valid (fa7a122) |
 | whitespace | **pass** | `git diff --check` | no trailing whitespace damage |
 | orchestration docs (legacy) | **retired** | `scripts/orch_docs_test.py (not run)` | legacy node and evidence records are archived; validation retired |
 | UI budget | **pass** | `python3 -B scripts/ui_budget_test.py` | 734,994 B JS of 742,000 |
@@ -33,8 +33,9 @@ as of `2026-11-14` · branch `dev` · verified code head `26d887f`
 | UI interaction | **unrun** | `python3 -B scripts/ui_interaction_test.py` | timed out after 900s on Helium 0.21.2; not a pass and not a product failure (quarantined) |
 | Rust advisories | **fail** | `cargo audit --file Cargo.lock` | 5 vulnerabilities, 18 warnings |
 | frontend advisories | **pass** | `pnpm audit --prod` |  |
-| freshness | **pass** | `python3 -B scripts/docs_contracts.py` | freshness: 33 documents; no source changed after its review commit (c31056a) |
-| rules registry | **pass** | `python3 -B scripts/docs_contracts.py` | docs-rules: 15 rules; 13 machine, 11 executed gates covered (c31056a) |
+| freshness | **pass** | `python3 -B scripts/freshness_report.py --check` | freshness: 33 documents; no source changed after its review commit (fa7a122) |
+| rules registry | **pass** | `python3 -B scripts/docs_rules.py` | docs-rules: 15 rules; 14 machine, 11 executed gates covered (fa7a122) |
+| documentation contracts (local) | **pass** | `python3 -B scripts/docs_contracts.py` | all non-range docs gates |
 
 ## Blockers
 

@@ -24,7 +24,7 @@ registered set and the executed set are the same. The executed list is
 | DOC-11 | Sources did not change after review | `freshness` | machine |
 | DOC-12 | Changed sources force affected docs | `documentation impact (range)` | machine |
 | DOC-13 | Every executed gate is registered | `rules registry` | machine |
-| DOC-14 | Commit is blocked locally and in CI | pre-commit hook + required CI check | manual |
+| DOC-14 | Commit is blocked locally and in CI | `rules registry` | machine |
 | DOC-15 | Reference prose matches code | second-reader sample of three sentences | manual |
 
 ## Failure modes

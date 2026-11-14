@@ -1,20 +1,123 @@
 {
   "schema_version": 1,
   "rules": [
-    {"id": "DOC-01", "rule": "Source anchors resolve", "type": "machine", "enforced_by": ["documentation sources"]},
-    {"id": "DOC-02", "rule": "Generated files and links are current", "type": "machine", "enforced_by": ["documentation check"]},
-    {"id": "DOC-03", "rule": "ADR header, date, sections and sources", "type": "machine", "enforced_by": ["documentation check"]},
-    {"id": "DOC-04", "rule": "Canonical homes resolve", "type": "machine", "enforced_by": ["documentation check"]},
-    {"id": "DOC-05", "rule": "Markdown tables and fences are well formed", "type": "machine", "enforced_by": ["markdown structure"]},
-    {"id": "DOC-06", "rule": "Three READMEs have the same shape", "type": "machine", "enforced_by": ["documentation parity"]},
-    {"id": "DOC-07", "rule": "State matches its schema", "type": "machine", "enforced_by": ["state schema"]},
-    {"id": "DOC-08", "rule": "State render matches state", "type": "machine", "enforced_by": ["rendered state"]},
-    {"id": "DOC-09", "rule": "Invariants have test evidence", "type": "machine", "enforced_by": ["invariant evidence"]},
-    {"id": "DOC-10", "rule": "Top-level modules have coverage", "type": "machine", "enforced_by": ["module coverage"]},
-    {"id": "DOC-11", "rule": "Sources did not change after review", "type": "machine", "enforced_by": ["freshness"]},
-    {"id": "DOC-12", "rule": "Changed sources force affected docs", "type": "machine", "enforced_by": ["documentation impact (range)"]},
-    {"id": "DOC-13", "rule": "Every executed gate is registered", "type": "machine", "enforced_by": ["rules registry"]},
-    {"id": "DOC-14", "rule": "Commit is blocked locally and in CI", "type": "manual", "manual": "pre-commit hook plus required CI check"},
-    {"id": "DOC-15", "rule": "Reference prose matches code", "type": "manual", "manual": "second-reader sample of three sentences"}
+    {
+      "id": "DOC-01",
+      "rule": "Source anchors resolve",
+      "type": "machine",
+      "enforced_by": [
+        "documentation sources"
+      ]
+    },
+    {
+      "id": "DOC-02",
+      "rule": "Generated files and links are current",
+      "type": "machine",
+      "enforced_by": [
+        "documentation check"
+      ]
+    },
+    {
+      "id": "DOC-03",
+      "rule": "ADR header, date, sections and sources",
+      "type": "machine",
+      "enforced_by": [
+        "documentation check"
+      ]
+    },
+    {
+      "id": "DOC-04",
+      "rule": "Canonical homes resolve",
+      "type": "machine",
+      "enforced_by": [
+        "documentation check"
+      ]
+    },
+    {
+      "id": "DOC-05",
+      "rule": "Markdown tables and fences are well formed",
+      "type": "machine",
+      "enforced_by": [
+        "markdown structure"
+      ]
+    },
+    {
+      "id": "DOC-06",
+      "rule": "Three READMEs have the same shape",
+      "type": "machine",
+      "enforced_by": [
+        "documentation parity"
+      ]
+    },
+    {
+      "id": "DOC-07",
+      "rule": "State matches its schema",
+      "type": "machine",
+      "enforced_by": [
+        "state schema"
+      ]
+    },
+    {
+      "id": "DOC-08",
+      "rule": "State render matches state",
+      "type": "machine",
+      "enforced_by": [
+        "rendered state"
+      ]
+    },
+    {
+      "id": "DOC-09",
+      "rule": "Invariants have test evidence",
+      "type": "machine",
+      "enforced_by": [
+        "invariant evidence"
+      ]
+    },
+    {
+      "id": "DOC-10",
+      "rule": "Top-level modules have coverage",
+      "type": "machine",
+      "enforced_by": [
+        "module coverage"
+      ]
+    },
+    {
+      "id": "DOC-11",
+      "rule": "Sources did not change after review",
+      "type": "machine",
+      "enforced_by": [
+        "freshness"
+      ]
+    },
+    {
+      "id": "DOC-12",
+      "rule": "Changed sources force affected docs",
+      "type": "machine",
+      "enforced_by": [
+        "documentation impact (range)"
+      ]
+    },
+    {
+      "id": "DOC-13",
+      "rule": "Every executed gate is registered",
+      "type": "machine",
+      "enforced_by": [
+        "rules registry"
+      ]
+    },
+    {
+      "id": "DOC-14",
+      "rule": "Commit is blocked locally and in CI",
+      "type": "machine",
+      "enforced_by": [
+        "rules registry"
+      ]
+    },
+    {
+      "id": "DOC-15",
+      "rule": "Reference prose matches code",
+      "type": "manual",
+      "manual": "second-reader sample of three sentences"
+    }
   ]
 }

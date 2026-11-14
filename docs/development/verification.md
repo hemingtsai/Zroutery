@@ -160,6 +160,9 @@ Consequences, stated rather than discovered:
 - `record_state.py` runs `docs_contracts.py --json` and writes the documentation
   gate status, `ran_at` and commit into `state.json`; hand-filled doc statuses
   are not the source.
+- Commit messages are checked by the CI range; no local `commit-msg` hook is
+  installed. `state_check.py` also validates that every gate `commit` exists and
+  is an ancestor of HEAD, and that `ran_at` is an ISO timestamp.
 - `state_check.py` validates `state.json` against `state.schema.json` and checks
   blocker dependencies and cycles.
 - `docs_parity.py` checks that the three READMEs have matching headings, fences,

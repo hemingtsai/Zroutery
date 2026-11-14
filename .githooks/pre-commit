@@ -6,3 +6,7 @@ python3 -B scripts/docs_contracts.py --include-staged || {
   exit 1
 }
 python3 -B scripts/current_state.py --check || exit 1
+python3 -B scripts/record_state.py --check --no-range || {
+  echo "fix: run record_state.py --no-range and commit the state change"
+  exit 1
+}

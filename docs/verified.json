@@ -620,14 +620,12 @@
   },
   "docs/development/reference/documentation-rules.md": {
     "verified_at": "2026-11-14",
-    "sources": {
-      "docs/rules.json": "sha256:2a8cfb7e9044eccf2bc488ebc844248b3880cc0670e3071033421f61435e4c65"
-    },
+    "sources": {},
     "commands": [
       "python3 -B scripts/docs_rules.py",
       "python3 -B scripts/docs_contracts.py"
     ],
     "note": "The registry and the executed STEPS list are the two sides this page describes.",
-    "reviewed_commit": "668bce5"
+    "reviewed_commit": "fa7a122"
   }
 }

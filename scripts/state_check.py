@@ -107,8 +107,20 @@ def validate(state: dict, schema: dict, root: Path = ROOT, git_check: bool = Tru
             errors.append(f"gates[{index}]: quarantine must be a boolean")
         if "ran_at" in gate and not isinstance(gate["ran_at"], str):
             errors.append(f"gates[{index}]: ran_at must be a string")
-        if "commit" in gate and (not isinstance(gate["commit"], str) or not re.match(r"^[0-9a-f]{7,40}$", gate["commit"])):
-            errors.append(f"gates[{index}]: commit must be a short or full hex commit")
+        if "commit" in gate:
+            commit = gate["commit"]
+            if not isinstance(commit, str) or not re.match(r"^[0-9a-f]{7,40}$", commit):
+                errors.append(f"gates[{index}]: commit must be a short or full hex commit")
+            elif git_check:
+                if git(root, "cat-file", "-e", f"{commit}^{{commit}}").returncode != 0:
+                    errors.append(f"gates[{index}]: commit {commit} does not exist")
+                elif git(root, "merge-base", "--is-ancestor", commit, "HEAD").returncode != 0:
+                    errors.append(f"gates[{index}]: commit {commit} is not an ancestor of HEAD")
+        if "ran_at" in gate:
+            try:
+                dt.datetime.fromisoformat(gate["ran_at"])
+            except (TypeError, ValueError):
+                errors.append(f"gates[{index}]: ran_at is not an ISO timestamp")
 
     blockers = state.get("blockers", [])
     if not isinstance(blockers, list):

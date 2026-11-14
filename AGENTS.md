@@ -9,7 +9,8 @@ facts; this file wins for permission and process.
 
 ## Definition of done
 
-Before each commit run `docs_contracts.py`, `current_state.py --check` and
+Before each commit run `docs_contracts.py`, `current_state.py --check`,
+`record_state.py --check --no-range` and
 `commit_contract_test.py --base origin/dev --head HEAD`. A red gate is fixed in
 the document or trigger; never weaken it or use `--no-verify`.
 
@@ -19,7 +20,6 @@ the document or trigger; never weaken it or use `--no-verify`.
 - `src-tauri/`: lifecycle, native integrations, credential store, IPC commands.
 - `crates/zroutery-headless/`: the same Core and desktop state without a GUI.
 - `ui/`: React/TypeScript frontend and typed mock bridge.
-- `scripts/`: build, contract, documentation, layout and release checks.
 - `docs/`: current documentation; `docs/archive/` is history, never current fact.
 
 ## Non-negotiables

@@ -53,6 +53,7 @@ def run_step(step: dict, json_mode: bool = False) -> dict:
         "gate": step["gate"],
         "status": "pass" if result.returncode == 0 else "fail",
         "code": result.returncode,
+        "command": "python3 -B " + " ".join(step["args"]),
         "output": (result.stdout + result.stderr)[-TAIL:],
     }
 
@@ -108,6 +109,7 @@ def main(argv: list[str] | None = None) -> int:
             "gate": "documentation impact (range)",
             "status": "pass" if result.returncode == 0 else "fail",
             "code": result.returncode,
+            "command": f"python3 -B scripts/docs_impact.py --base {base} --head {args.head}",
             "output": (result.stdout + result.stderr)[-TAIL:],
         })
     else:
@@ -118,6 +120,7 @@ def main(argv: list[str] | None = None) -> int:
             "gate": "documentation impact (range)",
             "status": "unverified",
             "code": None,
+            "command": "python3 -B scripts/docs_contracts.py --base <base> --head HEAD",
             "output": note,
         })
 

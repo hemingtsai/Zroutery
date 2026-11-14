@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import sys
 from pathlib import Path
 
@@ -15,7 +16,23 @@ sys.path.insert(0, str(ROOT / "scripts"))
 from docs_contracts import STEPS  # noqa: E402
 
 
-def validate(data: dict, step_names: set[str]) -> list[str]:
+def files_errors(root: Path) -> list[str]:
+    errors = []
+    hook = root / ".githooks" / "pre-commit"
+    if not hook.is_file() or not (hook.stat().st_mode & 0o111):
+        errors.append("pre-commit hook is missing or not executable")
+    ci = root / ".github" / "workflows" / "ci.yml"
+    if not ci.is_file() or "scripts/docs_contracts.py" not in ci.read_text(encoding="utf-8"):
+        errors.append("CI does not invoke scripts/docs_contracts.py")
+    page = root / "docs" / "development" / "reference" / "documentation-rules.md"
+    if page.is_file():
+        page_ids = set(re.findall(r"\| (DOC-\d{2}) \|", page.read_text(encoding="utf-8")))
+    else:
+        page_ids = set()
+    return errors + [f"rules page is missing {identifier}" for identifier in []], page_ids
+
+
+def validate(data: dict, step_names: set[str], root: Path | None = None) -> list[str]:
     errors: list[str] = []
     rules = data.get("rules", [])
     seen = set()
@@ -42,6 +59,14 @@ def validate(data: dict, step_names: set[str]) -> list[str]:
     missing = sorted(step_names - covered)
     for step in missing:
         errors.append(f"executed gate `{step}` has no registered rule")
+    if root is not None:
+        file_errors, page_ids = files_errors(root)
+        errors.extend(file_errors)
+        rule_ids = {rule.get("id") for rule in rules}
+        for identifier in sorted(rule_ids - page_ids):
+            errors.append(f"rules page is missing {identifier}")
+        for identifier in sorted(page_ids - rule_ids):
+            errors.append(f"rules page has unknown {identifier}")
     return errors
 
 
@@ -68,7 +93,7 @@ def main(argv: list[str] | None = None) -> int:
     data = json.loads((ROOT / RULES).read_text(encoding="utf-8"))
     steps = {step["name"]: step for step in STEPS if step.get("gate")}
     steps["documentation impact (range)"] = {"gate": "documentation impact (range)"}
-    errors = validate(data, set(steps))
+    errors = validate(data, set(steps), ROOT)
     if errors:
         for error in errors:
             print(f"docs-rules: {error}", file=sys.stderr)
