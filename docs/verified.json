@@ -1,4 +1,47 @@
 {
+  "docs/development/architecture.md": {
+    "verified_at": "2026-11-14",
+    "sources": {
+      "crates/zroutery-core/Cargo.toml": "sha256:efc7be54b370a29abac18ed08f3a75d5b0863195949d22a1b55fbebbf9004ba6",
+      "crates/zroutery-core/src/account/store.rs": "sha256:0b4b7cd86cbab923d37a0b9ada4d8ea3d225b6f76087ffd5ad0b021865a80251",
+      "crates/zroutery-core/src/accounting.rs": "sha256:3569d4043744bf2ea5e570280110e0c47b9184a8f80db15ba2da01e2daef423e",
+      "crates/zroutery-core/src/agent_takeover/ownership.rs": "sha256:29be578e89eaa58afa7f343f8aeffb5980bbfc6d882499ddf4bc57996e9cd594",
+      "crates/zroutery-core/src/billing.rs": "sha256:56e93b1bad31236f842e1f134677c34e261dfcf2c472ac1dc72603087c3ed538",
+      "crates/zroutery-core/src/budget.rs": "sha256:fa64323b90ed7c04dec0cafcb412a191c1aa82d10f4e3f28f7186cf0edec4bac",
+      "crates/zroutery-core/src/config/registry.rs": "sha256:0f18de17e1d49c2cb62ab81a611e2b2f41ac3257bd085ed0b2ae032a9c8d703f",
+      "crates/zroutery-core/src/error.rs": "sha256:81cc8c251bc9f6cba72b525fd7361979faf4425b0e32c323cee3c0b7da241c7d",
+      "crates/zroutery-core/src/failure.rs": "sha256:642038c6e4f0868c37e9fdc8166792c09d92fd6d5d41f615adc9c501c4130e4d",
+      "crates/zroutery-core/src/ir/mod.rs": "sha256:8ce5ac6f85259c3c2265ebdf1f91e306857b9d053b14317e487b4b4f1c85ab0a",
+      "crates/zroutery-core/src/ir/response.rs": "sha256:7ac5f7357144a078fae3bff1ad6f5f86c5947381699a9cf40c7c43ecb8dd6068",
+      "crates/zroutery-core/src/migration/state.rs": "sha256:3d683b8a4f97f62fdb00b20843dc6012b33ee34ac4bef445b3265d7d43308728",
+      "crates/zroutery-core/src/ml/serving.rs": "sha256:9008f56040087752e0363455df1c2ad59a2711d6772ad44dfcc0854c3f49a4a6",
+      "crates/zroutery-core/src/ml/traces.rs": "sha256:b98f7bdf9ba3b02f11c8db5b5ea18b93f6112d374f18256652e3483ba9c54f97",
+      "crates/zroutery-core/src/policy/policy.rs": "sha256:5097f2bba8f402aa00dc518744fc7825efd9831be8068394cea4348ef51505c1",
+      "crates/zroutery-core/src/protocol/mod.rs": "sha256:0ab249c5fa67cb585299d26c5412c1b3fbd52cb2a092214160819d24ae40a991",
+      "crates/zroutery-core/src/router/mod.rs": "sha256:ab4ec03549964d3b04b2a1827143351c5d648c489cd3480461530a3d3b24bbca",
+      "crates/zroutery-core/src/runtime_store.rs": "sha256:aae22be67ec6374ee9c733e40bf329d1f9a6a2b71552819c2e4cf1d86baefce9",
+      "crates/zroutery-core/src/server/handlers.rs": "sha256:fab479470870597d7be4b37a27948754140d49963d8ccf0d089b5dc514b27681",
+      "crates/zroutery-core/src/server/ledger.rs": "sha256:864851873235028aeb378d94ad99ca57e76a16c4554177960d832a1697d68fc0",
+      "crates/zroutery-core/src/server/pipeline/lifecycle.rs": "sha256:d09be55d5471810747ae16ab614d1e406642b509d1a66c439d9873311bd4fbbb",
+      "crates/zroutery-core/src/server/pipeline/mod.rs": "sha256:ff5cea3f27a818b38b2a2882c6b64656d342d4344d4c1bee21bdbfaadd5e7320",
+      "crates/zroutery-core/src/server/state.rs": "sha256:a78f46084c009851f9928c8cab36207b82234a2ac252d49bfc7ff29cfb2fc8f6",
+      "crates/zroutery-core/src/upstream/http.rs": "sha256:ac5f3353f2e9dd922fee82faea9ee54001d9aa3b95397b9069865e42bd3f29db",
+      "crates/zroutery-core/src/upstream/mod.rs": "sha256:122250817be3b21cf6657a3caae06563f0bd2c680ab8ce542550108d149fd203",
+      "crates/zroutery-headless/src/main.rs": "sha256:3253f813a45660c4bdf7875c18cbafca6307284a7cbad162638193af97757bc1",
+      "src-tauri/Cargo.toml": "sha256:026dc0aedd8b657559ac6e1cfa61011f588917bf3164a3bb42966d7bfbc40783",
+      "src-tauri/build.rs": "sha256:bfcdc780b6631d9f6032cfc6021f654d7801d10290067b2ea5679e888ab3d323",
+      "src-tauri/capabilities/default.json": "sha256:16cc97d7b8f2068ebed1bf7fae50843dea4793c8981f63146a89ce4a6db43257",
+      "src-tauri/src/lib.rs": "sha256:66c822292eb5c1a87874606746c5d5b154239284954656a0a892a7b2f811840a",
+      "src-tauri/src/secrets.rs": "sha256:183e0588a948e896b2eb368895cbde309cb8b0818e06a0105a04a4749616fdf5",
+      "src-tauri/src/state/server.rs": "sha256:580e347d1f140100b2fbfe88b0014db9b2146967770e5504a4a825c0dfcce848",
+      "src-tauri/tauri.conf.json": "sha256:ba1bd4d259ff2a0fc355e3e5a075da8a2c3f64fd27ae289a9565942042c14782"
+    },
+    "commands": [
+      "cargo test --workspace --all-features --locked",
+      "python3 -B scripts/docs_sources.py --check"
+    ],
+    "note": "Every invariant is cited to the symbol that implements or tests it; the 3,478-test workspace run was the behavioural check."
+  },
   "AGENTS.md": {
     "verified_at": "2026-11-14",
     "sources": {
