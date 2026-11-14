@@ -31,8 +31,26 @@ def git(root: Path, *args: str) -> subprocess.CompletedProcess:
     return subprocess.run(["git", *args], cwd=root, text=True, capture_output=True)
 
 
-def validate(state: dict, schema: dict, root: Path = ROOT, git_check: bool = True) -> list[str]:
+def schema_consistency(schema: dict) -> list[str]:
     errors: list[str] = []
+    gates = schema["properties"]["gates"]["items"]["properties"]
+    blockers = schema["properties"]["blockers"]["items"]["properties"]
+    checks = [
+        ("gate keys", GATE_KEYS, set(gates)),
+        ("gate statuses", STATUSES, set(gates["status"]["enum"])),
+        ("blocker keys", BLOCKER_KEYS, set(blockers)),
+        ("blocker statuses", BLOCKER_STATES, set(blockers["status"]["enum"])),
+    ]
+    for label, code, declared in checks:
+        if code != declared:
+            errors.append(f"schema {label} differ from the checker: code={sorted(code)} schema={sorted(declared)}")
+    return errors
+
+
+def validate(state: dict, schema: dict, root: Path = ROOT, git_check: bool = True, schema_check: bool = True) -> list[str]:
+    errors: list[str] = []
+    if schema_check:
+        errors.extend(schema_consistency(schema))
     allowed_top = set(schema.get("properties", {}))
     for key in sorted(set(state) - allowed_top):
         errors.append(f"unknown top-level key `{key}`")
@@ -160,13 +178,13 @@ def self_test() -> int:
         "last_full_green": None,
     }
     schema = {"properties": {key: {} for key in good}, "required": list(good)}
-    if validate(good, schema, git_check=False):
-        print(f"state-check self-test: good state rejected ({validate(good, schema, git_check=False)})", file=sys.stderr)
+    if validate(good, schema, git_check=False, schema_check=False):
+        print(f"state-check self-test: good state rejected ({validate(good, schema, git_check=False, schema_check=False)})", file=sys.stderr)
         return 1
     bad = json.loads(json.dumps(good))
     bad["gates"][0]["status"] = "green"
     bad["blockers"][0]["blocked_by"] = ["missing"]
-    if not validate(bad, schema, git_check=False):
+    if not validate(bad, schema, git_check=False, schema_check=False):
         print("state-check self-test: bad state was NOT caught", file=sys.stderr)
         return 1
     print("state-check: self-test passed (rejects an invalid enum and a missing blocker dependency)")
