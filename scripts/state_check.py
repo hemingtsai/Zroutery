@@ -187,7 +187,7 @@ def main(argv: list[str] | None = None) -> int:
         for error in errors:
             print(f"state-check: {error}", file=sys.stderr)
         return 1
-    print(f"state-check: {len(state['gates'])} gates, {len(state['blockers'])} blockers; schema and links valid")
+    print(f"state-check: {len(state['gates'])} gates, {len(state['blockers'])} blockers; schema and blockers valid")
     return 0
 
 

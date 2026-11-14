@@ -166,30 +166,7 @@ jobs:
           BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
         run: |
           set -euo pipefail
-          python3 -B scripts/docs_sources.py --self-test
-          python3 -B scripts/docs_check.py --self-test
-          python3 -B scripts/docs_impact.py --self-test
-          python3 -B scripts/docs_sources.py --check
-          python3 -B scripts/markdown_check.py --self-test
-          python3 -B scripts/markdown_check.py
-          python3 -B scripts/docs_check.py
-          python3 -B scripts/docs_parity.py --self-test
-          python3 -B scripts/docs_parity.py --check
-          python3 -B scripts/state_check.py --self-test
-          python3 -B scripts/state_check.py
-          python3 -B scripts/current_state.py --check
-          python3 -B scripts/invariant_check.py
-          python3 -B scripts/coverage_check.py --self-test
-          python3 -B scripts/coverage_check.py
-          if [ -z "$BASE_SHA" ] || [ "$BASE_SHA" = "0000000000000000000000000000000000000000" ]; then
-            echo "::notice title=docs impact::no prior revision in this event; no range to check"
-            exit 0
-          fi
-          if ! git rev-parse --verify --quiet "${BASE_SHA}^{commit}" >/dev/null; then
-            echo "::error title=docs impact::base $BASE_SHA is absent from this checkout; refusing to report a pass we did not earn"
-            exit 1
-          fi
-          python3 -B scripts/docs_impact.py --base "$BASE_SHA" --head HEAD
+          python3 -B scripts/docs_contracts.py --base "$BASE_SHA" --head HEAD
 
       # Every command the dashboard calls, against every command the backend
       # registers.
