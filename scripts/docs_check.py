@@ -343,15 +343,17 @@ def self_test() -> int:
             "ignore": [],
         }
         (root / MANIFEST).write_text(json.dumps(manifest), encoding="utf-8")
+        (root / "src").mkdir()
+        (root / "src" / "sample.rs").write_text("pub fn value() {}\n", encoding="utf-8")
         (root / "docs" / "good.md").write_text(
-            "> Authority: normative · Owner: docs · Last verified: 2026-11-14 · Verified by: x\n",
+            "> Authority: normative · Owner: docs · Last verified: 2026-11-14 · Verified by: x\n\n`src/sample.rs::value`\n",
             encoding="utf-8",
         )
         (root / "docs" / "bad.md").write_text(
             "> Authority: normative\n\n[broken](missing.md)\n" + "\n".join(f"line {i}" for i in range(12)),
             encoding="utf-8",
         )
-        errors, _ = check_active(root, manifest["docs"][0], {}, {})
+        errors, _ = check_active(root, manifest["docs"][0], {"docs/good.md": {"sources": {}}}, {})
         if errors:
             print(f"docs-check self-test: good document rejected ({errors})", file=sys.stderr)
             return 1
