@@ -9,14 +9,15 @@ every gate live in [verification.md](verification.md); current status lives in
 
 ## Freshness
 
-A document's `reviewed_commit` is the baseline at which its sources were last
-read. There are two valid paths: source and document change in the same
-worktree or commit, so freshness treats the document as re-reviewed and the
-baseline may stay; or they are separate commits, so commit the source first and
-then the document with `reviewed_commit` pointing at that source commit.
+`reviewed_commit` is the baseline before which source changes are considered
+reviewed. It is not a timestamp of the latest read; a same-commit document edit
+does not require advancing it. There are two valid paths: source and document
+change in the same worktree or commit, so freshness treats the document as
+re-reviewed and the baseline may stay; or they are separate commits, so commit
+the source first and then the document with `reviewed_commit` pointing at that
+source commit.
 `freshness_report.py --check` fails only when neither path holds; do not update
-only the hash. `reviewed_commit` is a baseline, not necessarily the latest
-review commit. The pre-commit hook counts staged edits in the range; hook and CI
+only the hash. The pre-commit hook counts staged edits in the range; hook and CI
 details live in [verification.md](verification.md).
 
 ## Commit content

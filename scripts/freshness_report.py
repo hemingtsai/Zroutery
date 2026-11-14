@@ -74,6 +74,12 @@ def check(root: Path = ROOT) -> tuple[list[str], list[str], list[str]]:
     return errors, stale, same_change
 
 
+def summary(count: int, same_change: list[str]) -> str:
+    if same_change:
+        return f"freshness: {count} documents; every post-review source change is covered by a same-change document edit"
+    return f"freshness: {count} documents; no source changed after its review commit"
+
+
 def fixture(temporary: str) -> tuple[Path, str]:
     root = Path(temporary)
     (root / "src").mkdir()
@@ -110,6 +116,9 @@ def self_test() -> int:
         if errors or stale or "docs/guide.md" not in same_change:
             print("freshness self-test: same-commit review was not accepted", file=sys.stderr)
             return 1
+        if "same-change document edit" not in summary(1, same_change):
+            print("freshness self-test: same-change summary is wrong", file=sys.stderr)
+            return 1
 
     with tempfile.TemporaryDirectory(prefix="zr-freshness-") as temporary:
         root, _ = fixture(temporary)
@@ -134,7 +143,36 @@ def self_test() -> int:
             print("freshness self-test: late doc without baseline advance was NOT stale", file=sys.stderr)
             return 1
 
-    print("freshness self-test: same-commit accepted; source-only and late-doc rejected")
+    with tempfile.TemporaryDirectory(prefix="zr-freshness-") as temporary:
+        root, _ = fixture(temporary)
+        (root / "src" / "sample.rs").write_text("pub fn value() -> u8 { 2 }\n", encoding="utf-8")
+        git(root, "add", "src/sample.rs")
+        git(root, "commit", "-qm", "source commit")
+        source = git(root, "rev-parse", "HEAD").stdout.strip()
+        (root / "docs" / "verified.json").write_text(
+            json.dumps({"docs/guide.md": {"reviewed_commit": source, "sources": {"src/sample.rs": "sha256:new"}}}),
+            encoding="utf-8",
+        )
+        git(root, "add", "docs/verified.json")
+        git(root, "commit", "-qm", "advance baseline")
+        errors, stale, same_change = check(root)
+        if errors or stale or same_change:
+            print("freshness self-test: advanced baseline was not accepted", file=sys.stderr)
+            return 1
+        if summary(1, same_change) != "freshness: 1 documents; no source changed after its review commit":
+            print("freshness self-test: advanced-baseline summary is wrong", file=sys.stderr)
+            return 1
+
+    with tempfile.TemporaryDirectory(prefix="zr-freshness-") as temporary:
+        root, _ = fixture(temporary)
+        (root / "src" / "sample.rs").write_text("pub fn value() -> u8 { 2 }\n", encoding="utf-8")
+        (root / "docs" / "guide.md").write_text("value is two\n", encoding="utf-8")
+        errors, stale, same_change = check(root)
+        if errors or stale or "docs/guide.md" not in same_change:
+            print("freshness self-test: worktree same-change was not accepted", file=sys.stderr)
+            return 1
+
+    print("freshness self-test: same-commit and worktree accepted; source-only, late-doc and unadvanced baseline rejected")
     return 0
 
 
@@ -153,10 +191,7 @@ def main(argv: list[str] | None = None) -> int:
     if errors or (args.check and stale):
         return 1
     count = len(json.loads((ROOT / VERIFIED).read_text()))
-    if same_change:
-        print(f"freshness: {count} documents; every post-review source change is covered by a same-change document edit")
-    else:
-        print(f"freshness: {count} documents; no source changed after its review commit")
+    print(summary(count, same_change))
     return 0
 
 

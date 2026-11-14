@@ -15,14 +15,14 @@ as of `2026-11-14` · branch `dev` · verified code head `26d887f`
 | frontend build | **pass** | `pnpm --dir ui build` |  |
 | frontend tests | **pass** | `pnpm --dir ui test` | 86 passed |
 | command surface | **pass** | `python3 -B scripts/command_surface_test.py` | 90 interface commands, 254 registered |
-| documentation sources | **pass** | `python3 -B scripts/docs_sources.py --check` | docs-sources: 801 anchor(s) resolved in 36 active document(s) (265e533) |
-| markdown structure | **pass** | `python3 -B scripts/markdown_check.py` | markdown-check: fenced blocks and tables are well formed (265e533) |
-| documentation check | **pass** | `python3 -B scripts/docs_check.py` | docs-check: 47 active document(s), 0 pending, 0 warning(s), all checks passed (265e533) |
-| documentation parity | **pass** | `python3 -B scripts/docs_parity.py --check` | docs-parity: the three READMEs have matching headings, fences, images and source anchors (265e533) |
-| module coverage | **pass** | `python3 -B scripts/coverage_check.py` | coverage-check: 37 top-level modules (36 owned, 1 covered elsewhere, 0 unowned) (265e533) |
-| rendered state | **pass** | `python3 -B scripts/current_state.py --check` | current-state: clean (265e533) |
-| invariant evidence | **pass** | `python3 -B scripts/invariant_check.py` | invariant-check: 15 invariants, 13 with test anchors, 2 explicitly untested (265e533) |
-| state schema | **pass** | `python3 -B scripts/state_check.py` | state-check: 25 gates, 4 blockers; schema and blockers valid (265e533) |
+| documentation sources | **pass** | `python3 -B scripts/docs_sources.py --check` | docs-sources: 801 anchor(s) resolved in 36 active document(s) (6f04999) |
+| markdown structure | **pass** | `python3 -B scripts/markdown_check.py` | markdown-check: fenced blocks and tables are well formed (6f04999) |
+| documentation check | **pass** | `python3 -B scripts/docs_check.py` | docs-check: 47 active document(s), 0 pending, 0 warning(s), all checks passed (6f04999) |
+| documentation parity | **pass** | `python3 -B scripts/docs_parity.py --check` | docs-parity: the three READMEs have matching headings, fences, images and source anchors (6f04999) |
+| module coverage | **pass** | `python3 -B scripts/coverage_check.py` | coverage-check: 37 top-level modules (36 owned, 1 covered elsewhere, 0 unowned) (6f04999) |
+| rendered state | **pass** | `python3 -B scripts/current_state.py --check` | current-state: clean (6f04999) |
+| invariant evidence | **pass** | `python3 -B scripts/invariant_check.py` | invariant-check: 15 invariants, 13 with test anchors, 2 explicitly untested (6f04999) |
+| state schema | **pass** | `python3 -B scripts/state_check.py` | state-check: 25 gates, 4 blockers; schema and blockers valid (6f04999) |
 | whitespace | **pass** | `git diff --check` | no trailing whitespace damage |
 | orchestration docs (legacy) | **retired** | `scripts/orch_docs_test.py (not run)` | legacy node and evidence records are archived; validation retired |
 | UI budget | **pass** | `python3 -B scripts/ui_budget_test.py` | 734,994 B JS of 742,000 |
@@ -31,8 +31,8 @@ as of `2026-11-14` · branch `dev` · verified code head `26d887f`
 | UI interaction | **unrun** | `python3 -B scripts/ui_interaction_test.py` | timed out after 900s on Helium 0.21.2; not a pass and not a product failure (quarantined) |
 | Rust advisories | **fail** | `cargo audit --file Cargo.lock` | 5 vulnerabilities, 18 warnings |
 | frontend advisories | **pass** | `pnpm audit --prod` |  |
-| freshness | **pass** | `python3 -B scripts/freshness_report.py --check` | freshness: 33 documents; no source changed after its review commit (265e533) |
-| rules registry | **pass** | `python3 -B scripts/docs_rules.py` | docs-rules: 15 rules; 14 machine, 11 executed gates covered (265e533) |
+| freshness | **pass** | `python3 -B scripts/freshness_report.py --check` | freshness: 33 documents; no source changed after its review commit (6f04999) |
+| rules registry | **pass** | `python3 -B scripts/docs_rules.py` | docs-rules: 15 rules; 14 machine, 11 executed gates covered (6f04999) |
 
 ## Blockers
 

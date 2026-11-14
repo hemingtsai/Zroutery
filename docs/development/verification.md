@@ -178,8 +178,8 @@ Consequences, stated rather than discovered:
 - `freshness_report.py --check` fails when a cited source changed after the
   document's `reviewed_commit` and the document did not change in the same
   worktree or commit; otherwise the review point must be advanced.
-  `--self-test` covers same-commit acceptance, source-only rejection and
-  late-document rejection.
+  `--self-test` covers same-commit and worktree acceptance, advanced-baseline
+  acceptance, source-only rejection and late-document rejection.
 - `docs_impact.py` fails when a changed source file is cited by a document that
   did not change. There is no bypass flag; `--include-staged` is used by the
   pre-commit hook so an uncommitted documentation edit counts as changed.
