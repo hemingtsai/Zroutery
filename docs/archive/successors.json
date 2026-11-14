@@ -1,0 +1,14 @@
+{
+  "docs/development/evidence-registry.md": {
+    "id": "no-successor:evidence-registry",
+    "archived_path": "docs/archive/history/evidence-registry.md",
+    "successor": null,
+    "reason": "The evidence registry process was deleted. PRs and tests replaced the process, not the document."
+  },
+  "docs/development/node-status/": {
+    "id": "no-successor:legacy-node-orchestration",
+    "archived_path": "docs/archive/records/node-status/",
+    "successor": null,
+    "reason": "The legacy node orchestration was deleted. current-state.md projects status; it is not a successor module."
+  }
+}

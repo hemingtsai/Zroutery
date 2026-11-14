@@ -29,6 +29,19 @@ CI.
 | C | its premise no longer exists |
 | D | a snapshot of one moment; updating it destroys its meaning |
 
+## No successor
+
+Some archived documents describe a module that was deleted outright. They have no
+active replacement, and inventing one would be false. The identifier is
+`no-successor:<slug>`; the slug is registered in `successors.json` together with
+the archived path and the reason. A missing successor is allowed only through
+that registry.
+
+| Identifier | Archived document | Why |
+|---|---|---|
+| `no-successor:evidence-registry` | `docs/development/evidence-registry.md` | the evidence registry process was deleted |
+| `no-successor:legacy-node-orchestration` | `docs/development/node-status/` | the legacy node orchestration was deleted |
+
 ## Moved documents
 
 | Original path | Archived path | Criterion | Current replacement |
@@ -61,7 +74,7 @@ CI.
 | `docs/development/codex-auto-rectifier.md` | `records/codex-auto-rectifier.md` | B | `reference/providers.md` |
 | `docs/development/routing-data-collection-guide.md` | `records/routing-data-collection-guide.md` | B | `reference/routing-data.md` |
 | `docs/development/skin-spec-md3-fluent.md` | `records/skin-spec-md3-fluent.md` | B | `reference/ui-design-system.md` |
-| `docs/development/node-status/` (84 JSON) | `records/node-status/` | D | `current-state.md`, Issues |
+| `docs/development/node-status/` (84 JSON) | `records/node-status/` | D | `no-successor:legacy-node-orchestration` |
 
 ## Rules
 
