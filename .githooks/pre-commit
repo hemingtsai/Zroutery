@@ -1,7 +1,7 @@
 #!/bin/sh
 set -eu
 # docs_contracts defaults to origin/dev..HEAD, or HEAD~1 when there is no upstream.
-python3 -B scripts/docs_contracts.py || {
+python3 -B scripts/docs_contracts.py --include-staged || {
   echo "fix: update the affected document or trigger, then re-run the same command"
   exit 1
 }

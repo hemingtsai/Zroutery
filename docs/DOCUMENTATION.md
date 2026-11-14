@@ -172,6 +172,10 @@ same change.
 - Generated documents are regenerated, never hand-edited; CI compares the
   generated output with the committed file.
 
+The machine-readable rule registry is
+[`docs/rules.json`](rules.json); its human table is
+[`docs/development/reference/documentation-rules.md`](development/reference/documentation-rules.md).
+
 ## Index and health
 
 - `docs/INDEX.md` is generated from the manifest by `docs_check.py --write-index`.

@@ -31,20 +31,24 @@ def git(root: Path, *args: str) -> subprocess.CompletedProcess[str]:
     return subprocess.run(["git", *args], cwd=root, capture_output=True, text=True, check=False)
 
 
-def changed_files(root: Path, base: str, head: str) -> list[str]:
+def changed_files(root: Path, base: str, head: str, include_staged: bool = False) -> list[str]:
     result = git(root, "diff", "--name-only", f"{base}..{head}")
     if result.returncode != 0:
         raise RuntimeError(result.stderr.strip() or "git diff failed")
-    return [line for line in result.stdout.splitlines() if line.strip()]
+    changed = [line for line in result.stdout.splitlines() if line.strip()]
+    if include_staged:
+        staged = git(root, "diff", "--cached", "--name-only")
+        changed.extend(line for line in staged.stdout.splitlines() if line.strip())
+    return sorted(set(changed))
 
 
 def load_manifest(root: Path) -> dict:
     return json.loads((root / MANIFEST).read_text(encoding="utf-8"))
 
 
-def evaluate(root: Path, base: str, head: str) -> dict:
+def evaluate(root: Path, base: str, head: str, include_staged: bool = False) -> dict:
     manifest = load_manifest(root)
-    changed = changed_files(root, base, head)
+    changed = changed_files(root, base, head, include_staged)
     changed_set = set(changed)
     required: dict[str, str] = {}
     reverse = docs_sources.reverse_index(root)
@@ -118,6 +122,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--base")
     parser.add_argument("--head", default="HEAD")
     parser.add_argument("--json", action="store_true")
+    parser.add_argument("--include-staged", action="store_true")
     parser.add_argument("--self-test", action="store_true")
     args = parser.parse_args(argv)
     if args.self_test:
@@ -130,7 +135,7 @@ def main(argv: list[str] | None = None) -> int:
         return 0
     root = Path(args.root)
     try:
-        result = evaluate(root, args.base, args.head)
+        result = evaluate(root, args.base, args.head, args.include_staged)
     except (OSError, json.JSONDecodeError, RuntimeError) as error:
         print(f"docs-impact: cannot evaluate {args.base}..{args.head}: {error}", file=sys.stderr)
         return 3

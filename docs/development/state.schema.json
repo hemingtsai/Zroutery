@@ -61,6 +61,13 @@
           },
           "quarantine": {
             "type": "boolean"
+          },
+          "ran_at": {
+            "type": "string"
+          },
+          "commit": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{7,40}$"
           }
         },
         "additionalProperties": false

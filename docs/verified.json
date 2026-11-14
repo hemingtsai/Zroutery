@@ -74,7 +74,7 @@
     "verified_at": "2026-11-14",
     "sources": {
       "scripts/commit_contract_test.py": "sha256:a853098040da40b7f2a0cec3878f19a9079bbb938ae3ad2de62c7af76bb4255b",
-      "scripts/docs_impact.py": "sha256:294ed119ad409be3d1acd9767c3229cca6d3c11f8042b48f8a626cc40740a021",
+      "scripts/docs_impact.py": "sha256:0c783b9baa292067f6e58f1bf0d7f51b015f8e24b603f75f436bc2745561438b",
       ".github/workflows/ci.yml": "sha256:812511ed7e1aa1bd012176a09decec0681a94ea0cdbae5a8237478598407c73f"
     },
     "commands": [
@@ -617,5 +617,17 @@
     ],
     "note": "AGENTS routes here; the contracts are anchored to the modules that enforce them.",
     "reviewed_commit": "b8f4722"
+  },
+  "docs/development/reference/documentation-rules.md": {
+    "verified_at": "2026-11-14",
+    "sources": {
+      "docs/rules.json": "sha256:2a8cfb7e9044eccf2bc488ebc844248b3880cc0670e3071033421f61435e4c65"
+    },
+    "commands": [
+      "python3 -B scripts/docs_rules.py",
+      "python3 -B scripts/docs_contracts.py"
+    ],
+    "note": "The registry and the executed STEPS list are the two sides this page describes.",
+    "reviewed_commit": "9c6a043"
   }
 }

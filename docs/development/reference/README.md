@@ -30,6 +30,7 @@ module, public or private, is `owned`, `covered_elsewhere` with a named place, o
 | rectifiers | [rectifier.md](rectifier.md) |
 | stats, observation, sessions | [observability.md](observability.md) |
 | security: auth, CORS, capabilities | [security.md](security.md) |
+| documentation rules and enforcement | [documentation-rules.md](documentation-rules.md) |
 
 ## Desktop and UI
 

@@ -527,6 +527,20 @@
       "owner": "backend",
       "summary": "Module, IPC, lifecycle, takeover, platform and UI boundaries that AGENTS delegates here.",
       "max_lines": 250
+    },
+    {
+      "path": "docs/development/reference/documentation-rules.md",
+      "title": "Documentation Rules Reference",
+      "type": "reference",
+      "authority": "reference",
+      "audience": [
+        "human",
+        "agent"
+      ],
+      "status": "active",
+      "owner": "docs",
+      "summary": "Rule IDs, enforced-by steps and the manual review rules.",
+      "max_lines": 150
     }
   ],
   "pending": [],

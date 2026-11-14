@@ -153,6 +153,11 @@ Consequences, stated rather than discovered:
   or an explicit `untested` reason.
 - `current_state.py --check` fails when `current-state.md` is not the render of
   `state.json`; hand edits are not a source.
+- `docs_rules.py` checks that every `docs/rules.json` machine rule names an
+  executed `docs_contracts.py` step, and that every gated step is registered.
+- `record_state.py` runs `docs_contracts.py --json` and writes the documentation
+  gate status, `ran_at` and commit into `state.json`; hand-filled doc statuses
+  are not the source.
 - `state_check.py` validates `state.json` against `state.schema.json` and checks
   blocker dependencies and cycles.
 - `docs_parity.py` checks that the three READMEs have matching headings, fences,
@@ -162,7 +167,8 @@ Consequences, stated rather than discovered:
 - `freshness_report.py --check` fails when a cited source changed after the
   document's `reviewed_commit`; the review point must be advanced.
 - `docs_impact.py` fails when a changed source file is cited by a document that
-  did not change. There is no bypass flag.
+  did not change. There is no bypass flag; `--include-staged` is used by the
+  pre-commit hook so an uncommitted documentation edit counts as changed.
 
 ## See also
 

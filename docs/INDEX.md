@@ -65,6 +65,7 @@ This file is generated from `docs/docs.manifest.json`. Do not edit it.
 | [Client Attribution Reference](development/reference/client-attribution.md) | reference | reference | backend | Reporting attribution ladder, confidence, canonical ids and the bounded registry. |
 | [Reference Index](development/reference/README.md) | index | index | docs | Module-to-reference map and the areas that are covered elsewhere. |
 | [Implementation Contracts Reference](development/reference/implementation-contracts.md) | reference | reference | backend | Module, IPC, lifecycle, takeover, platform and UI boundaries that AGENTS delegates here. |
+| [Documentation Rules Reference](development/reference/documentation-rules.md) | reference | reference | docs | Rule IDs, enforced-by steps and the manual review rules. |
 
 ## Pending migration
 
@@ -82,9 +83,9 @@ Findings are reported to the user in the conversation. GitHub Issues are opened 
 
 ## Health
 
-- active documents: 46
-- source-anchored (non-ADR): 31
-- hash-ledgered: 32
+- active documents: 47
+- source-anchored (non-ADR): 32
+- hash-ledgered: 33
 - guides: 5
 - ADRs: 9 (6 with code anchors; decision records, not machine-verified)
 - entry: 1

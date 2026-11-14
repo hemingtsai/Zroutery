@@ -23,7 +23,7 @@ DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 HEAD_RE = re.compile(r"^[0-9a-f]{7,40}$")
 STATUSES = {"pass", "fail", "unverified", "unrun", "retired"}
 BLOCKER_STATES = {"partial", "blocked", "ready", "done", "open"}
-GATE_KEYS = {"name", "status", "command", "detail", "quarantine"}
+GATE_KEYS = {"name", "status", "command", "detail", "quarantine", "ran_at", "commit"}
 BLOCKER_KEYS = {"id", "status", "summary", "blocked_by"}
 
 
@@ -105,6 +105,10 @@ def validate(state: dict, schema: dict, root: Path = ROOT, git_check: bool = Tru
             errors.append(f"gates[{index}]: detail must be a string")
         if "quarantine" in gate and not isinstance(gate["quarantine"], bool):
             errors.append(f"gates[{index}]: quarantine must be a boolean")
+        if "ran_at" in gate and not isinstance(gate["ran_at"], str):
+            errors.append(f"gates[{index}]: ran_at must be a string")
+        if "commit" in gate and (not isinstance(gate["commit"], str) or not re.match(r"^[0-9a-f]{7,40}$", gate["commit"])):
+            errors.append(f"gates[{index}]: commit must be a short or full hex commit")
 
     blockers = state.get("blockers", [])
     if not isinstance(blockers, list):

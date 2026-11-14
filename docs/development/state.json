@@ -42,30 +42,41 @@
       "name": "documentation contracts",
       "status": "pass",
       "command": "python3 -B scripts/docs_contracts.py",
-      "detail": "all docs gates; local default range origin/dev..HEAD; CI passes BASE_SHA"
+      "detail": "all docs gates; CI runs range impact with --base/--head",
+      "ran_at": "2026-11-14T07:01:29+00:00",
+      "commit": "9c6a043"
     },
     {
       "name": "documentation impact (range)",
       "status": "unverified",
-      "command": "python3 -B scripts/docs_contracts.py --base <base> --head HEAD",
-      "detail": "not run in this snapshot; local default origin/dev..HEAD; CI passes BASE_SHA"
+      "command": "python3 -B scripts/docs_contracts.py",
+      "detail": "UNVERIFIED (range check disabled with --no-range) (9c6a043)",
+      "ran_at": "2026-11-14T07:01:29+00:00",
+      "commit": "9c6a043"
     },
     {
       "name": "documentation sources",
       "status": "pass",
-      "command": "python3 -B scripts/docs_sources.py --check"
+      "command": "python3 -B scripts/docs_contracts.py",
+      "detail": "docs-sources: 799 anchor(s) resolved in 36 active document(s) (9c6a043)",
+      "ran_at": "2026-11-14T07:01:29+00:00",
+      "commit": "9c6a043"
     },
     {
       "name": "markdown structure",
       "status": "pass",
-      "command": "python3 -B scripts/markdown_check.py",
-      "detail": "fenced blocks and tables well formed"
+      "command": "python3 -B scripts/docs_contracts.py",
+      "detail": "markdown-check: fenced blocks and tables are well formed (9c6a043)",
+      "ran_at": "2026-11-14T07:01:29+00:00",
+      "commit": "9c6a043"
     },
     {
       "name": "documentation check",
       "status": "pass",
-      "command": "python3 -B scripts/docs_check.py",
-      "detail": "46 active, 0 pending, 0 warnings"
+      "command": "python3 -B scripts/docs_contracts.py",
+      "detail": "docs-check: 47 active document(s), 0 pending, 0 warning(s), all checks passed (9c6a043)",
+      "ran_at": "2026-11-14T07:01:29+00:00",
+      "commit": "9c6a043"
     },
     {
       "name": "documentation impact self-test",
@@ -76,32 +87,42 @@
     {
       "name": "documentation parity",
       "status": "pass",
-      "command": "python3 -B scripts/docs_parity.py --check",
-      "detail": "three READMEs have matching headings, fences, images and anchors"
+      "command": "python3 -B scripts/docs_contracts.py",
+      "detail": "docs-parity: the three READMEs have matching headings, fences, images and source anchors (9c6a043)",
+      "ran_at": "2026-11-14T07:01:29+00:00",
+      "commit": "9c6a043"
     },
     {
       "name": "module coverage",
       "status": "pass",
-      "command": "python3 -B scripts/coverage_check.py",
-      "detail": "37 modules: 36 owned, 1 covered elsewhere"
+      "command": "python3 -B scripts/docs_contracts.py",
+      "detail": "coverage-check: 37 top-level modules (36 owned, 1 covered elsewhere, 0 unowned) (9c6a043)",
+      "ran_at": "2026-11-14T07:01:29+00:00",
+      "commit": "9c6a043"
     },
     {
       "name": "rendered state",
       "status": "pass",
-      "command": "python3 -B scripts/current_state.py --check",
-      "detail": "current-state.md is the render of state.json"
+      "command": "python3 -B scripts/docs_contracts.py",
+      "detail": "current-state: clean (9c6a043)",
+      "ran_at": "2026-11-14T07:01:29+00:00",
+      "commit": "9c6a043"
     },
     {
       "name": "invariant evidence",
       "status": "pass",
-      "command": "python3 -B scripts/invariant_check.py",
-      "detail": "15 invariants, 13 test-backed, 2 explicitly untested"
+      "command": "python3 -B scripts/docs_contracts.py",
+      "detail": "invariant-check: 15 invariants, 13 with test anchors, 2 explicitly untested (9c6a043)",
+      "ran_at": "2026-11-14T07:01:29+00:00",
+      "commit": "9c6a043"
     },
     {
       "name": "state schema",
       "status": "pass",
-      "command": "python3 -B scripts/state_check.py",
-      "detail": "schema, enums, blocker graph and head ancestry"
+      "command": "python3 -B scripts/docs_contracts.py",
+      "detail": "state-check: 27 gates, 4 blockers; schema and blockers valid (9c6a043)",
+      "ran_at": "2026-11-14T07:01:29+00:00",
+      "commit": "9c6a043"
     },
     {
       "name": "whitespace",
@@ -151,6 +172,22 @@
       "name": "frontend advisories",
       "status": "pass",
       "command": "pnpm audit --prod"
+    },
+    {
+      "name": "freshness",
+      "command": "python3 -B scripts/docs_contracts.py",
+      "status": "pass",
+      "detail": "freshness: 33 documents; no source changed after its review commit (9c6a043)",
+      "ran_at": "2026-11-14T07:01:29+00:00",
+      "commit": "9c6a043"
+    },
+    {
+      "name": "rules registry",
+      "command": "python3 -B scripts/docs_contracts.py",
+      "status": "pass",
+      "detail": "docs-rules: 15 rules; 13 machine, 11 executed gates covered (9c6a043)",
+      "ran_at": "2026-11-14T07:01:29+00:00",
+      "commit": "9c6a043"
     }
   ],
   "blockers": [
