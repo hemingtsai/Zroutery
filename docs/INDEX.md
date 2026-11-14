@@ -32,6 +32,7 @@ This file is generated from `docs/docs.manifest.json`. Do not edit it.
 | [docs/development/WORKFLOW.md](development/WORKFLOW.md) | normative | normative | docs | Commit content, subject contract, evidence policy and documentation synchronization. |
 | [docs/development/reference/ipc.md](development/reference/ipc.md) | reference | reference | frontend | The webview-to-Rust command boundary: registration, capabilities, feature gates and mock fixtures. |
 | [docs/development/reference/accounting.md](development/reference/accounting.md) | reference | reference | backend | Usage semantics, cost arithmetic, settlement, budgets and ledger persistence. |
+| [docs/development/reference/ml-routing.md](development/reference/ml-routing.md) | reference | reference | backend | How a learned model reaches a route: ranking, gate, promotion and rollback. |
 | [docs/development/decisions/0001-recoverable-node-records.md](development/decisions/0001-recoverable-node-records.md) | adr | normative | docs | Accepted decisions and their consequences; superseded records stay in place. |
 | [docs/development/decisions/0002-production-ml-boundary.md](development/decisions/0002-production-ml-boundary.md) | adr | normative | docs | Accepted decisions and their consequences; superseded records stay in place. |
 | [docs/development/decisions/0003-capability-media-fail-closed.md](development/decisions/0003-capability-media-fail-closed.md) | adr | normative | docs | Accepted decisions and their consequences; superseded records stay in place. |
@@ -86,7 +87,7 @@ Audits, findings, triage and risk discussions live in GitHub Issues. Use the `au
 
 ## Health
 
-- active documents: 21
+- active documents: 22
 - pending migration: 28
 - source anchors are checked by `scripts/docs_sources.py`
 - links, sizes and freshness are checked by `scripts/docs_check.py`

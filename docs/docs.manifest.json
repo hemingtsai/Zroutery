@@ -151,6 +151,17 @@
       "max_lines": 250
     },
     {
+      "path": "docs/development/reference/ml-routing.md",
+      "title": "ML Routing Reference",
+      "type": "reference",
+      "authority": "reference",
+      "audience": ["human", "agent"],
+      "status": "active",
+      "owner": "backend",
+      "summary": "How a learned model reaches a route: ranking, gate, promotion and rollback.",
+      "max_lines": 250
+    },
+    {
       "glob": "docs/development/decisions/*.md",
       "title": "Architecture decision records",
       "type": "adr",
