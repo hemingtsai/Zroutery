@@ -4,7 +4,8 @@
 
 This document defines how a commit and its evidence are formed. The toolchain and
 every gate live in [verification.md](verification.md); current status lives in
-[current-state.md](current-state.md); audits and findings live in GitHub Issues.
+[current-state.md](current-state.md); the findings policy is
+[the canonical section](../DOCUMENTATION.md#findings-and-decisions).
 
 ## Freshness
 
@@ -63,8 +64,8 @@ Architecture:
 ```
 
 `Verification:` names a command or a short result; it must not contain a long
-transcript. Plans, stage reports and delivery diaries stay in Issues or
-`docs/` records.
+transcript. Plans, stage reports and delivery diaries stay in `docs/development/`
+or the conversation.
 
 ## Evidence
 
@@ -76,7 +77,7 @@ transcript. Plans, stage reports and delivery diaries stay in Issues or
 - If any one of the three legacy trailers appears, all three must appear and be
   well formed; the validator rejects a partial block.
 - A commit-level state cannot upgrade a node without that node's gates. Current
-  node state is historical; use `current-state.md` and Issues.
+  node state is historical; use `current-state.md` and the conversation.
 
 ## Documentation synchronization
 

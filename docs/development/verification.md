@@ -140,7 +140,7 @@ Consequences, stated rather than discovered:
   and every Markdown link inside `docs/archive/` must resolve. A deleted module
   with no successor is allowed only through a `no-successor:<slug>` entry in
   `docs/archive/successors.json`.
-- `coverage_check.py` requires every public Core module to be owned, covered
+- `coverage_check.py` requires every top-level Core module (public or private) to be owned, covered
   elsewhere, or explicitly unowned with a reason.
 - `invariant_check.py` requires every architecture invariant to name a test anchor
   or an explicit `untested` reason.

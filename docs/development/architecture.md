@@ -4,7 +4,8 @@
 
 This document describes the current boundaries and the invariants a change must
 preserve. It does not track pass/fail status (`current-state.md`), command
-definitions (`verification.md`), or history (`archive/` and GitHub Issues).
+definitions (`verification.md`), or history (`archive/`); findings follow the
+[canonical policy](../DOCUMENTATION.md#findings-and-decisions).
 
 ## 1. Layers
 
@@ -184,7 +185,8 @@ compiled but not requested stays inert.
 - It is not a status report: see `current-state.md`.
 - It is not a gate list: see `verification.md`.
 - It is not a history of decisions: see `decisions/` and `docs/archive/`.
-- It is not a place for audits or plans: those are GitHub Issues, and accepted
+- It is not a place for audits or plans: findings are reported to the user under
+  the [findings policy](../DOCUMENTATION.md#findings-and-decisions), and accepted
   decisions become ADRs.
 
 ## 7. See also

@@ -153,7 +153,7 @@ same change.
 
 - `docs/INDEX.md` is generated from the manifest by `docs_check.py --write-index`.
 - The index lists active documents, the pending migration set and the archive,
-  plus the external issue entry points. It is not a list of issues.
+  plus the generated health summary. It is not a list of findings.
 - `docs_check.py` reports file counts, over-budget documents, unresolved links
   and pending documents.
 

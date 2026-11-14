@@ -59,7 +59,7 @@
       "name": "documentation check",
       "status": "pass",
       "command": "python3 -B scripts/docs_check.py",
-      "detail": "45 active, 0 pending, 0 warnings"
+      "detail": "46 active, 0 pending, 0 warnings"
     },
     {
       "name": "documentation impact self-test",

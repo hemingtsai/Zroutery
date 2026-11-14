@@ -187,7 +187,13 @@ def self_test() -> int:
     if not validate(bad, schema, git_check=False, schema_check=False):
         print("state-check self-test: bad state was NOT caught", file=sys.stderr)
         return 1
-    print("state-check: self-test passed (rejects an invalid enum and a missing blocker dependency)")
+    real = json.loads((ROOT / SCHEMA).read_text(encoding="utf-8"))
+    drift = json.loads(json.dumps(real))
+    drift["properties"]["gates"]["items"]["properties"]["status"]["enum"].append("green")
+    if not schema_consistency(drift):
+        print("state-check self-test: schema drift was NOT caught", file=sys.stderr)
+        return 1
+    print("state-check: self-test passed (rejects an invalid enum, a missing dependency and schema drift)")
     return 0
 
 

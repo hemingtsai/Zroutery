@@ -17,7 +17,7 @@ as of `2026-11-14` · branch `dev` · verified code head `26d887f`
 | documentation contracts | **pass** | `python3 -B scripts/docs_contracts.py` | all docs gates, including freshness and state |
 | documentation sources | **pass** | `python3 -B scripts/docs_sources.py --check` |  |
 | markdown structure | **pass** | `python3 -B scripts/markdown_check.py` | fenced blocks and tables well formed |
-| documentation check | **pass** | `python3 -B scripts/docs_check.py` | 45 active, 0 pending, 0 warnings |
+| documentation check | **pass** | `python3 -B scripts/docs_check.py` | 46 active, 0 pending, 0 warnings |
 | documentation impact self-test | **pass** | `python3 -B scripts/docs_impact.py --base <base> --head HEAD` | the self-test passes; the range check is enforced in CI with --base/--head |
 | documentation parity | **pass** | `python3 -B scripts/docs_parity.py --check` | three READMEs have matching headings, fences, images and anchors |
 | module coverage | **pass** | `python3 -B scripts/coverage_check.py` | 37 modules: 36 owned, 1 covered elsewhere |

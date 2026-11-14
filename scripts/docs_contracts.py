@@ -17,7 +17,7 @@ ROOT = Path(__file__).resolve().parents[1]
 
 def run(args: list[str]) -> None:
     command = [sys.executable, "-B", *args]
-    print("==> " + " ".join(args))
+    print("==> " + " ".join(args), flush=True)
     result = subprocess.run(command, cwd=ROOT)
     if result.returncode != 0:
         raise SystemExit(result.returncode)
@@ -48,13 +48,13 @@ def main(argv: list[str] | None = None) -> int:
 
     base = args.base.strip()
     if not base or set(base) == {"0"}:
-        print("==> docs_impact: no base revision; range check skipped")
+        print("==> docs_impact: no base revision; range check skipped", flush=True)
     else:
         if subprocess.run(["git", "cat-file", "-e", f"{base}^{{commit}}"], cwd=ROOT).returncode != 0:
             print(f"docs-contracts: base {base} is not a commit", file=sys.stderr)
             return 1
         run(["scripts/docs_impact.py", "--base", base, "--head", args.head])
-    print("docs-contracts: all documentation contracts passed")
+    print("docs-contracts: all documentation contracts passed", flush=True)
     return 0
 
 

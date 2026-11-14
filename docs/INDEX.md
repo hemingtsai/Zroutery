@@ -24,7 +24,7 @@ This file is generated from `docs/docs.manifest.json`. Do not edit it.
 | [README.md](../README.md) | guide | guide | docs | User-facing overview, setup and platform support. |
 | [README.zh-CN.md](../README.zh-CN.md) | guide | guide | docs | Simplified Chinese mirror of README.md. |
 | [docs/DOCUMENTATION.md](DOCUMENTATION.md) | normative | normative | docs | Document types, authority, source verification, sizes, archive and change synchronization. |
-| [docs/INDEX.md](INDEX.md) | index | index | docs | Generated map of active, pending and archived documents plus the external issue entry points. |
+| [docs/INDEX.md](INDEX.md) | index | index | docs | Generated map of active, pending and archived documents. |
 | [docs/development/README.md](development/README.md) | index | index | docs | Short signpost into the development records. |
 | [docs/development/current-state.md](development/current-state.md) | fact | fact | docs | Generated snapshot: gates, blockers, flaky gates, last full green. |
 | [docs/development/verification.md](development/verification.md) | normative | normative | backend | The only toolchain and gate definition, including what CI does and does not run. |
@@ -42,6 +42,7 @@ This file is generated from `docs/docs.manifest.json`. Do not edit it.
 | [docs/development/decisions/0006-ml-closed-loop.md](development/decisions/0006-ml-closed-loop.md) | adr | normative | docs | Accepted decisions and their consequences; superseded records stay in place. |
 | [docs/development/decisions/0007-ml-operator-surface.md](development/decisions/0007-ml-operator-surface.md) | adr | normative | docs | Accepted decisions and their consequences; superseded records stay in place. |
 | [docs/development/decisions/0008-nothing-random-decides.md](development/decisions/0008-nothing-random-decides.md) | adr | normative | docs | Accepted decisions and their consequences; superseded records stay in place. |
+| [docs/development/decisions/0009-user-docs-scope.md](development/decisions/0009-user-docs-scope.md) | adr | normative | docs | Accepted decisions and their consequences; superseded records stay in place. |
 | [docs/archive/README.md](archive/README.md) | index | index | docs | Index of archived audits, plans, records, history and node snapshots; not current fact. |
 | [docs/development/reference/providers.md](development/reference/providers.md) | reference | reference | backend | Provider kinds, NewAPI panels, OpenCode Zen shaping and the CC Switch import. |
 | [docs/development/reference/ui-design-system.md](development/reference/ui-design-system.md) | reference | reference | frontend | Tokens, skins, shell primitives, languages and the frontend gates. |
@@ -81,11 +82,11 @@ Findings are reported to the user in the conversation. GitHub Issues are opened 
 
 ## Health
 
-- active documents: 45
+- active documents: 46
 - source-anchored (non-ADR): 31
 - hash-ledgered: 32
 - guides: 5
-- ADRs: 8 (5 with code anchors; decision records, not machine-verified)
+- ADRs: 9 (5 with code anchors; decision records, not machine-verified)
 - entry: 1
 - generated/fact: 1
 - index: 4

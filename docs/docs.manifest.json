@@ -84,7 +84,7 @@
       "status": "active",
       "owner": "docs",
       "generated": true,
-      "summary": "Generated map of active, pending and archived documents plus the external issue entry points.",
+      "summary": "Generated map of active, pending and archived documents.",
       "max_lines": 250
     },
     {
@@ -588,6 +588,10 @@
     {
       "fact": "commit-contract",
       "home": "docs/development/WORKFLOW.md"
+    },
+    {
+      "fact": "findings",
+      "home": "docs/DOCUMENTATION.md#findings-and-decisions"
     }
   ]
 }
