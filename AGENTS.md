@@ -14,17 +14,22 @@ facts; this file wins for permission and process.
 - This file owns permission and process; [DOCUMENTATION.md](docs/DOCUMENTATION.md)
   owns document rules; [verification.md](docs/development/verification.md) owns
   gates; [INDEX.md](docs/INDEX.md) owns reading paths.
-- Before changing code, inspect citations with `python3 -B scripts/docs_sources.py
-  --index` and the affected set with `python3 -B scripts/docs_impact.py --base
-  <start> --head HEAD`.
+- Before changing code, inspect the citation index with
+  `python3 -B scripts/docs_sources.py --index`. Before committing, compute the
+  affected set with `python3 -B scripts/docs_impact.py --base <start> --head
+  HEAD`; add `--include-staged` to read staged edits.
 - Before committing, follow Definition of done below.
 
 ## Definition of done
 
-Before each commit run `docs_contracts.py`, `current_state.py --check` and
-`commit_contract_test.py --base origin/dev --head HEAD`. A red gate is fixed in
-the document or trigger; if the state differs, run `record_state.py --no-range`
-and commit it. Never weaken a gate or use `--no-verify`.
+Before each commit run `python3 -B scripts/docs_contracts.py --include-staged`,
+`python3 -B scripts/current_state.py --check` and
+`python3 -B scripts/commit_contract_test.py --base origin/dev --head HEAD`;
+`--include-staged` is what lets the range check see the staged documentation
+edit. A red gate is fixed in the document or trigger; if the state differs, run
+`python3 -B scripts/record_state.py --no-range` and commit it. Tier 1 in
+[verification.md](docs/development/verification.md) must be green or explicitly
+reported as unverified. Never weaken a gate or use `--no-verify`.
 
 ## Layout
 
@@ -50,9 +55,10 @@ and commit it. Never weaken a gate or use `--no-verify`.
 ## Other agents
 
 - Respect ownership: `crates/` and `src-tauri/` are backend; `ui/` is frontend.
-- Shared files need coordination: manifests, `Cargo.lock`, `ui/src/api.ts`,
-  `ui/mock-bridge.ts`, the three i18n dictionaries, fixtures and
-  `docs/docs.manifest.json`.
+- Shared files need coordination: `AGENTS.md`, `docs/development/verification.md`,
+  `docs/INDEX.md`, `docs/development/state.json`, `docs/verified.json`, the
+  manifests, `Cargo.lock`, `ui/src/api.ts`, `ui/mock-bridge.ts`, the three i18n
+  dictionaries and fixtures.
 - Re-read a shared file immediately before patching it; stage explicit paths; one
   owner publishes commits at a time. Delegate only when authorized.
 
@@ -65,8 +71,9 @@ not restate them.
 ## Documentation is part of the change
 
 - Every change updates every affected document in the same change. The affected
-  set is computed: `python3 -B scripts/docs_impact.py --base <start> --head HEAD`.
-  There is no `none` escape; fix the manifest or citation if a trigger is wrong.
+  set is computed: `python3 -B scripts/docs_impact.py --base <start> --head HEAD`
+  (add `--include-staged` for staged edits). There is no `none` escape; fix the
+  manifest or citation if a trigger is wrong.
 - Every factual sentence in a normative or reference document cites a source
   read in the same change (`path::symbol` or `path#Lx`). Old documents are leads,
   never sources. See [docs/DOCUMENTATION.md](docs/DOCUMENTATION.md).
@@ -85,8 +92,9 @@ Gate definitions and the toolchain live in
 current status and the command used for that snapshot; it does not redefine the
 gate.
 
-- Resolve the CI compiler first; `verification.md` names the resolver and version.
-  `1.90.0` is the separate MSRV check.
+- Resolve the CI compiler first; `verification.md` names the resolver, and the
+  resolver prints the version and refuses a drifted toolchain. `1.90.0` is the
+  separate MSRV check.
 - Tier 1 blocks every change. Tier 2 is surface-specific; `verification.md` says
   which rows block a CI job and which are local-only.
 - A gate that cannot run, or times out, is **unrun**, never a pass. Record it.
@@ -100,6 +108,8 @@ gate.
 - Format: `<type>(<scope>): <imperative summary>`, lowercase, at most 72
   characters. `scripts/commit_contract_test.py` is authoritative.
 - Validate the range: `python3 -B scripts/commit_contract_test.py --base <start> --head HEAD`.
+  There is no local commit-msg hook; the commit being created is validated by CI
+  over the pushed range, so this check covers the commits already made.
 - Plans, test transcripts and delivery status belong in `docs/development/` or
   the conversation, never in commit subjects or long bodies.
 
