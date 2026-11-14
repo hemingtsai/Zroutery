@@ -40,9 +40,18 @@ pub async fn get_snapshot(app: AppHandle, desktop: State<'_, Arc<Desktop>>) -> C
 
 /// Counters and log only: what the Activity tab polls, without cloning the
 /// configuration or asking the keychain about every provider.
+///
+/// The durable usage summary keeps the read itself O(1), but it still opens
+/// the runtime database, and a command without `async` runs on the main
+/// thread — the thread the window's event loop runs on. The Overview and
+/// Activity tabs poll this every two seconds, so the body goes to the
+/// blocking pool like every other database read in this file.
 #[tauri::command]
-pub fn get_activity(desktop: State<'_, Arc<Desktop>>) -> Cmd<Activity> {
-    Ok(desktop.activity())
+pub async fn get_activity(desktop: State<'_, Arc<Desktop>>) -> Cmd<Activity> {
+    let desktop = Arc::clone(desktop.inner());
+    tauri::async_runtime::spawn_blocking(move || Ok(desktop.activity()))
+        .await
+        .map_err(|error| error.to_string())?
 }
 
 /// AppKit must be read on the UI thread; slow Linux desktop settings are read
