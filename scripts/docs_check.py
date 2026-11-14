@@ -108,7 +108,7 @@ def expand(entries: list[dict], root: Path) -> list[dict]:
             for path in sorted(root.glob(entry["glob"])):
                 copy = dict(entry)
                 copy.pop("glob", None)
-                copy["path"] = str(path.relative_to(root))
+                copy["path"] = path.relative_to(root).as_posix()
                 expanded.append(copy)
     return expanded
 
@@ -123,7 +123,7 @@ def all_markdown(root: Path) -> list[str]:
         relative = path.relative_to(root)
         if any(part in SKIP_DIRS for part in relative.parts):
             continue
-        found.append(str(relative))
+        found.append(relative.as_posix())
     return sorted(found)
 
 
@@ -181,7 +181,7 @@ def check_redirects(root: Path, redirects: dict[str, str]) -> list[str]:
     for file in (root / "docs" / "archive").rglob("*"):
         if not file.is_file() or file.name in {"README.md", "redirects.json", "successors.json"}:
             continue
-        relative = str(file.relative_to(root))
+        relative = file.relative_to(root).as_posix()
         if relative in exact or any(relative.startswith(prefix) for prefix in prefixes):
             continue
         errors.append(f"{relative}: archived file has no redirect mapping")
@@ -219,10 +219,10 @@ def check_links(root: Path, doc: Path, text: str, redirects: dict[str, str]) -> 
             continue
         destination = (doc.parent / path_part).resolve()
         try:
-            relative = destination.relative_to(root)
+            relative = destination.relative_to(root).as_posix()
         except ValueError:
-            relative = destination
-        relative_target = str(relative)
+            relative = destination.as_posix()
+        relative_target = relative
         if not destination.exists():
             mapped = resolve_redirect(relative_target, redirects)
             if mapped and (root / mapped).exists():
@@ -272,7 +272,7 @@ def check_successors(root: Path) -> list[str]:
     return errors
 
 
-def adr_errors(root: Path, entry: dict, text: str) -> list[str]:
+def adr_errors(root: Path, entry: dict, text: str, env: dict[str, str] | None = None) -> list[str]:
     errors: list[str] = []
     lines = text.splitlines()
     header = "\n".join(lines[:10])
@@ -288,7 +288,7 @@ def adr_errors(root: Path, entry: dict, text: str) -> list[str]:
     elif (root / ".git").exists():
         result = subprocess.run(
             ["git", "log", "--diff-filter=A", "--format=%cs", "--", entry["path"]],
-            cwd=root, text=True, capture_output=True,
+            cwd=root, text=True, capture_output=True, env=env,
         )
         first = result.stdout.strip().splitlines()
         if first and date.group(1).strip() != first[-1]:
@@ -627,7 +627,8 @@ def self_test() -> int:
             "# ADR-0001: Test\n\nStatus: accepted\nDate: 2026-11-14\nSupersedes: none\n\n## Context\n\n## Decision\n\n## Consequences\n",
             encoding="utf-8",
         )
-        if not adr_errors(root, {"path": str(adr.relative_to(root))}, adr.read_text()):
+        fixture_env = {key: value for key, value in os.environ.items() if not key.startswith("GIT_")}
+        if not adr_errors(root, {"path": str(adr.relative_to(root))}, adr.read_text(), fixture_env):
             print("docs-check self-test: an ADR without Sources was NOT caught", file=sys.stderr)
             return 1
 
@@ -635,13 +636,14 @@ def self_test() -> int:
         (root / "README.md").write_text("readme\n", encoding="utf-8")
         valid = "# ADR-0001: Test\n\nStatus: accepted\nDate: 2026-11-14\nSupersedes: none\n\n## Context\n\n## Decision\n\n## Consequences\n\n## Sources\n\n- `README.md`\n"
         adr.write_text(valid, encoding="utf-8")
-        subprocess.run(["git", "init", "-q"], cwd=root, check=True)
-        subprocess.run(["git", "config", "user.email", "docs@example.invalid"], cwd=root, check=True)
-        subprocess.run(["git", "config", "user.name", "docs"], cwd=root, check=True)
-        subprocess.run(["git", "add", "README.md", str(adr.relative_to(root))], cwd=root, check=True)
-        env = {**os.environ, "GIT_AUTHOR_DATE": "2026-09-25T12:00:00+0800", "GIT_COMMITTER_DATE": "2026-09-25T12:00:00+0800"}
+        fixture_env = {key: value for key, value in os.environ.items() if not key.startswith("GIT_")}
+        subprocess.run(["git", "init", "-q"], cwd=root, check=True, env=fixture_env)
+        subprocess.run(["git", "config", "user.email", "docs@example.invalid"], cwd=root, check=True, env=fixture_env)
+        subprocess.run(["git", "config", "user.name", "docs"], cwd=root, check=True, env=fixture_env)
+        subprocess.run(["git", "add", "README.md", str(adr.relative_to(root))], cwd=root, check=True, env=fixture_env)
+        env = {**fixture_env, "GIT_AUTHOR_DATE": "2026-09-25T12:00:00+0800", "GIT_COMMITTER_DATE": "2026-09-25T12:00:00+0800"}
         subprocess.run(["git", "commit", "-q", "-m", "adr"], cwd=root, env=env, check=True)
-        if not any("differs from first commit" in error for error in adr_errors(root, {"path": str(adr.relative_to(root))}, adr.read_text())):
+        if not any("differs from first commit" in error for error in adr_errors(root, {"path": str(adr.relative_to(root))}, adr.read_text(), fixture_env)):
             print("docs-check self-test: an ADR date mismatch was NOT caught", file=sys.stderr)
             return 1
 
@@ -649,11 +651,11 @@ def self_test() -> int:
         dated = valid.replace("Date: 2026-11-14", "Date: 2026-09-25")
         adr.write_text(dated, encoding="utf-8")
         adr.write_text(dated.replace("- `README.md`", ""), encoding="utf-8")
-        if not any("at least one" in error for error in adr_errors(root, {"path": str(adr.relative_to(root))}, adr.read_text())):
+        if not any("at least one" in error for error in adr_errors(root, {"path": str(adr.relative_to(root))}, adr.read_text(), fixture_env)):
             print("docs-check self-test: an empty Sources section was NOT caught", file=sys.stderr)
             return 1
         adr.write_text(dated.replace("- `README.md`", "- `src/sample.rs::missing`"), encoding="utf-8")
-        if not any("source" in error for error in adr_errors(root, {"path": str(adr.relative_to(root))}, adr.read_text())):
+        if not any("source" in error for error in adr_errors(root, {"path": str(adr.relative_to(root))}, adr.read_text(), fixture_env)):
             print("docs-check self-test: a broken path::symbol source was NOT caught", file=sys.stderr)
             return 1
 
