@@ -46,13 +46,20 @@
     {
       "name": "documentation check",
       "status": "pass",
-      "command": "python3 -B scripts/docs_check.py"
+      "command": "python3 -B scripts/docs_check.py",
+      "detail": "37 active, 0 pending, 0 warnings"
     },
     {
       "name": "documentation impact",
       "status": "pass",
       "command": "python3 -B scripts/docs_impact.py --base <base> --head HEAD",
       "detail": "self-test passes; the CI range check blocks on an affected document that did not change"
+    },
+    {
+      "name": "documentation parity",
+      "status": "pass",
+      "command": "python3 -B scripts/docs_parity.py --check",
+      "detail": "three READMEs have matching headings, fences, images and anchors"
     },
     {
       "name": "orchestration docs (legacy)",

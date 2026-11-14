@@ -15,8 +15,9 @@ as of `2026-11-14` · branch `dev` · verified code head `26d887f`
 | frontend tests | **pass** | `pnpm --dir ui test` | 86 passed |
 | command surface | **pass** | `python3 -B scripts/command_surface_test.py` | 90 interface commands, 254 registered |
 | documentation sources | **pass** | `python3 -B scripts/docs_sources.py --check` |  |
-| documentation check | **pass** | `python3 -B scripts/docs_check.py` |  |
+| documentation check | **pass** | `python3 -B scripts/docs_check.py` | 37 active, 0 pending, 0 warnings |
 | documentation impact | **pass** | `python3 -B scripts/docs_impact.py --base <base> --head HEAD` | self-test passes; the CI range check blocks on an affected document that did not change |
+| documentation parity | **pass** | `python3 -B scripts/docs_parity.py --check` | three READMEs have matching headings, fences, images and anchors |
 | orchestration docs (legacy) | **retired** | `scripts/orch_docs_test.py (not run)` | legacy node and evidence records are archived; validation retired |
 | UI budget | **pass** | `python3 -B scripts/ui_budget_test.py` | 734,994 B JS of 742,000 |
 | UI layout | **pass** | `python3 -B scripts/ui_layout_test.py` | 12 surfaces, 79 controls |
