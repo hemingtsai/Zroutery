@@ -1,10 +1,10 @@
 # Zroutery
 
-English | [简体中文](README.zh-CN.md)
+English | [简体中文](README.zh-CN.md) | [繁體中文](README.zh-TW.md)
 
 [![CI](https://github.com/hemingtsai/Zroutery/actions/workflows/ci.yml/badge.svg)](https://github.com/hemingtsai/Zroutery/actions/workflows/ci.yml)
 [![Packaging](https://github.com/hemingtsai/Zroutery/actions/workflows/packaging.yml/badge.svg)](https://github.com/hemingtsai/Zroutery/actions/workflows/packaging.yml)
-[![release](https://img.shields.io/badge/release-1.0.0--rc.1-blue)](https://github.com/hemingtsai/Zroutery/releases)
+[![release](https://img.shields.io/badge/release-1.0.0--rc.2-blue)](https://github.com/hemingtsai/Zroutery/releases)
 [![license](https://img.shields.io/badge/license-MIT-green)](https://github.com/hemingtsai/Zroutery)
 [![rust](https://img.shields.io/badge/rust-1.90-dea584)](https://github.com/hemingtsai/Zroutery)
 [![platform](https://img.shields.io/badge/platform-macOS%2011%2B%20%7C%20Windows-blue)](#platform-support)
@@ -21,7 +21,7 @@ Clients can speak Anthropic, OpenAI Chat, OpenAI Responses, or Gemini; Claude Co
 - **Model tiers**: models are grouped into fast / standard / reasoning / frontier; clients just request `standard-class`, and the model actually used is decided by your priority order, routing policy, and upstream health.
 - **Failover**: errors are classified to decide between retrying and switching models; repeated failures trip a per-model circuit breaker, and half-open probes detect recovery. Failover and breaker parameters are configurable.
 - **Budgets**: daily / monthly limits per total, provider, or tier; over-budget requests can be rejected or downgraded to a cheaper tier. Ledgers persist across restarts.
-- **Key security**: API keys are stored in the system credential store (macOS Keychain / Windows Credential Manager); the config file only holds a reference, never plaintext.
+- **Key security**: API keys are stored in the system credential store (macOS Keychain / Windows Credential Manager); the config file holds a reference, not the key. The one exception is a provider's `extra_headers`: that map is written into the config document, so never put a credential there.
 - **Privacy**: request and response bodies are never persisted; records contain metadata only, and upstream error bodies are truncated before being written.
 
 ## Quick start
@@ -96,17 +96,18 @@ export OPENAI_API_KEY=<paste token>
 
 | Content | Location | Notes |
 | --- | --- | --- |
-| Configuration | `config.json`: macOS at `~/Library/Application Support/app.zroutery.desktop/`, Windows at `%APPDATA%\app.zroutery.desktop\`; override with `ZROUTERY_CONFIG_DIR` | No secrets; if the file is corrupted, back it up and restart with defaults |
+| Configuration | `config.json`: macOS at `~/Library/Application Support/app.zroutery.desktop/`, Windows at `%APPDATA%\app.zroutery.desktop\`; override with `ZROUTERY_CONFIG_DIR` | No provider key; the local gateway token and any `extra_headers` you add are stored here. If the file is corrupted, back it up and restart with defaults |
 | API keys | System credential store (macOS Keychain / Windows Credential Manager) | Only `key_ref` appears in the config |
 | Budget ledger | `spend.json` in the config directory | Written periodically and on exit |
-| Learning traces | `ml/traces.jsonl` in the config directory | Appended only after shadow mode is enabled |
+| Runtime store | `runtime.sqlite3` in the config directory, or `ZROUTERY_RUNTIME_DB` | Usage history, imported history and accounting facts |
+| Learning traces | `ml/traces.jsonl` in the config directory | Appended only while shadow evaluation or a promoted model is active; cleared explicitly |
 | Request records, health, latency stats, Responses sessions | In memory | Bounded; cleared on restart |
 
 ## Platform support
 
 - **macOS 11+**: ships `.app` and `.dmg`; menu bar resident; launch-at-login via LaunchAgent. Ad-hoc signing, no notarization.
 - **Windows**: ships `.msi` and NSIS installers; CI installs, reinstalls, and uninstalls them nightly to verify the installers.
-- **Linux**: not supported yet. The credential-store dependency is not built on Linux, and there is no packaging target.
+- **Linux**: not a supported release target. There is no Linux packaging target; the credential-store dependency for Linux is compiled in `src-tauri/Cargo.toml`, so a source build may run, but it is not tested or shipped.
 - **Upstream**: Anthropic and OpenAI-compatible only for now; Gemini and Responses are client-entry protocols only, not upstreams yet.
 
 ## Statistics
@@ -134,7 +135,7 @@ cargo clippy --workspace --all-features --all-targets -- -D warnings
 cargo fmt --all -- --check
 ```
 
-Code layout: `crates/zroutery-core` is the engine, with no GUI dependency; `src-tauri` is the desktop shell (tray, credential store, CC Switch import); `crates/zroutery-headless` is the headless proxy, with `--elect`, `--balances`, and `--experiment` subcommands; `ui/` is the React dashboard (English and Chinese); `scripts/` holds the verification scripts.
+Code layout: `crates/zroutery-core` is the engine, with no GUI dependency; `src-tauri` is the desktop shell (tray, credential store, CC Switch import); `crates/zroutery-headless` is the headless proxy, with `--elect`, `--balances`, and `--experiment` subcommands; `ui/` is the React dashboard (English, Simplified Chinese and Traditional Chinese); `scripts/` holds the verification scripts.
 
 Commit messages follow Conventional Commits and are validated by CI. Architecture decisions and stage records live in `docs/development/`; read `CONTRIBUTING.md` and `AGENTS.md` before making changes.
 

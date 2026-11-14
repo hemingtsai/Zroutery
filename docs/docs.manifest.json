@@ -281,6 +281,30 @@
       "owner": "backend",
       "summary": "Local usage, routing traces and imported history: identity, privacy and retention.",
       "max_lines": 250
+    },
+    {
+      "path": "README.zh-TW.md",
+      "title": "Zroutery (Traditional Chinese)",
+      "type": "guide",
+      "authority": "guide",
+      "audience": [
+        "user"
+      ],
+      "status": "active",
+      "owner": "docs",
+      "summary": "Traditional Chinese mirror of README.md."
+    },
+    {
+      "path": "docs/development/runbook.md",
+      "title": "Runbook",
+      "type": "guide",
+      "authority": "guide",
+      "audience": [
+        "human"
+      ],
+      "status": "active",
+      "owner": "docs",
+      "summary": "Start, stop, diagnose, release and roll back Zroutery."
     }
   ],
   "pending": [],

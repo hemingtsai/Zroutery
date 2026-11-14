@@ -1,10 +1,10 @@
 # Zroutery
 
-[English](README.md) | 简体中文
+[English](README.md) | 简体中文 | [繁體中文](README.zh-TW.md)
 
 [![CI](https://github.com/hemingtsai/Zroutery/actions/workflows/ci.yml/badge.svg)](https://github.com/hemingtsai/Zroutery/actions/workflows/ci.yml)
 [![Packaging](https://github.com/hemingtsai/Zroutery/actions/workflows/packaging.yml/badge.svg)](https://github.com/hemingtsai/Zroutery/actions/workflows/packaging.yml)
-[![release](https://img.shields.io/badge/release-1.0.0--rc.1-blue)](https://github.com/hemingtsai/Zroutery/releases)
+[![release](https://img.shields.io/badge/release-1.0.0--rc.2-blue)](https://github.com/hemingtsai/Zroutery/releases)
 [![license](https://img.shields.io/badge/license-MIT-green)](https://github.com/hemingtsai/Zroutery)
 [![rust](https://img.shields.io/badge/rust-1.90-dea584)](https://github.com/hemingtsai/Zroutery)
 [![platform](https://img.shields.io/badge/platform-macOS%2011%2B%20%7C%20Windows-blue)](#平台支持)
@@ -21,7 +21,7 @@ Zroutery 是一个本地 LLM 网关：把多家模型供应商接到同一个本
 - **模型分档**：模型分为 fast / standard / reasoning / frontier 四档，客户端只写 `standard-class`，由优先级、路由策略和上游健康状态决定实际使用的模型。
 - **失败转移**：按错误类型决定重试或切换模型；模型连续失败触发熔断，熔断期间通过半开探针探测恢复，失败转移次数和熔断参数均可配置。
 - **预算控制**：按总量、供应商或档位设置日 / 月上限，超限后可拒绝请求或自动降级到更便宜的档位；账本落盘，重启不丢。
-- **密钥安全**：API key 存入系统凭据库（macOS 钥匙串 / Windows 凭据管理器），配置文件只保存引用，不出现明文。
+- **密钥安全**：API key 存入系统凭据库（macOS 钥匙串 / Windows 凭据管理器），配置文件只保存引用，不出现密钥本身。唯一例外是供应商的 `extra_headers`：该映射会写进配置文件，不要把凭据放在那里。
 - **隐私**：请求和回复正文不落盘，请求记录只保存元数据，上游错误正文写入前截断。
 
 ## 快速开始
@@ -96,17 +96,18 @@ export OPENAI_API_KEY=<粘贴 token>
 
 | 内容 | 位置 | 说明 |
 | --- | --- | --- |
-| 配置 | `config.json`：macOS 在 `~/Library/Application Support/app.zroutery.desktop/`，Windows 在 `%APPDATA%\app.zroutery.desktop\`，可用 `ZROUTERY_CONFIG_DIR` 覆盖 | 不含密钥；文件损坏时先备份一份，再用默认值启动 |
+| 配置 | `config.json`：macOS 在 `~/Library/Application Support/app.zroutery.desktop/`，Windows 在 `%APPDATA%\app.zroutery.desktop\`，可用 `ZROUTERY_CONFIG_DIR` 覆盖 | 不含供应商密钥；本地网关 token 和自定义 `extra_headers` 会存在这里。文件损坏时先备份一份，再用默认值启动 |
 | API key | 系统凭据库（macOS 钥匙串 / Windows 凭据管理器） | 配置里只有 `key_ref` |
 | 预算账本 | 配置目录下的 `spend.json` | 定时和退出时写盘 |
-| 学习轨迹 | 配置目录下的 `ml/traces.jsonl` | 开启影子模式后才追加 |
+| 运行时库 | 配置目录下的 `runtime.sqlite3`，或 `ZROUTERY_RUNTIME_DB` | 用量历史、导入历史和记账事实 |
+| 学习轨迹 | 配置目录下的 `ml/traces.jsonl` | 仅在影子评估或已提升模型运行时追加；由操作者显式清空 |
 | 请求记录、健康、延迟统计、Responses 会话 | 内存 | 有上限，重启清空 |
 
 ## 平台支持
 
 - **macOS 11+**：提供 `.app` 和 `.dmg`；常驻菜单栏；开机启动通过 LaunchAgent 实现。签名是 ad-hoc，没有公证。
 - **Windows**：提供 `.msi` 和 NSIS 安装器；CI 每晚会实际安装、重装、卸载一次安装器来验证。
-- **Linux**：暂不支持。凭据库的依赖在 Linux 上不参与构建，也没有对应的打包配置。
+- **Linux**：不是支持的发布目标。没有 Linux 打包配置；`src-tauri/Cargo.toml` 中确实包含 Linux 凭据库依赖，因此源码构建或许能运行，但未经验证、也不随版本发布。
 - **上游**：目前只有 Anthropic 和 OpenAI 兼容两种类型；Gemini 和 Responses 只能作为客户端入口协议，还不能作为上游。
 
 ## 统计
@@ -134,7 +135,7 @@ cargo clippy --workspace --all-features --all-targets -- -D warnings
 cargo fmt --all -- --check
 ```
 
-代码结构：`crates/zroutery-core` 是引擎，不依赖 GUI；`src-tauri` 是桌面外壳（托盘、凭据库、CC Switch 导入）；`crates/zroutery-headless` 是无界面代理，带 `--elect`、`--balances`、`--experiment` 子命令；`ui/` 是 React 仪表盘，中英双语；`scripts/` 存放验证脚本。
+代码结构：`crates/zroutery-core` 是引擎，不依赖 GUI；`src-tauri` 是桌面外壳（托盘、凭据库、CC Switch 导入）；`crates/zroutery-headless` 是无界面代理，带 `--elect`、`--balances`、`--experiment` 子命令；`ui/` 是 React 仪表盘，支持英文、简体中文、繁体中文；`scripts/` 存放验证脚本。
 
 提交信息按 Conventional Commits 书写，CI 会逐条检查。架构决策和各阶段的记录在 `docs/development/`；改代码前先看 `CONTRIBUTING.md` 和 `AGENTS.md`。
 

@@ -46,6 +46,8 @@ This file is generated from `docs/docs.manifest.json`. Do not edit it.
 | [docs/development/reference/providers.md](development/reference/providers.md) | reference | reference | backend | Provider kinds, NewAPI panels, OpenCode Zen shaping and the CC Switch import. |
 | [docs/development/reference/ui-design-system.md](development/reference/ui-design-system.md) | reference | reference | frontend | Tokens, skins, shell primitives, languages and the frontend gates. |
 | [docs/development/reference/routing-data.md](development/reference/routing-data.md) | reference | reference | backend | Local usage, routing traces and imported history: identity, privacy and retention. |
+| [README.zh-TW.md](../README.zh-TW.md) | guide | guide | docs | Traditional Chinese mirror of README.md. |
+| [docs/development/runbook.md](development/runbook.md) | guide | guide | docs | Start, stop, diagnose, release and roll back Zroutery. |
 
 ## Pending migration
 
@@ -64,7 +66,7 @@ Audits, findings, triage and risk discussions live in GitHub Issues. Use the `au
 
 ## Health
 
-- active documents: 27
+- active documents: 29
 - pending migration: 0
 - source anchors are checked by `scripts/docs_sources.py`
 - links, sizes and freshness are checked by `scripts/docs_check.py`
