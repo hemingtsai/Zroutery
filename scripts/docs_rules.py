@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import re
 import sys
 import tempfile
@@ -33,10 +34,19 @@ def page_rows(root: Path) -> dict[str, tuple[str, str, str]]:
     return rows
 
 
+def hook_is_executable(hook: Path) -> bool:
+    # Windows carries no execute bit on disk, and git runs hooks through its
+    # own shell there regardless of one. Presence is the honest check on that
+    # platform; the disk bits stay authoritative everywhere else.
+    if os.name == "nt":
+        return hook.is_file()
+    return bool(hook.stat().st_mode & 0o111)
+
+
 def files_errors(root: Path) -> list[str]:
     errors = []
     hook = root / ".githooks" / "pre-commit"
-    if not hook.is_file() or not (hook.stat().st_mode & 0o111):
+    if not hook.is_file() or not hook_is_executable(hook):
         errors.append("pre-commit hook is missing or not executable")
     else:
         text = hook.read_text(encoding="utf-8")

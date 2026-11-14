@@ -136,6 +136,11 @@ Consequences, stated rather than discovered:
   must require the `contracts` job (its documentation step is named
   `Documentation contracts`); a required status check keys on the job, not on a
   step name. `--no-range` is for local diagnosis only, never for CI.
+- Every validator that compares document and ledger paths joins them
+  POSIX-style, so the same key matches on every platform
+  (`scripts/docs_sources.py::reverse_index`,
+  `scripts/docs_verified.py::expected`, `scripts/docs_check.py::check_redirects`,
+  `scripts/coverage_check.py::validate`).
 - `markdown_check.py` enforces fenced-code closure and table structure without
   a third-party parser.
 - `docs_sources.py --check` resolves every `path::symbol` and `path#Lx` anchor in
@@ -187,6 +192,10 @@ Consequences, stated rather than discovered:
   a reviewer equal to the last author fails.
 - `docs_rules.py` checks that every `docs/rules.json` machine rule names an
   executed `docs_contracts.py` step, and that every gated step is registered.
+  The pre-commit hook counts as executable through its committed disk bits on
+  POSIX and through its presence on Windows, where git runs hooks through its
+  own shell regardless of a mode bit
+  (`scripts/docs_rules.py::hook_is_executable`).
 - `record_state.py` runs `docs_contracts.py --json` and writes the documentation
   gate status, `ran_at` and commit into `state.json`; it also derives `head`
   from the latest code commit and `as_of` from today. `state_check.py` rejects

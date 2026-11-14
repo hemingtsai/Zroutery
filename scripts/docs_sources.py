@@ -232,9 +232,9 @@ def reverse_index(root: Path) -> dict[str, list[str]]:
         except OSError:
             continue
         try:
-            relative = str(doc.relative_to(root))
+            relative = doc.relative_to(root).as_posix()
         except ValueError:
-            relative = str(doc)
+            relative = doc.as_posix()
         seen = set()
         for path, _symbol, _start, _end, _line in citations(text):
             if path in seen:
