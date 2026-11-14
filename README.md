@@ -64,6 +64,24 @@ In headless mode, keys are read from environment variables, e.g. `ZROUTERY_KEY_P
 
    ![Routing](docs/images/routing.png)
 
+## Accounts and check-in
+
+An account is a declaration on a provider: its panel token, an optional inference-key pool, and maintenance options. The Providers drawer edits the declaration; the **Accounts** page shows the runtime face — the last probe, the check-in phase, and why the scheduler did or did not act. Probing is manual and covers the enabled accounts. Requests do not route by account: the serving path resolves one credential per provider.
+
+Check-in has two paths. **HTTP check-in** uses the panel's own API with the stored credential, with no browser. **Browser check-in** opens a headed browser with a per-account profile and reports its phase; it is the path for panels whose check-in is not a plain API call. **Token capture** mints a durable panel token when the panel does not expose one, stores it in the credential store and points the account at it; the capture view has no token field.
+
+## NewAPI panels
+
+A NewAPI provider can expose its panel from the provider details: announcements, group pricing, and an account selector. Reading the panel never changes routing prices; saving a price is a separate model edit. An unreachable panel is reported as a panel error, not as a routing failure.
+
+## Cutover
+
+Cutover moves an external client's configuration onto this gateway as a typed plan. Preview the plan and its fingerprint, apply it, and roll back to the captured snapshot if a step fails. The snapshot is written before the file is replaced, so an interrupted run is recoverable. A failed cutover with no snapshot offers no rollback.
+
+## Takeover
+
+Takeover writes only the managed gateway fields into a client's own configuration, records what it replaced, and restores those values on release. **Ready** shows a field-level diff; **conflict** asks which side wins; **degraded** explains what is not yet proven; **release** is the destructive step and asks for confirmation. Unlike cutover, takeover manages fields rather than replacing the whole file.
+
 ## Connecting clients
 
 The gateway listens on `http://127.0.0.1:8787` by default; the port and bind address are configurable. Each protocol has its own endpoint:
@@ -141,7 +159,7 @@ Commit messages follow Conventional Commits and are validated by CI. Architectur
 
 ## License
 
-MIT (see the `license` field in `Cargo.toml`).
+MIT (see [LICENSE](LICENSE) and the `license` field in `Cargo.toml`).
 
 ## Fact sources
 
