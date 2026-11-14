@@ -184,6 +184,8 @@ def check_active(root: Path, entry: dict, verified: dict, redirects: dict[str, s
         anchors = len(docs_sources.citations(text))
         if anchors == 0 and type_ in BANNER_TYPES | {"reference"}:
             warnings.append(f"{entry['path']}: no source anchors yet (migration warning)")
+        if type_ == "guide" and anchors == 0:
+            errors.append(f"{entry['path']}: a guide must cite at least one source anchor")
         record = verified.get(entry["path"])
         if anchors and not record:
             errors.append(f"{entry['path']}: cites sources but has no docs/verified.json entry")

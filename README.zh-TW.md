@@ -142,3 +142,13 @@ cargo fmt --all -- --check
 ## 授權
 
 MIT（見 `Cargo.toml` 的 `license`）。
+
+## 事實來源
+
+- Rust 最低版本與 Node/pnpm 固定版本：`Cargo.toml::rust-version`、`package.json::packageManager`、`.github/workflows/ci.yml::setup-node`。
+- 預設監聽位址、連接埠與請求本文上限：`crates/zroutery-core/src/config/server.rs::ServerConfig`。
+- HTTP 路由：`crates/zroutery-core/src/server/handlers.rs::build_app`。
+- 打包目標：`src-tauri/tauri.conf.json::bundle`。
+- 設定檔與閘道 token：`src-tauri/src/store.rs::FILE_NAME`、`src-tauri/src/store.rs::generate_token`。
+- Linux 憑證相依：`src-tauri/Cargo.toml::keyring`。
+- 資料位置：`src-tauri/src/platform.rs::default_config_dir`、`crates/zroutery-core/src/runtime_store.rs::RuntimeStore`。

@@ -103,3 +103,13 @@ gate you did not run. A development build is not an authorized deployment.
 - [Current state](current-state.md)
 - [Architecture](architecture.md)
 - [Documentation standard](../DOCUMENTATION.md)
+
+## Fact sources
+
+- Start commands: `package.json::scripts`.
+- Config directory: `src-tauri/src/platform.rs::default_config_dir`.
+- Gateway token generation: `src-tauri/src/store.rs::generate_token`.
+- Bundle targets and signing: `src-tauri/tauri.conf.json::bundle`.
+- Learned-model rollback: `crates/zroutery-core/src/server/ml_state.rs::rollback_active_model`.
+- Migration state and rollback: `crates/zroutery-core/src/migration/state.rs::MigrationState`.
+- Takeover release state: `crates/zroutery-core/src/agent_takeover/ownership.rs::OwnershipState`.

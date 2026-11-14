@@ -142,3 +142,13 @@ Commit messages follow Conventional Commits and are validated by CI. Architectur
 ## License
 
 MIT (see the `license` field in `Cargo.toml`).
+
+## Fact sources
+
+- Rust minimum and Node/pnpm pins: `Cargo.toml::rust-version`, `package.json::packageManager`, `.github/workflows/ci.yml::setup-node`.
+- Default bind address, port and body limit: `crates/zroutery-core/src/config/server.rs::ServerConfig`.
+- HTTP routes: `crates/zroutery-core/src/server/handlers.rs::build_app`.
+- Bundle targets: `src-tauri/tauri.conf.json::bundle`.
+- Config file and gateway token: `src-tauri/src/store.rs::FILE_NAME`, `src-tauri/src/store.rs::generate_token`.
+- Linux credential dependency: `src-tauri/Cargo.toml::keyring`.
+- Data locations: `src-tauri/src/platform.rs::default_config_dir`, `crates/zroutery-core/src/runtime_store.rs::RuntimeStore`.
