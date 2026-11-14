@@ -66,6 +66,7 @@ Supersedes: none
 ## Sources
 ```
 
+Create the file with `python3 -B scripts/new_adr.py --title "..."`.
 `Status` is `accepted`, `proposed`, or `superseded by ADR-XXXX`. `Date` is the
 date the decision was made, not the date the file was last edited; `docs_check.py`
 compares it with the first commit's committer date (`%cs`). `Supersedes` is `none` or

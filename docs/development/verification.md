@@ -153,6 +153,8 @@ Consequences, stated rather than discovered:
   or an explicit `untested` reason.
 - `current_state.py --check` fails when `current-state.md` is not the render of
   `state.json`; hand edits are not a source.
+- `new_adr.py` creates the next ADR skeleton with the enforced header and
+  sections; it is a generator, not a gate.
 - `docs_rules.py` checks that every `docs/rules.json` machine rule names an
   executed `docs_contracts.py` step, and that every gated step is registered.
 - `record_state.py` runs `docs_contracts.py --json` and writes the documentation

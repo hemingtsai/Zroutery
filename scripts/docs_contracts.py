@@ -127,6 +127,7 @@ def main(argv: list[str] | None = None) -> int:
         return 1 if failed else 0
     if failed:
         print("docs-contracts: FAILED", file=sys.stderr)
+        print("fix: update the affected document or trigger, then re-run the same command", file=sys.stderr)
         return 1
     print("docs-contracts: all documentation contracts passed", flush=True)
     return 0
