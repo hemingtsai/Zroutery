@@ -51,10 +51,6 @@ These documents are still in the legacy shape. Each is either archived or rewrit
 
 | Document |
 |---|
-| [docs/development/cc-switch-design-notes.md](development/cc-switch-design-notes.md) |
-| [docs/development/codex-auto-rectifier.md](development/codex-auto-rectifier.md) |
-| [docs/development/newapi-adapter.md](development/newapi-adapter.md) |
-| [docs/development/opencode-zen.md](development/opencode-zen.md) |
 | [docs/development/routing-data-collection-guide.md](development/routing-data-collection-guide.md) |
 | [docs/development/skin-spec-md3-fluent.md](development/skin-spec-md3-fluent.md) |
 
@@ -69,6 +65,6 @@ Audits, findings, triage and risk discussions live in GitHub Issues. Use the `au
 ## Health
 
 - active documents: 25
-- pending migration: 6
+- pending migration: 2
 - source anchors are checked by `scripts/docs_sources.py`
 - links, sizes and freshness are checked by `scripts/docs_check.py`

@@ -256,10 +256,6 @@
     }
   ],
   "pending": [
-    "docs/development/cc-switch-design-notes.md",
-    "docs/development/codex-auto-rectifier.md",
-    "docs/development/newapi-adapter.md",
-    "docs/development/opencode-zen.md",
     "docs/development/routing-data-collection-guide.md",
     "docs/development/skin-spec-md3-fluent.md"
   ],

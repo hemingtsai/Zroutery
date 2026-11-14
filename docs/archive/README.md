@@ -46,6 +46,10 @@ discussed in GitHub Issues, not here.
 | `docs/development/dependency-dag.md` | `history/dependency-dag.md` | C | `current-state.md` |
 | `docs/development/evidence-registry.md` | `history/evidence-registry.md` | D | PRs, tests, Issues |
 | `docs/development/upgrade-contracts.md` | `history/upgrade-contracts.md` | B | `architecture.md`, `verification.md` |
+| `docs/development/cc-switch-design-notes.md` | `records/cc-switch-design-notes.md` | B | `reference/providers.md` |
+| `docs/development/newapi-adapter.md` | `records/newapi-adapter.md` | B | `reference/providers.md` |
+| `docs/development/opencode-zen.md` | `records/opencode-zen.md` | B | `reference/providers.md` |
+| `docs/development/codex-auto-rectifier.md` | `records/codex-auto-rectifier.md` | B | `reference/providers.md` |
 | `docs/development/node-status/` (84 JSON) | `records/node-status/` | D | `current-state.md`, Issues |
 
 ## Rules
