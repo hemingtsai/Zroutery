@@ -26,8 +26,8 @@
       "crates/zroutery-core/src/ml/comparison.rs": "sha256:b3abbe156b28e333cfa698f0c8a7c0f751b9a2d017171d08631fb420759f7aad",
       "crates/zroutery-core/src/ml/promotion.rs": "sha256:d58a9817e2d023d4600a0a5a99bca65052af2bf8af359d5c496ae0e61cd3ca70",
       "crates/zroutery-core/src/ml/round.rs": "sha256:38de166a61a8401a60b982798e8a0c657accdaa17efc6e59e44dfc8a81c8ae7d",
-      "crates/zroutery-core/src/ml/serving.rs": "sha256:9008f56040087752e0363455df1c2ad59a2711d6772ad44dfcc0854c3f49a4a6",
-      "crates/zroutery-core/src/ml/shadow.rs": "sha256:b0f97690176a05f46c02a9634555aa0bbc4c9199909a5f1a15daa041a1682f8c",
+      "crates/zroutery-core/src/ml/serving/router.rs": "sha256:11de94adb75b1623ceccb9efea483deed6b3381cf9497920c68f8b94ba300b16",
+      "crates/zroutery-core/src/ml/shadow/engine.rs": "sha256:0c62408f1e1f79ca4e9bf921c58673a58b2ef04d6ae57e45a82cf25eff0efb7f",
       "crates/zroutery-core/src/ml/traces.rs": "sha256:b98f7bdf9ba3b02f11c8db5b5ea18b93f6112d374f18256652e3483ba9c54f97",
       "crates/zroutery-core/src/server/handlers.rs": "sha256:fab479470870597d7be4b37a27948754140d49963d8ccf0d089b5dc514b27681",
       "crates/zroutery-core/src/server/ml_state.rs": "sha256:3b7a4a6e92058113ad7031fa747ff5fc563cc677066173c792476441fc0fa0bf",
@@ -38,15 +38,15 @@
     ],
     "note": "The reference states the mechanism and the gate defaults; production benefit is not claimed, and current status stays in current-state.md.",
     "reviewed_commit": "ad22f8d2894d81e601ec966d797e9fc87081365f",
-    "reviewed_by": "verifier-agent",
+    "reviewed_by": "split-reviewer",
     "reviewed_at": "2026-11-14",
     "sample": [
       "(`crates/zroutery-core/src/ml/promotion.rs::PromotionGate::evaluate`).",
       "without `ml` registers the same routes, but they are inert stubs",
       "`crates/zroutery-core/src/ml/round.rs::run_promotion_round`"
     ],
-    "reviewed_sha": "sha256:5b720f8dec41defac1def927ef026dcac500d9ff741a317f7c68ced82bd88a89",
-    "reviewed_note": "model=deepseek-flash; session=v-20261114-g"
+    "reviewed_sha": "sha256:078f754d0b5f6bce7135e0f108330ad72038b481100235ce34ff2918f7cd33e8",
+    "reviewed_note": "model=lightvela-auto; session=ses_e25b54d7effe96vNI19LhIxHRa"
   },
   "docs/development/reference/accounting.md": {
     "verified_at": "2026-11-14",
@@ -146,7 +146,7 @@
       "crates/zroutery-core/src/ir/mod.rs": "sha256:8ce5ac6f85259c3c2265ebdf1f91e306857b9d053b14317e487b4b4f1c85ab0a",
       "crates/zroutery-core/src/ir/response.rs": "sha256:7ac5f7357144a078fae3bff1ad6f5f86c5947381699a9cf40c7c43ecb8dd6068",
       "crates/zroutery-core/src/migration/state.rs": "sha256:3d683b8a4f97f62fdb00b20843dc6012b33ee34ac4bef445b3265d7d43308728",
-      "crates/zroutery-core/src/ml/serving.rs": "sha256:9008f56040087752e0363455df1c2ad59a2711d6772ad44dfcc0854c3f49a4a6",
+      "crates/zroutery-core/src/ml/serving/router.rs": "sha256:11de94adb75b1623ceccb9efea483deed6b3381cf9497920c68f8b94ba300b16",
       "crates/zroutery-core/src/ml/traces.rs": "sha256:b98f7bdf9ba3b02f11c8db5b5ea18b93f6112d374f18256652e3483ba9c54f97",
       "crates/zroutery-core/src/policy/policy.rs": "sha256:5097f2bba8f402aa00dc518744fc7825efd9831be8068394cea4348ef51505c1",
       "crates/zroutery-core/src/protocol/mod.rs": "sha256:0ab249c5fa67cb585299d26c5412c1b3fbd52cb2a092214160819d24ae40a991",
@@ -185,15 +185,15 @@
     ],
     "note": "Every invariant is cited to the symbol that implements or tests it; the 3,478-test workspace run was the behavioural check.",
     "reviewed_commit": "ad22f8d2894d81e601ec966d797e9fc87081365f",
-    "reviewed_by": "verifier-agent",
+    "reviewed_by": "split-reviewer",
     "reviewed_at": "2026-11-14",
     "sample": [
       "`crates/zroutery-core/src/budget.rs::Ledger`,",
       "against the frontend contract by `scripts/command_surface_test.py`.",
       "early exit; `/health` is the only unauthenticated route"
     ],
-    "reviewed_sha": "sha256:cabca78834eb0455bbdb17701883fb9d16d657b3393caa499ef13813e04e86ac",
-    "reviewed_note": "model=deepseek-flash; session=v-20261114-d"
+    "reviewed_sha": "sha256:610f513b7cc568343f9349484a1e116cc6d3b6726f6f0bd34c841acfd9911712",
+    "reviewed_note": "model=lightvela-auto; session=ses_e25b54d7effe96vNI19LhIxHRa"
   },
   "CONTRIBUTING.md": {
     "verified_at": "2026-11-14",

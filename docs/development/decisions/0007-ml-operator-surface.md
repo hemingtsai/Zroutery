@@ -175,6 +175,6 @@ everything else, and the tests assert the 401.
 
 ## Sources
 
-- `crates/zroutery-core/src/ml/serving.rs`
+- `crates/zroutery-core/src/ml/serving/router.rs`
 - `ui/src/pages/routing/ml/`
 - `docs/development/reference/ml-routing.md`

@@ -941,7 +941,13 @@ fn a_contained_ingestion_never_raises_and_never_throws_away_its_reason() {
 /// spend surface, and it can only be fed, never read for a decision.
 #[test]
 fn the_dataset_module_references_no_mutation_surface() {
-    let source = include_str!("../src/ml/dataset.rs");
+    let source = concat!(
+        include_str!("../src/ml/dataset/mod.rs"),
+        include_str!("../src/ml/dataset/conversion.rs"),
+        include_str!("../src/ml/dataset/sample.rs"),
+        include_str!("../src/ml/dataset/store.rs"),
+        include_str!("../src/ml/dataset/validation.rs"),
+    );
     for forbidden in [
         "plan_with_policy",
         "plan_classifier",

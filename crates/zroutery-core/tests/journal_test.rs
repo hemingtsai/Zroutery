@@ -1353,7 +1353,16 @@ fn nothing_in_the_running_product_can_reach_this_journal() {
             "src/ml/coordinator.rs",
             include_str!("../src/ml/coordinator.rs"),
         ),
-        ("src/ml/dataset.rs", include_str!("../src/ml/dataset.rs")),
+        (
+            "src/ml/dataset/mod.rs",
+            concat!(
+                include_str!("../src/ml/dataset/mod.rs"),
+                include_str!("../src/ml/dataset/conversion.rs"),
+                include_str!("../src/ml/dataset/sample.rs"),
+                include_str!("../src/ml/dataset/store.rs"),
+                include_str!("../src/ml/dataset/validation.rs"),
+            ),
+        ),
     ]
     .into_iter()
     .chain(POLICY_SOURCES.iter().copied())

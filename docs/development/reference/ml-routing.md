@@ -22,14 +22,14 @@ decision-time snapshot
 The model re-orders a plan the router already produced. It never derives
 eligibility, adds a candidate, or bypasses the circuit breaker
 (`crates/zroutery-core/src/server/pipeline/ml_rank.rs::apply_ml_ranking`,
-`crates/zroutery-core/src/ml/serving.rs::MlRouter::rank`).
+`crates/zroutery-core/src/ml/serving/router.rs::MlRouter::rank`).
 
 ## Invariants
 
 1. **ML cannot widen eligibility.** The ranking input carries the eligible flag;
    a rejected candidate stays rejected. `rank` predicts for every candidate so
    the engine's own filter excludes it, rather than this layer deciding
-   eligibility on the side (`crates/zroutery-core/src/ml/serving.rs::MlRouter::rank`).
+   eligibility on the side (`crates/zroutery-core/src/ml/serving/router.rs::MlRouter::rank`).
 2. **Promotion is explicit.** A round returns a verdict and installs nothing;
    installing is a separate call that defaults to false. There is no timer and
    no path that promotes because a score looked good
@@ -44,10 +44,10 @@ eligibility, adds a candidate, or bypasses the circuit breaker
    `crates/zroutery-core/src/server/ml_state.rs::rollback_active_model`).
 5. **Shadow is non-authoritative.** A shadow record reports an alternative; it
    does not mutate routing, session, account or budget state
-   (`crates/zroutery-core/src/ml/shadow.rs::ShadowEngine::evaluate`).
+   (`crates/zroutery-core/src/ml/shadow/engine.rs::ShadowEngine::evaluate`).
 6. **No model means the production plan.** No attached model, no candidates, or a
    non-finite prediction falls back to the router's order; the fallback is
-   counted (`crates/zroutery-core/src/ml/serving.rs::MlRouter::rank`).
+   counted (`crates/zroutery-core/src/ml/serving/router.rs::MlRouter::rank`).
 7. **Traces are evidence, not a second truth.** The durable log is appended after
    settlement and can be read or cleared by the operator; clearing is explicit
    because the next round trains from the whole log
@@ -91,7 +91,7 @@ configuration identity, so a decision can be re-derived rather than trusted
 
 | Symptom | Cause | Handling |
 |---|---|---|
-| no model is attached | nothing promoted | deterministic routing (`crates/zroutery-core/src/ml/serving.rs::MlRouter`) |
+| no model is attached | nothing promoted | deterministic routing (`crates/zroutery-core/src/ml/serving/router.rs::MlRouter`) |
 | no candidate is eligible | the plan is empty | refuse; never invent a fallback |
 | rollback is needed | a promoted model misbehaves | rollback the pointer (`crates/zroutery-core/src/server/ml_state.rs::rollback_active_model`) |
 
@@ -106,9 +106,9 @@ configuration identity, so a decision can be re-derived rather than trusted
 
 ## Sources
 
-- `crates/zroutery-core/src/ml/serving.rs::MlRouter`
-- `crates/zroutery-core/src/ml/serving.rs::MlRouter::rank`
-- `crates/zroutery-core/src/ml/shadow.rs::ShadowEngine::evaluate`
+- `crates/zroutery-core/src/ml/serving/router.rs::MlRouter`
+- `crates/zroutery-core/src/ml/serving/router.rs::MlRouter::rank`
+- `crates/zroutery-core/src/ml/shadow/engine.rs::ShadowEngine::evaluate`
 - `crates/zroutery-core/src/ml/traces.rs::TraceLog`
 - `crates/zroutery-core/src/ml/traces.rs::RequestTrace`
 - `crates/zroutery-core/src/ml/comparison.rs::run_comparison`

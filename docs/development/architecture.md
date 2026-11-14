@@ -176,7 +176,7 @@ compiled but not requested stays inert.
 
 - **ML routing** (`ml`). The learned model ranks an already-eligible plan; it
   cannot widen eligibility. A promoted model is attached in-process and can be
-  rolled back (`crates/zroutery-core/src/ml/serving.rs::MlRouter`). Durable
+  rolled back (`crates/zroutery-core/src/ml/serving/router.rs::MlRouter`). Durable
   traces are an evidence log, not a second source of truth
   (`crates/zroutery-core/src/ml/traces.rs::TraceLog`).
 - **Accounts** (`account`, `newapi`). Panel declarations and runtime observations

@@ -1245,13 +1245,16 @@ fn all_shadow_blocks() -> Vec<(&'static str, &'static str)> {
 /// the remaining textual surface honest.
 #[test]
 fn shadow_modules_reference_no_mutation_surface() {
-    let shadow_src = include_str!("../src/ml/shadow.rs");
+    let shadow_src = concat!(
+        include_str!("../src/ml/shadow/mod.rs"),
+        include_str!("../src/ml/shadow/engine.rs"),
+        include_str!("../src/ml/shadow/predictor.rs"),
+        include_str!("../src/ml/shadow/records.rs"),
+        include_str!("../src/ml/shadow/store.rs"),
+    );
     let engine_src = include_str!("../src/ml/decision_engine.rs");
 
-    for (name, src) in [
-        ("shadow.rs", shadow_src),
-        ("decision_engine.rs", engine_src),
-    ] {
+    for (name, src) in [("shadow/", shadow_src), ("decision_engine.rs", engine_src)] {
         for forbidden in [
             // Ranking entry points.
             "plan_with_policy",

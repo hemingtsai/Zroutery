@@ -1432,7 +1432,13 @@ fn the_module_reaches_no_installation_or_scheduling_surface() {
     // The module's code names no live predictor, no route surface, no scheduler,
     // and no network. The tripwire reads code only, so a doc comment that merely
     // *mentions* one of these cannot mask a real use or fake a clean bill.
-    let code = code_only(include_str!("../src/ml/bandit.rs"));
+    let code = code_only(concat!(
+        include_str!("../src/ml/bandit/mod.rs"),
+        include_str!("../src/ml/bandit/config.rs"),
+        include_str!("../src/ml/bandit/reward.rs"),
+        include_str!("../src/ml/bandit/safety.rs"),
+        include_str!("../src/ml/bandit/selection.rs"),
+    ));
     for forbidden in [
         "ShadowEngine",
         "ShadowStore",
@@ -1463,7 +1469,13 @@ fn action_explore_stays_unreachable_from_the_live_router() {
     // `Action::Explore` is accepted behaviour in `ml::reward`, and it is the one
     // action that could route a real request somewhere new. This node must not
     // add a path to it, and it must not return one.
-    let code = code_only(include_str!("../src/ml/bandit.rs"));
+    let code = code_only(concat!(
+        include_str!("../src/ml/bandit/mod.rs"),
+        include_str!("../src/ml/bandit/config.rs"),
+        include_str!("../src/ml/bandit/reward.rs"),
+        include_str!("../src/ml/bandit/safety.rs"),
+        include_str!("../src/ml/bandit/selection.rs"),
+    ));
     assert!(
         !code.contains("Action::Explore"),
         "the bandit must not produce or name an exploration action"
