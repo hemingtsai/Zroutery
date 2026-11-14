@@ -171,6 +171,8 @@ jobs:
           python3 -B scripts/docs_impact.py --self-test
           python3 -B scripts/docs_sources.py --check
           python3 -B scripts/docs_check.py
+          python3 -B scripts/docs_parity.py --self-test
+          python3 -B scripts/docs_parity.py --check
           if [ -z "$BASE_SHA" ] || [ "$BASE_SHA" = "0000000000000000000000000000000000000000" ]; then
             echo "::notice title=docs impact::no prior revision in this event; no range to check"
             exit 0

@@ -131,6 +131,8 @@ Consequences, stated rather than discovered:
   generated-file freshness. A zero-pending migration renders as complete rather
   than as an empty table. A path-like inline code span is resolved or
   redirected, and every archived file must be reachable through `redirects.json`.
+- `docs_parity.py` checks that the three READMEs have matching headings, fences,
+  images and source anchors; prose may differ, shape may not.
 - `docs_check.py` compares `docs/verified.json` source content hashes with
   the current tree. A moved source means the document must be re-read.
 - `docs_impact.py` fails when a changed source file is cited by a document that
