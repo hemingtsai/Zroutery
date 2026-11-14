@@ -1,63 +1,59 @@
 # Contributing
 
-## Commit convention
+> Authority: guide · Owner: docs · Last verified: 2026-11-14 · Verified by: `scripts/commit_contract_test.py --self-test`
 
-Every commit must follow the conventional format:
+Human onboarding. The rules live in [AGENTS.md](AGENTS.md),
+[verification.md](docs/development/verification.md) and [WORKFLOW.md](docs/development/WORKFLOW.md).
 
-    <type>(<scope>): <summary>
+## Read first
 
-- type: `feat` | `fix` | `refactor` | `test` | `perf` | `docs` | `build` | `ci` | `chore`
-- scope: `core` | `router` | `protocol` | `policy` | `runtime` | `ml` | `account` | `provider` | `integration` | `tauri` | `workflow` | `repo`
-- summary: lowercase start, imperative, no trailing period, keep it under 72 characters
-
-A commit message must describe only the changes the commit introduces.
-Do not copy task prompts, roadmaps, gate reports, test transcripts, or
-future-stage plans into commit messages — that information belongs in
-`docs/development/`.
-
-CI enforces this: the `commit-lint` workflow checks every commit in a
-pull request. Full rules and rationale:
-[docs/development/WORKFLOW.md](docs/development/WORKFLOW.md)
+1. [AGENTS.md](AGENTS.md) — agent and contributor boundaries.
+2. [docs/development/verification.md](docs/development/verification.md) — the only
+   toolchain and gate definitions.
+3. [docs/development/architecture.md](docs/development/architecture.md) — layers
+   and invariants.
 
 ## Toolchain
 
-The declared minimum is Rust 1.90, which is what `Cargo.toml`'s `rust-version`
-says and what CI's `msrv` job pins. It is not a policy number: the locked
-Tauri 2.12 family declares `rust-version = "1.90"`, while the source itself
-needs 1.89, so the higher of the two is the declaration. Install it rather than
-following whatever `stable` happens to be:
+Resolve the compiler CI uses, then use it for lint and tests:
 
-    rustup toolchain install 1.90.0
+```text
+python3 -B scripts/toolchain_gate.py
+cargo +<reported-version> fmt --all -- --check
+cargo +<reported-version> clippy --workspace --all-targets --all-features --locked -- -D warnings
+cargo +<reported-version> test --workspace --all-features --locked
+```
 
-The frontend is Node 22 with pnpm 11, the pair CI's `reachability` job uses.
-`packageManager` in the root `package.json` pins the pnpm major, so `corepack
-enable` gets the version `pnpm-lock.yaml` was written by rather than whatever is
-on `PATH`:
+The declared minimum (`Cargo.toml::rust-version`) is a separate check:
 
-    corepack enable
-    pnpm install
+```text
+cargo +1.90.0 check --workspace --all-targets --locked
+```
 
-Then `cargo fmt --all -- --check`, `cargo clippy --workspace --all-targets
---all-features -- -D warnings` and `pnpm --dir ui build` are the checks a change
-is expected to leave green. See [README.md](README.md#工具链).
+The frontend is Node 22 with the pinned pnpm (`package.json::packageManager`).
 
-### Why the frontend is ahead of the curve
+## Commit format
 
-`ui/` pins **Vite 8.2** and **TypeScript 7.0** while the rest of the ecosystem is
-still largely on Vite 6 / TS 5.x. This is deliberate, not drift:
+```text
+<type>(<scope>): <imperative summary>
+```
 
-- Vite 8 builds with **Rolldown**. The production bundle is split by
-  `vite.config.ts`'s `codeSplitting` into a React vendor chunk and a shared
-  vendor chunk, which is what keeps the dashboard's first paint independent of
-  the Tauri webview's cache state. The Vite 6 line cannot express that split, so
-  "downgrade for stability" means giving up the chunking the UI was measured
-  against.
-- TS 7 is what `tsc --noEmit` in `pnpm --dir ui build` runs. The type layer is
-  the only gate on the ~40 Tauri command signatures the dashboard calls, so it
-  moves with the compiler the build actually uses.
+The validator is authoritative: `scripts/commit_contract_test.py`. It owns the
+type/scope/verb allowlists; do not copy them into prose. Validate the range:
 
-The cost of being early is accepted knowingly: a plugin that has not caught up
-shows up as a build failure rather than a runtime surprise, and CI runs the same
-`pnpm --dir ui build` a developer does. A move back to Vite 6 + TS 5.6 is a
-project-level decision that also requires re-measuring the bundle split; it is
-not a version bump to make in passing.
+```text
+python3 -B scripts/commit_contract_test.py --base <start> --head HEAD
+```
+
+Commit when the change is verified, in one-file or one-module commits. Keep the
+subject about the change, not the task prompt, roadmap or test transcript.
+
+## Before you call it done
+
+- Tier 1 in [verification.md](docs/development/verification.md) is green.
+- Affected documents changed in the same commit:
+  `python3 -B scripts/docs_impact.py --base <start> --head HEAD`.
+- Every factual sentence you added cites a source you actually read
+  ([docs/DOCUMENTATION.md](docs/DOCUMENTATION.md)).
+- No secret, request body or upstream credential is written into the repository.
+- Platform checks you did not run are reported as unrun, not as passed.
