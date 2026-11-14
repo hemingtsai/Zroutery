@@ -1,4 +1,20 @@
 {
+  "docs/development/reference/ipc.md": {
+    "verified_at": "2026-11-14",
+    "sources": {
+      "src-tauri/build.rs": "sha256:bfcdc780b6631d9f6032cfc6021f654d7801d10290067b2ea5679e888ab3d323",
+      "src-tauri/src/lib.rs": "sha256:66c822292eb5c1a87874606746c5d5b154239284954656a0a892a7b2f811840a",
+      "src-tauri/src/commands.rs": "sha256:cffca7ef206f03ba7c846a6920152dc166dd3afc0eb9a983a32e5308ddae77ca",
+      "src-tauri/src/state/snapshot.rs": "sha256:ab1d6436df0c84e86476ce8acd4239571b42c8d60ca979c5f637a882a511744e",
+      "src-tauri/capabilities/default.json": "sha256:16cc97d7b8f2068ebed1bf7fae50843dea4793c8981f63146a89ce4a6db43257",
+      "src-tauri/capabilities/tray-panel.json": "sha256:628aa6fd3246446c9cb242758a29850d8b814b66f86e67967dfc6e0b4d9330df",
+      "ui/src/api.ts": "sha256:11544c2669498ecc507b019a75aa3694c63ce21ae1625cb13339df08027de789",
+      "ui/mock-bridge.ts": "sha256:c02046bd6b49047c2e66a2535dc835c03cc3ad2b67daa5656775e3029a7d02ed",
+      "scripts/command_surface_test.py": "sha256:8e603b9a8a873aca86721b128780ad2a14675fe550f11a45b353a4a1b33d8001"
+    },
+    "commands": ["python3 -B scripts/command_surface_test.py"],
+    "note": "The command-surface gate is the executable check; the reference explains the boundary it enforces."
+  },
   "docs/development/WORKFLOW.md": {
     "verified_at": "2026-11-14",
     "sources": {

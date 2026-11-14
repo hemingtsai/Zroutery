@@ -30,6 +30,7 @@ This file is generated from `docs/docs.manifest.json`. Do not edit it.
 | [docs/development/verification.md](development/verification.md) | normative | normative | backend | The only toolchain and gate definition, including what CI does and does not run. |
 | [docs/development/architecture.md](development/architecture.md) | normative | normative | backend | Layers, boundaries and invariants of Core, the desktop shell and the learning stack. |
 | [docs/development/WORKFLOW.md](development/WORKFLOW.md) | normative | normative | docs | Commit content, subject contract, evidence policy and documentation synchronization. |
+| [docs/development/reference/ipc.md](development/reference/ipc.md) | reference | reference | frontend | The webview-to-Rust command boundary: registration, capabilities, feature gates and mock fixtures. |
 | [docs/development/decisions/0001-recoverable-node-records.md](development/decisions/0001-recoverable-node-records.md) | adr | normative | docs | Accepted decisions and their consequences; superseded records stay in place. |
 | [docs/development/decisions/0002-production-ml-boundary.md](development/decisions/0002-production-ml-boundary.md) | adr | normative | docs | Accepted decisions and their consequences; superseded records stay in place. |
 | [docs/development/decisions/0003-capability-media-fail-closed.md](development/decisions/0003-capability-media-fail-closed.md) | adr | normative | docs | Accepted decisions and their consequences; superseded records stay in place. |
@@ -84,7 +85,7 @@ Audits, findings, triage and risk discussions live in GitHub Issues. Use the `au
 
 ## Health
 
-- active documents: 19
+- active documents: 20
 - pending migration: 28
 - source anchors are checked by `scripts/docs_sources.py`
 - links, sizes and freshness are checked by `scripts/docs_check.py`

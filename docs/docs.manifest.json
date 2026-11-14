@@ -129,6 +129,17 @@
       "max_lines": 300
     },
     {
+      "path": "docs/development/reference/ipc.md",
+      "title": "IPC Reference",
+      "type": "reference",
+      "authority": "reference",
+      "audience": ["human", "agent"],
+      "status": "active",
+      "owner": "frontend",
+      "summary": "The webview-to-Rust command boundary: registration, capabilities, feature gates and mock fixtures.",
+      "max_lines": 250
+    },
+    {
       "glob": "docs/development/decisions/*.md",
       "title": "Architecture decision records",
       "type": "adr",
