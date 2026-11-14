@@ -23,11 +23,13 @@ facts; this file wins for permission and process.
 
 ## Definition of done
 
-Before each commit run `python3 -B scripts/docs_contracts.py --include-staged`,
+Before each commit run
+`python3 -B scripts/docs_contracts.py --include-staged --base HEAD`,
 `python3 -B scripts/current_state.py --check` and
 `python3 -B scripts/commit_contract_test.py --base origin/dev --head HEAD`;
-`--include-staged` is what lets the range check see the staged documentation
-edit. A red gate is fixed in the document or trigger; if the state differs, run
+`--base HEAD --include-staged` checks the staged change locally, while the CI
+range check covers the pushed commits. A red gate is fixed in the document or
+trigger; if the state differs, run
 `python3 -B scripts/record_state.py --no-range` and commit it. Tier 1 in
 [verification.md](docs/development/verification.md) must be green or explicitly
 reported as unverified. Never weaken a gate or use `--no-verify`.
@@ -78,6 +80,9 @@ not restate them.
 - Every factual sentence in a normative or reference document cites a source
   read in the same change (`path::symbol` or `path#Lx`). Old documents are leads,
   never sources. See [docs/DOCUMENTATION.md](docs/DOCUMENTATION.md).
+- A documentation change is reviewed in a session other than the author's; the
+  reviewer records it with `docs_review.py --record ... --note ...`, and the
+  author does not record its own review.
 - Do not open GitHub Issues proactively. Report findings to the user; open an
   Issue only when explicitly asked. An audit that yields a decision writes an
   ADR; one that yields a durable fact updates the relevant document.

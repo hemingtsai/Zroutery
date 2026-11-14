@@ -116,14 +116,15 @@
     ],
     "note": "The allowlists and trailer keys are owned by the validator; the document points at them instead of copying them.",
     "reviewed_commit": "668bce5",
-    "reviewed_by": "second-reader",
+    "reviewed_by": "verifier-agent",
     "reviewed_at": "2026-11-14",
     "sample": [
-      "`reviewed_commit` is the baseline for the separate-commit path: changes before",
-      "python3 -B scripts/docs_impact.py --base <start> --head HEAD",
-      "The validator (`scripts/commit_contract_test.py::TRAILER_KEYS`,"
+      "Vague summaries (`misc fixes`, `update project`, `final implementation`,",
+      "The complete subject is at most 72 characters, lowercase, one line, no trailing",
+      "`reviewed_commit` is the baseline for the separate-commit path: changes before"
     ],
-    "reviewed_sha": "sha256:5918ceb1498eb742f9c768747061c58a6e809a29a3726ee9db92dd4356b03839"
+    "reviewed_sha": "sha256:e06fad5ff77012440e7d45a057a3453c9d6b5d33afb398785f48dff0b3adc5a6",
+    "reviewed_note": "model=deepseek-flash; session=v-20261114-a"
   },
   "docs/development/architecture.md": {
     "verified_at": "2026-11-14",
@@ -217,14 +218,15 @@
     ],
     "note": "The example anchor is resolved by the checker; the surrounding rules are normative, not factual claims.",
     "reviewed_commit": "9b926ef",
-    "reviewed_by": "second-reader",
+    "reviewed_by": "verifier-agent",
     "reviewed_at": "2026-11-14",
     "sample": [
       "[`docs/development/reference/documentation-rules.md`](development/reference/documentation-rules.md).",
-      "`Status` is `accepted`, `proposed`, or `superseded by ADR-XXXX`.",
-      "`docs_check.py` fails when a Markdown file is in none of `docs`,"
+      "The affected set is computed by `scripts/docs_impact.py` from the documents'",
+      "`Status` is `accepted`, `proposed`, or `superseded by ADR-XXXX`."
     ],
-    "reviewed_sha": "sha256:ae85c18d38a99675ec70bf63220dcc154a035a183e8e7c65112ecfba7fa98d4d"
+    "reviewed_sha": "sha256:d438738e66940dfb2c708594053f1df586e1d563d67824dcdd2983db7cdaab03",
+    "reviewed_note": "model=deepseek-flash; session=v-20261114-a"
   },
   "docs/development/verification.md": {
     "verified_at": "2026-11-14",
@@ -255,14 +257,15 @@
     ],
     "note": "Commands ran on the local toolchain (rustc 1.98.0). The CI-resolved toolchain was not available offline; this is recorded rather than claimed as a CI-toolchain verification.",
     "reviewed_commit": "9b926ef",
-    "reviewed_by": "second-reader",
+    "reviewed_by": "verifier-agent",
     "reviewed_at": "2026-11-14",
     "sample": [
+      "Commit messages are checked by the CI range; no local `commit-msg` hook is",
       "is an ancestor of HEAD, and that `ran_at` is an ISO timestamp.",
-      "`Documentation contracts`); a required status check keys on the job, not on a",
-      "An ADR `Date` must equal the file's first"
+      "`Documentation contracts`); a required status check keys on the job, not on a"
     ],
-    "reviewed_sha": "sha256:f7ffcb98828269c39a48d3db0a77bb9e9a88775e744e96825ca67de56554b0d6"
+    "reviewed_sha": "sha256:14d8629fff2fb108fa702ec0e35a847d9be806302f6bc596e36750360f7f9464",
+    "reviewed_note": "model=deepseek-flash; session=v-20261114-a"
   },
   "docs/development/reference/providers.md": {
     "verified_at": "2026-11-14",
@@ -868,7 +871,7 @@
   "docs/development/reference/documentation-rules.md": {
     "verified_at": "2026-11-14",
     "sources": {
-      "scripts/docs_contracts.py": "sha256:1005f6ec3848a29400f814cc0395c6f82aa3843766ae246c72cdf245772cdd27"
+      "scripts/docs_contracts.py": "sha256:925582ab804664e6cf91013b7a937ab771dd1f3579224b12dac81bc8e51fbdc3"
     },
     "commands": [
       "python3 -B scripts/docs_rules.py",
@@ -876,13 +879,14 @@
     ],
     "note": "The registry and the executed STEPS list are the two sides this page describes.",
     "reviewed_commit": "6f04999",
-    "reviewed_by": "second-reader",
+    "reviewed_by": "verifier-agent",
     "reviewed_at": "2026-11-14",
     "sample": [
       "DOC-15 is a review protocol, not a gate.",
       "`docs/rules.json` is the machine source; `scripts/docs_rules.py` checks that the",
       "A rule with no step, or a step with no rule, fails `docs_rules.py`."
     ],
-    "reviewed_sha": "sha256:5c5c33084119bb830ec8bd5e1e73e2be7ea36aaecd3c576fb5b222100e0af760"
+    "reviewed_sha": "sha256:4155ab985970edaf28af7a190595ef6fad8dd9c6011a8f5af6dc5d9db698a9c9",
+    "reviewed_note": "model=deepseek-flash; session=v-20261114-a"
   }
 }

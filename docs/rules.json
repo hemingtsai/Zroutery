@@ -129,7 +129,7 @@
     },
     {
       "id": "DOC-17",
-      "rule": "Review is content-bound and not self-authored",
+      "rule": "Review is content-bound and recorded by a second session",
       "type": "machine",
       "enforced_by": [
         "review evidence"

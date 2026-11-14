@@ -13,6 +13,8 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import contextlib
+import io
 import json
 import os
 import sys
@@ -111,7 +113,11 @@ def self_test() -> int:
             return 1
         target = root / TARGET
         target.write_text(target.read_text(encoding="utf-8") + "hand edit\n", encoding="utf-8")
-        if main(["--root", str(root), "--check"]) == 0:
+        # The stale message is the expected rejection; keep it out of the parent
+        # gate's stderr, where it reads like a real failure.
+        with contextlib.redirect_stderr(io.StringIO()):
+            caught = main(["--root", str(root), "--check"]) != 0
+        if not caught:
             print("current-state self-test: hand edit was NOT caught", file=sys.stderr)
             return 1
         print("current-state: self-test passed (writes, accepts its render, rejects a hand edit)")

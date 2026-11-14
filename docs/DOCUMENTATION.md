@@ -187,13 +187,13 @@ The machine-readable rule registry is
 
 ## Review
 
-- A document change is reviewed by the owner of the affected area.
-- `AGENTS.md`, `verification.md` and `INDEX.md` are shared files: one author, one
-  reviewer.
-- Mechanical checks prove anchors resolve, links exist, sizes fit and sources did
-  not move. They cannot prove an interpretation is correct. Every rewrite is
-  spot-checked by a second reader on 3-5 factual sentences.
-- `docs/verified.json` records `reviewed_by`, `reviewed_at`, `reviewed_sha` (the
-  content reviewed) and a 3-5 sentence `sample`; `docs_review.py --plan` produces
-  the sample, `--record --doc` records one document, and an edit after review
-  fails until re-recorded. A reviewer equal to the last author fails.
+- A change is reviewed by the owner of the affected area in a session other than
+  the author's; the author does not record its own review.
+- `AGENTS.md`, `verification.md` and `INDEX.md`: one author, one reviewer.
+- Mechanical checks prove anchors, links, sizes and source hashes; interpretation
+  is spot-checked by a second reading on 3-5 factual sentences, bullets included.
+- `docs/verified.json` records `reviewed_by`, `reviewed_at`, `reviewed_note`
+  (agent, model, session), `reviewed_sha` and a 3-5 sentence `sample` from
+  `docs_review.py --plan`; `--record --doc` records one document from the
+  reviewer's session, and an edited document fails until re-recorded. A reviewer
+  equal to the last author fails.

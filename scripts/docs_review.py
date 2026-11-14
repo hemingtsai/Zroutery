@@ -16,6 +16,10 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 VERIFIED = Path("docs/verified.json")
 SENTENCE_RE = re.compile(r"(?<=[.!?])\s+")
+# A list item carries facts as often as a paragraph does, and the sample is the
+# only mechanical coverage the review gate gets; skipping bullets meant a rewrite
+# inside a bullet list was never sampled.
+BULLET_RE = re.compile(r"^(?:[-*+]|\d+[.)])\s+")
 
 
 def document_sha(root: Path, doc: str) -> str:
@@ -28,8 +32,9 @@ def sentences(root: Path, doc: str) -> list[str]:
     found: list[str] = []
     for line in text.splitlines():
         stripped = line.strip()
-        if not stripped or stripped.startswith(("#", ">", "|", "```", "-", "*")):
+        if not stripped or stripped.startswith(("#", ">", "|", "```")):
             continue
+        stripped = BULLET_RE.sub("", stripped)
         for sentence in SENTENCE_RE.split(stripped):
             sentence = sentence.strip()
             if len(sentence) >= 40 and ("`" in sentence or re.search(r"\d", sentence)):
@@ -89,7 +94,7 @@ def check(root: Path = ROOT) -> list[str]:
     return errors
 
 
-def record(root: Path, reviewer: str, docs: list[str] | None = None) -> int:
+def record(root: Path, reviewer: str, docs: list[str] | None = None, note: str | None = None) -> int:
     path = root / VERIFIED
     data = json.loads(path.read_text(encoding="utf-8"))
     targets = list(data) if docs is None else docs
@@ -100,6 +105,8 @@ def record(root: Path, reviewer: str, docs: list[str] | None = None) -> int:
     for doc in targets:
         data[doc]["reviewed_by"] = reviewer
         data[doc]["reviewed_at"] = dt.date.today().isoformat()
+        if note:
+            data[doc]["reviewed_note"] = note
         data[doc]["reviewed_sha"] = document_sha(root, doc)
         data[doc]["sample"] = sample(root, doc)
     path.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
@@ -112,11 +119,32 @@ def self_test() -> int:
         root = Path(temporary)
         (root / "docs").mkdir()
         (root / "docs" / "guide.md").write_text(
-            "The value is one (`src/sample.rs::value`).\nThe limit is 32 (`src/sample.rs::limit`).\nRetries are zero (`src/sample.rs::retries`).\n",
+            "The value is one (`src/sample.rs::value`).\n"
+            "The limit is 32 (`src/sample.rs::limit`).\n"
+            "Retries are zero (`src/sample.rs::retries`).\n"
+            "- The retry budget is six (`src/sample.rs::retries`).\n",
             encoding="utf-8",
         )
         (root / "docs" / "verified.json").write_text(json.dumps({"docs/guide.md": {}}), encoding="utf-8")
-        record(root, "second-reader")
+        if not any("retry budget is six" in sentence for sentence in sentences(root, "docs/guide.md")):
+            print("docs-review self-test: a bullet sentence was NOT sampled", file=sys.stderr)
+            return 1
+        (root / "docs" / "bullets.md").write_text(
+            "# Bullets\n\n"
+            "- The retry budget is six (`src/sample.rs::retries`).\n"
+            "- The cache budget is two (`src/sample.rs::limit`).\n"
+            "- The token budget is one (`src/sample.rs::value`).\n",
+            encoding="utf-8",
+        )
+        bullet_sample = sample(root, "docs/bullets.md")
+        if len(bullet_sample) != 3 or not all("budget is" in sentence for sentence in bullet_sample):
+            print(f"docs-review self-test: bullets did NOT reach the sample ({bullet_sample})", file=sys.stderr)
+            return 1
+        record(root, "second-reader", note="model=fixture; session=selftest")
+        recorded = json.loads((root / "docs" / "verified.json").read_text(encoding="utf-8"))
+        if recorded["docs/guide.md"].get("reviewed_note") != "model=fixture; session=selftest":
+            print("docs-review self-test: the review note was NOT recorded", file=sys.stderr)
+            return 1
         if check(root):
             print(f"docs-review self-test: recorded evidence rejected ({check(root)})", file=sys.stderr)
             return 1
@@ -145,6 +173,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--plan", action="store_true")
     parser.add_argument("--record", metavar="REVIEWER")
     parser.add_argument("--doc", action="append", default=None, help="document path to record; repeatable")
+    parser.add_argument("--note", default=None, help="reviewer agent, model and session, recorded with the review")
     parser.add_argument("--all", action="store_true", help="record every verified document (migration only)")
     parser.add_argument("--self-test", action="store_true")
     parser.add_argument("--root", default=str(ROOT))
@@ -153,10 +182,17 @@ def main(argv: list[str] | None = None) -> int:
         return self_test()
     root = Path(args.root)
     if args.record:
+        if not args.note:
+            print(
+                'docs-review: --record needs --note "model=<model>; session=<session>" '
+                "so the review says which session performed it",
+                file=sys.stderr,
+            )
+            return 2
         if args.doc:
-            return record(root, args.record, docs=args.doc)
+            return record(root, args.record, docs=args.doc, note=args.note)
         if args.all:
-            return record(root, args.record)
+            return record(root, args.record, note=args.note)
         print("docs-review: --record needs --doc <path> (repeatable), or --all for a migration", file=sys.stderr)
         return 2
     if args.plan:

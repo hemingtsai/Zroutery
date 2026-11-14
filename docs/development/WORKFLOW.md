@@ -77,6 +77,10 @@ or the conversation.
 
 - New evidence is a PR, an Issue, a test name, or a `docs/verified.json` source
   hash. It is not a narrative pasted into a commit.
+- A documentation review is a second reading in a session other than the
+  author's. The reviewer records it
+  (`python3 -B scripts/docs_review.py --record <reviewer> --doc <path>
+  --note "model=<model>; session=<session>"`); the author does not record its own.
 - The legacy `Node` / `Gate` / `Status` trailers are accepted only as a complete
   final block, in that order, in historical commits. They are not required for
   new work and must not be added to new commits.

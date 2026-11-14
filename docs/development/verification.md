@@ -153,8 +153,12 @@ Consequences, stated rather than discovered:
   against the manifest and ledger. It requires an ADR header (`Status`, `Date`, `Supersedes`), the
   `Context`/`Decision`/`Consequences`/`Sources` sections, and a resolvable
   `manifest.canonical[].home` anchor. `docs_contracts.py` also compares the
-  executed step statuses with `state.json`; a state file that disagrees fails
-  with the `record_state.py --no-range` repair command. A zero or empty CI base
+  executed step statuses with `state.json`; a state file that disagrees with an
+  otherwise green run fails with the `record_state.py --no-range` repair
+  command, while a red gate reports its own failure and is not repaired by
+  recording it. A local check of the staged change passes
+  `--base HEAD --include-staged`; the CI range check still covers the pushed
+  commits. A zero or empty CI base
   prints a GitHub warning and leaves the range unverified; the final summary then
   says `local documentation contracts passed; range UNVERIFIED`, not
   `all passed`. An ADR `Date` must equal the file's first
@@ -174,10 +178,12 @@ Consequences, stated rather than discovered:
   longer hides the anchors beside it.
 - `docs_verified.py` derives the cited source set and hashes into
   `docs/verified.json`; `--check` requires exact coverage and current hashes.
-- `docs_review.py` records `reviewed_by`, `reviewed_at`, `reviewed_sha` and a
-  deterministic 3-5 sentence `sample` per verified document. Recording is per
-  document (`--doc`); a document edited after its review fails until it is
-  recorded again; a reviewer equal to the last author fails.
+- `docs_review.py` records `reviewed_by`, `reviewed_at`, `reviewed_note`,
+  `reviewed_sha` and a deterministic 3-5 sentence `sample` per verified document
+  (including bullet items). The reviewer is a session other than the author's;
+  `--note` records the agent, model and session. Recording is per document
+  (`--doc`); a document edited after its review fails until it is recorded again;
+  a reviewer equal to the last author fails.
 - `docs_rules.py` checks that every `docs/rules.json` machine rule names an
   executed `docs_contracts.py` step, and that every gated step is registered.
 - `record_state.py` runs `docs_contracts.py --json` and writes the documentation
