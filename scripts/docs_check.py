@@ -125,6 +125,23 @@ def check_redirects(root: Path, redirects: dict[str, str]) -> list[str]:
     return errors
 
 
+def check_archive_links(root: Path, redirects: dict[str, str]) -> list[str]:
+    errors = []
+    for doc in sorted((root / "docs" / "archive").rglob("*.md")):
+        text = doc.read_text(encoding="utf-8")
+        for match in LINK_RE.finditer(text):
+            target = match.group(1).split("#", 1)[0]
+            if not target or "://" in target or target.startswith("mailto:"):
+                continue
+            if (doc.parent / target).exists() or (root / target).exists():
+                continue
+            mapped = resolve_redirect(target, redirects)
+            if mapped and (root / mapped).exists():
+                continue
+            errors.append(f"{doc.relative_to(root)}: archived link `{target}` is broken")
+    return errors
+
+
 def check_links(root: Path, doc: Path, text: str, redirects: dict[str, str]) -> list[str]:
     errors = []
     for match in LINK_RE.finditer(text):
@@ -364,10 +381,17 @@ def self_test() -> int:
         if not any("max" in error or "budget" in error for error in errors):
             print(f"docs-check self-test: size budget not caught ({errors})", file=sys.stderr)
             return 1
+        archive = root / "docs" / "archive"
+        archive.mkdir()
+        (archive / "bad.md").write_text("[broken](missing.md)\n", encoding="utf-8")
+        if not check_archive_links(root, {}):
+            print("docs-check self-test: a broken archived link was NOT caught", file=sys.stderr)
+            return 1
+        (archive / "bad.md").unlink()
         if resolve_redirect("docs/old/x.json", {"docs/old/*": "docs/new/*"}) != "docs/new/x.json":
             print("docs-check self-test: prefix redirect did not resolve", file=sys.stderr)
             return 1
-        print("docs-check: self-test passed (accepts a valid document, rejects a broken link and an over-budget file, resolves a prefix redirect)")
+        print("docs-check: self-test passed (accepts a valid document, rejects a broken link, a broken archived link and an over-budget file, resolves a prefix redirect)")
         return 0
 
 
@@ -403,6 +427,7 @@ def main(argv: list[str] | None = None) -> int:
         except json.JSONDecodeError as error:
             errors.append(f"docs/verified.json: invalid JSON: {error}")
     errors.extend(check_redirects(root, redirects))
+    errors.extend(check_archive_links(root, redirects))
     covered = {entry["path"] for entry in docs} | set(manifest.get("pending", []))
     patterns = manifest.get("ignore", [])
     for relative in all_markdown(root):

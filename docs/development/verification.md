@@ -132,7 +132,8 @@ Consequences, stated rather than discovered:
 - `docs_check.py` enforces manifest coverage, links, banners, size budgets and
   generated-file freshness. A zero-pending migration renders as complete rather
   than as an empty table. A path-like inline code span is resolved or
-  redirected, and every archived file must be reachable through `redirects.json`.
+  redirected, every archived file must be reachable through `redirects.json`,
+  and every Markdown link inside `docs/archive/` must resolve.
 - `docs_parity.py` checks that the three READMEs have matching headings, fences,
   images and source anchors; prose may differ, shape may not.
 - `docs_check.py` compares `docs/verified.json` source content hashes with

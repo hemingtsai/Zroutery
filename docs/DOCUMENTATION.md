@@ -103,7 +103,9 @@ The default body limit is 32 MiB (`crates/zroutery-core/src/config/server.rs::Se
    original language.
 6. Historical documents are never rewritten to match new code; they are moved to
    `docs/archive/` and get one banner line. Paths are preserved through
-   `docs/archive/redirects.json`.
+   `docs/archive/redirects.json`. If a link target also moved, only the link
+   target is retargeted to the archived copy; the prose is unchanged, and
+   `docs_check.py` checks every archived Markdown link.
 7. No audit reports, plans or execution diaries are added to `docs/development/`.
 
 ## Size budgets
