@@ -23,7 +23,7 @@ HEAD_RE = re.compile(r"^[0-9a-f]{7,40}$")
 URL_RE = re.compile(r"^https://github\.com/hemingtsai/Zroutery/issues/\d+$")
 STATUSES = {"pass", "fail", "unverified", "unrun", "retired"}
 ISSUE_STATES = {"open", "closed"}
-BLOCKER_STATES = {"partial", "blocked", "ready", "done"}
+BLOCKER_STATES = {"partial", "blocked", "ready", "done", "open"}
 
 
 def validate(state: dict, schema: dict | None = None) -> list[str]:

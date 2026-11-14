@@ -62,8 +62,10 @@ not restate them.
 
 ## Verification
 
-The toolchain and every gate are defined once in
-[verification.md](docs/development/verification.md). Do not copy commands here.
+Gate definitions and the toolchain live in
+[verification.md](docs/development/verification.md). `state.json` records the
+current status and the command used for that snapshot; it does not redefine the
+gate.
 
 - Resolve the CI compiler first; `verification.md` names the resolver and version.
   `1.90.0` is the separate MSRV check.

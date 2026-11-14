@@ -125,7 +125,8 @@
               "partial",
               "blocked",
               "ready",
-              "done"
+              "done",
+              "open"
             ]
           },
           "summary": {

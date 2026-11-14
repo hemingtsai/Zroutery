@@ -25,7 +25,9 @@ short on purpose: a rulebook that needs its own rulebook is not a rulebook.
 
 A guide points; it does not own a fact. `state.json` wins for what is true now;
 a reference wins for how a subsystem behaves; a guide owns neither. Change the
-guide, not the higher-ranked document.
+guide, not the higher-ranked document. `AGENTS.md` keeps the permission/process
+edge even though `state.json` is the fact source; the two answer different
+questions.
 
 ## Document types
 
@@ -38,6 +40,9 @@ Exactly one type per document. The type decides the required sections.
 | `normative` | rules and boundaries | scope, rules, canonical commands, change log, see also | unsourced facts, narrative |
 | `guide` | onboarding and runbook | audience, prerequisites, steps, verify, troubleshoot, pointers | restating normative rules |
 | `reference` | one subsystem | what it does, invariants, configuration, failure modes, not implemented, sources | plans and roadmaps |
+
+A cross-cutting layer such as `server` may be owned by
+`docs/development/architecture.md`; it is not forced into a `reference`.
 | `adr` | durable decision | status, context, decision, consequences, sources | implementation diary |
 | `record` | execution evidence | date, commit range, commands, results, what is not established | being cited as current fact |
 | `index` | navigation, generated | legend, reading paths, tables, health | hand-written metadata |

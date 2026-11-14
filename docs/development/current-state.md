@@ -40,7 +40,7 @@ as of `2026-11-14` · branch `dev` · verified code head `26d887f`
 - 7F real-traffic shadow: PARTIAL ([#1](https://github.com/hemingtsai/Zroutery/issues/1))
 - 7G controlled takeover: BLOCKED; blocked by 7F ([#2](https://github.com/hemingtsai/Zroutery/issues/2))
 - 7H bounded exploration: BLOCKED; blocked by 7G ([#3](https://github.com/hemingtsai/Zroutery/issues/3))
-- ADV Rust advisories: BLOCKED ([#4](https://github.com/hemingtsai/Zroutery/issues/4))
+- ADV Rust advisories: OPEN ([#4](https://github.com/hemingtsai/Zroutery/issues/4))
 
 ## Known flaky
 

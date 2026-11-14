@@ -86,7 +86,9 @@ Audits, findings, triage and risk discussions live in GitHub Issues. Use the `au
 - hash-ledgered: 32
 - guides: 5
 - ADRs: 8 (5 with code anchors; decision records, not machine-verified)
-- generated/index: 5
+- entry: 1
+- generated/fact: 1
+- index: 4
 - pending migration: 0
 - documents that must be anchored but are not: none
 - source anchors are checked by `scripts/docs_sources.py`
