@@ -105,7 +105,9 @@ The default body limit is 32 MiB (`crates/zroutery-core/src/config/server.rs::Se
    `docs/archive/` and get one banner line. Paths are preserved through
    `docs/archive/redirects.json`. If a link target also moved, only the link
    target is retargeted to the archived copy; the prose is unchanged, and
-   `docs_check.py` checks every archived Markdown link.
+   `docs_check.py` checks every archived Markdown link. When the whole module
+   was deleted, the document may carry `no-successor:<slug>` instead; the slug
+   is registered in `docs/archive/successors.json` with `successor: null`.
 7. No audit reports, plans or execution diaries are added to `docs/development/`.
 
 ## Size budgets

@@ -133,7 +133,9 @@ Consequences, stated rather than discovered:
   generated-file freshness. A zero-pending migration renders as complete rather
   than as an empty table. A path-like inline code span is resolved or
   redirected, every archived file must be reachable through `redirects.json`,
-  and every Markdown link inside `docs/archive/` must resolve.
+  and every Markdown link inside `docs/archive/` must resolve. A deleted module
+  with no successor is allowed only through a `no-successor:<slug>` entry in
+  `docs/archive/successors.json`.
 - `docs_parity.py` checks that the three READMEs have matching headings, fences,
   images and source anchors; prose may differ, shape may not.
 - `docs_check.py` compares `docs/verified.json` source content hashes with

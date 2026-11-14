@@ -116,7 +116,7 @@ def check_redirects(root: Path, redirects: dict[str, str]) -> list[str]:
     exact = {new for old, new in redirects.items() if not old.endswith("/*")}
     prefixes = [new[:-1] for old, new in redirects.items() if old.endswith("/*")]
     for file in (root / "docs" / "archive").rglob("*"):
-        if not file.is_file() or file.name in {"README.md", "redirects.json"}:
+        if not file.is_file() or file.name in {"README.md", "redirects.json", "successors.json"}:
             continue
         relative = str(file.relative_to(root))
         if relative in exact or any(relative.startswith(prefix) for prefix in prefixes):
@@ -125,7 +125,7 @@ def check_redirects(root: Path, redirects: dict[str, str]) -> list[str]:
     return errors
 
 
-def check_archive_links(root: Path, redirects: dict[str, str]) -> list[str]:
+def check_archive_links(root: Path, redirects: dict[str, str], successors: dict) -> list[str]:
     errors = []
     for doc in sorted((root / "docs" / "archive").rglob("*.md")):
         text = doc.read_text(encoding="utf-8")
@@ -137,6 +137,9 @@ def check_archive_links(root: Path, redirects: dict[str, str]) -> list[str]:
                 continue
             mapped = resolve_redirect(target, redirects)
             if mapped and (root / mapped).exists():
+                continue
+            entry = successors.get(target) or successors.get(target.rstrip("/"))
+            if entry and entry.get("successor") is None:
                 continue
             errors.append(f"{doc.relative_to(root)}: archived link `{target}` is broken")
     return errors
@@ -172,6 +175,37 @@ def check_links(root: Path, doc: Path, text: str, redirects: dict[str, str]) -> 
                 slugs = set()
             if anchor not in slugs:
                 errors.append(f"{doc.relative_to(root)}: anchor `#{anchor}` not found in `{relative}`")
+    return errors
+
+
+def check_successors(root: Path) -> list[str]:
+    path = root / "docs" / "archive" / "successors.json"
+    try:
+        registry = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as error:
+        return [f"docs/archive/successors.json: cannot read ({error})"]
+    errors = []
+    ids = set()
+    for old, entry in registry.items():
+        identifier = entry.get("id", "")
+        if not re.fullmatch(r"no-successor:[a-z0-9-]+", identifier):
+            errors.append(f"docs/archive/successors.json: `{old}` has an invalid id `{identifier}`")
+        if identifier in ids:
+            errors.append(f"docs/archive/successors.json: duplicate id `{identifier}`")
+        ids.add(identifier)
+        if entry.get("successor") is not None:
+            errors.append(f"docs/archive/successors.json: `{identifier}` must have successor null")
+        archived = entry.get("archived_path")
+        if not archived or not (root / archived).exists():
+            errors.append(f"docs/archive/successors.json: `{identifier}` has no archived_path")
+        if (root / old).exists():
+            errors.append(f"docs/archive/successors.json: `{identifier}` still exists at `{old}`")
+    readme = (root / "docs" / "archive" / "README.md").read_text(encoding="utf-8")
+    listed = set(re.findall(r"no-successor:[a-z0-9-]+", readme))
+    for identifier in sorted(listed - ids):
+        errors.append(f"docs/archive/README.md: `{identifier}` is not registered")
+    for identifier in sorted(ids - listed):
+        errors.append(f"docs/archive/README.md: `{identifier}` is missing from the index")
     return errors
 
 
@@ -384,7 +418,7 @@ def self_test() -> int:
         archive = root / "docs" / "archive"
         archive.mkdir()
         (archive / "bad.md").write_text("[broken](missing.md)\n", encoding="utf-8")
-        if not check_archive_links(root, {}):
+        if not check_archive_links(root, {}, {}):
             print("docs-check self-test: a broken archived link was NOT caught", file=sys.stderr)
             return 1
         (archive / "bad.md").unlink()
@@ -419,6 +453,8 @@ def main(argv: list[str] | None = None) -> int:
             redirects = json.loads(redirect_path.read_text(encoding="utf-8"))
         except json.JSONDecodeError as error:
             errors.append(f"docs/archive/redirects.json: invalid JSON: {error}")
+    successors_path = root / "docs" / "archive" / "successors.json"
+    successors = json.loads(successors_path.read_text(encoding="utf-8")) if successors_path.exists() else {}
     verified_path = root / "docs" / "verified.json"
     verified = {}
     if verified_path.is_file():
@@ -427,7 +463,8 @@ def main(argv: list[str] | None = None) -> int:
         except json.JSONDecodeError as error:
             errors.append(f"docs/verified.json: invalid JSON: {error}")
     errors.extend(check_redirects(root, redirects))
-    errors.extend(check_archive_links(root, redirects))
+    errors.extend(check_archive_links(root, redirects, successors))
+    errors.extend(check_successors(root))
     covered = {entry["path"] for entry in docs} | set(manifest.get("pending", []))
     patterns = manifest.get("ignore", [])
     for relative in all_markdown(root):
