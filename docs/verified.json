@@ -1,4 +1,14 @@
 {
+  "docs/development/WORKFLOW.md": {
+    "verified_at": "2026-11-14",
+    "sources": {
+      "scripts/commit_contract_test.py": "sha256:a853098040da40b7f2a0cec3878f19a9079bbb938ae3ad2de62c7af76bb4255b",
+      "scripts/docs_impact.py": "sha256:294ed119ad409be3d1acd9767c3229cca6d3c11f8042b48f8a626cc40740a021",
+      ".github/workflows/ci.yml": "sha256:324f1f2575475151ae56bd31e27423c47052635603d6a0847837ee0a93f8440c"
+    },
+    "commands": ["python3 -B scripts/commit_contract_test.py --self-test"],
+    "note": "The allowlists and trailer keys are owned by the validator; the document points at them instead of copying them."
+  },
   "docs/development/architecture.md": {
     "verified_at": "2026-11-14",
     "sources": {

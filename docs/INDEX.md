@@ -29,6 +29,7 @@ This file is generated from `docs/docs.manifest.json`. Do not edit it.
 | [docs/development/current-state.md](development/current-state.md) | fact | fact | docs | Generated snapshot: gates, open issues, blockers, flaky gates, last full green. |
 | [docs/development/verification.md](development/verification.md) | normative | normative | backend | The only toolchain and gate definition, including what CI does and does not run. |
 | [docs/development/architecture.md](development/architecture.md) | normative | normative | backend | Layers, boundaries and invariants of Core, the desktop shell and the learning stack. |
+| [docs/development/WORKFLOW.md](development/WORKFLOW.md) | normative | normative | docs | Commit content, subject contract, evidence policy and documentation synchronization. |
 | [docs/development/decisions/0001-recoverable-node-records.md](development/decisions/0001-recoverable-node-records.md) | adr | normative | docs | Accepted decisions and their consequences; superseded records stay in place. |
 | [docs/development/decisions/0002-production-ml-boundary.md](development/decisions/0002-production-ml-boundary.md) | adr | normative | docs | Accepted decisions and their consequences; superseded records stay in place. |
 | [docs/development/decisions/0003-capability-media-fail-closed.md](development/decisions/0003-capability-media-fail-closed.md) | adr | normative | docs | Accepted decisions and their consequences; superseded records stay in place. |
@@ -44,7 +45,6 @@ These documents are still in the legacy shape. Each is either archived or rewrit
 
 | Document |
 |---|
-| [docs/development/WORKFLOW.md](development/WORKFLOW.md) |
 | [scripts/desktop_packaging_record.md](../scripts/desktop_packaging_record.md) |
 | [docs/development/account-surface-plan.md](development/account-surface-plan.md) |
 | [docs/development/backend-optimization-execution.md](development/backend-optimization-execution.md) |
@@ -84,7 +84,7 @@ Audits, findings, triage and risk discussions live in GitHub Issues. Use the `au
 
 ## Health
 
-- active documents: 18
-- pending migration: 29
+- active documents: 19
+- pending migration: 28
 - source anchors are checked by `scripts/docs_sources.py`
 - links, sizes and freshness are checked by `scripts/docs_check.py`

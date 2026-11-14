@@ -118,6 +118,17 @@
       "max_lines": 400
     },
     {
+      "path": "docs/development/WORKFLOW.md",
+      "title": "Development Workflow",
+      "type": "normative",
+      "authority": "normative",
+      "audience": ["human", "agent"],
+      "status": "active",
+      "owner": "docs",
+      "summary": "Commit content, subject contract, evidence policy and documentation synchronization.",
+      "max_lines": 300
+    },
+    {
       "glob": "docs/development/decisions/*.md",
       "title": "Architecture decision records",
       "type": "adr",
@@ -129,7 +140,6 @@
     }
   ],
   "pending": [
-    "docs/development/WORKFLOW.md",
     "scripts/desktop_packaging_record.md",
     "docs/development/account-surface-plan.md",
     "docs/development/backend-optimization-execution.md",
