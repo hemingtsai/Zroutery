@@ -28,9 +28,9 @@ A request record is metadata, not content:
 A prompt or response body is never stored in a record.
 
 The ring is not the only copy of a request: when a runtime store is attached,
-`Stats` reloads committed usage rows into its totals and serves paged history,
-so a restart loses the recent view but not the usage history
-(`crates/zroutery-core/src/stats.rs::Stats::attach_store`,
+`Stats` reloads committed usage rows into its running totals, and the store
+serves paged history to the UI, so a restart loses the recent view but not the
+usage history (`crates/zroutery-core/src/stats.rs::Stats::attach_store`,
 `crates/zroutery-core/src/runtime_store/history.rs::query_usage`).
 
 ## Health and latency

@@ -69,9 +69,12 @@ request (`crates/zroutery-core/src/server/pipeline/lifecycle.rs::TerminalKind`):
 | `ClientDisconnected { emitted }` | the client left before the answer finished; `emitted: true` is an interrupted stream whose already-sent output is kept, `emitted: false` is a cancel before the first byte |
 | `ClientCancelled` | the client explicitly cancelled |
 
-`InterruptedStream` is the transport error that feeds `ClientDisconnected {
-emitted: true }`, not a separate terminal variant
-(`crates/zroutery-core/src/error.rs::Error`).
+An upstream stream that ends before its terminal event is
+`crates/zroutery-core/src/error.rs::Error`'s `InterruptedStream`; it is
+classified as the interrupted class by
+`crates/zroutery-core/src/failure.rs::FailureClass`, not turned into a
+`ClientDisconnected` — the client still receives what was already sent. A
+`ClientDisconnected` terminal is the client leaving, not the upstream ending.
 
 ## Session binding
 
