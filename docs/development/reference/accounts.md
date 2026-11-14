@@ -49,8 +49,9 @@ stage token
 - A provider with an inference-key pool serves only from declared keys; it does
   not silently fall back to the panel token or the provider key
   (`crates/zroutery-core/src/config/registry.rs::AccountConfig`).
-- Each entry has its own `key_ref` and priority; reordering the pool changes the
-  order, not the secret.
+- Each entry has its own `key_ref` and priority. Reordering the UI list rewrites
+  each entry's priority; execution sorts by priority, account id and key id, so
+  array position alone changes nothing, and the secret is never rewritten.
 - Replacing or removing a key does not rewrite the account's panel token.
 - The desktop commands for the pool are `set_account_inference_key` and
   `remove_account_inference_key`

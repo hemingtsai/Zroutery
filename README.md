@@ -121,7 +121,7 @@ Budgets are configured on the **Settings** page, which shows usage and limits si
 
 ## Learning-based routing
 
-Desktop builds include the `ml` module, disabled by default: no collection, no training, no effect on routing. With shadow mode enabled, each request additionally records one counterfactual entry (who would win if models were scored); actual routing is unaffected, and promotion runs only when triggered manually in the UI.
+Desktop builds include the `ml` module, disabled by default: no collection, no training, no effect on routing. With shadow mode enabled, each request additionally records one counterfactual entry (who would win if models were scored); actual routing is unaffected. Applying a promoted model is operator-triggered — the dashboard, the desktop IPC, or the authenticated `/v1/ml/promote` route — and nothing is scheduled.
 
 ![Learning](docs/images/learning.png)
 

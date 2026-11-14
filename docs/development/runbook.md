@@ -35,7 +35,7 @@ on, the token. `Ctrl-C` or `SIGTERM` stops it and flushes the ledger.
   not the key. `extra_headers` is the exception: it is stored in the document,
   so do not put a credential there.
 - The gateway token is in the config document with owner-only permissions.
-  Regenerate it from the Gateway menu if it leaks.
+  Regenerate it in Settings → Gateway if it leaks.
 - Headless keys come from `ZROUTERY_KEY_<REF>`; the desktop does not read those
   variables.
 
@@ -46,7 +46,7 @@ on, the token. `Ctrl-C` or `SIGTERM` stops it and flushes the ledger.
 | a request failed | Activity → the request row → attempts and error class |
 | a model is cooling down | Routing → the tier pool; health reset is per model |
 | a provider is gated | Provider row → wallet hold; release only after the cause is fixed |
-| a key is missing | Provider/account row → `has key`; the value itself is never shown |
+| a key is missing | Provider/account row → the Authentication field (masked value = key stored; otherwise it says which credential is missing); the value itself is never shown |
 | a panel rejects a token | the panel root and the account user id |
 | the gateway will not start | the banner and the bottom log; check the port and the token |
 | the document is corrupt | a timestamped `config.json.broken-*` backup is left beside it |
@@ -91,7 +91,7 @@ gate you did not run. A development build is not an authorized deployment.
 | Failure | Cause | Action |
 |---|---|---|
 | `address is already in use` | another gateway instance | stop the other instance; do not start a second one |
-| every request is rejected with 401 | auth is on and the token is empty or wrong | copy the token from the Gateway menu; regenerate if unknown |
+| every request is rejected with 401 | auth is on and the token is empty or wrong | copy the token from the Gateway menu; regenerate in Settings → Gateway if unknown |
 | keychain access denied | the credential store is locked or the app lost access | unlock the store; re-enter the key |
 | a panel balance is unknown | the panel is unreachable or the token is for another user | check the panel root, user id and token |
 | a UI page stays on "loading" | a lazy chunk did not load (browser-dependent) | reload; report the browser and the console error |

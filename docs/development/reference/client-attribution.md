@@ -15,9 +15,11 @@ not evidence that the caller is "not Codex".
 1. a validated named gateway credential — established by authentication;
 2. `x-zroutery-client`, if it names a client the gateway knows;
 3. a verified client-specific header pair (`Codex`, `Claude Code`, `OpenCode`);
-4. an exact `User-Agent` prefix or canonical bare name;
-5. a runtime or SDK family rule;
-6. `unknown`.
+4. an exact `User-Agent` prefix or canonical bare name (library, SDK and HTTP
+   families are `Weak` here);
+5. an unregistered but real `User-Agent`, kept as a weak sanitised custom
+   bucket;
+6. a held declaration at `Weak`, otherwise `unknown`.
 
 A declaration that does not match a known client is held to the end, so a typo
 cannot outrank a rule that would have answered correctly.
@@ -35,9 +37,9 @@ cannot outrank a rule that would have answered correctly.
 
 Only `CredentialBinding` is `Strong`: it follows authentication and cannot be
 forged by a header. `User-Agent` and explicit headers are caller-controlled, so
-they are at most `Probable`. A generic runtime or SDK match is `Weak`, and
-The confidence helper `is_recognised` excludes `Weak`; a `python-requests` match identifies
-a library, not an application
+they are at most `Probable`. A generic runtime or SDK match is `Weak`. The
+confidence helper `is_recognised` excludes `Weak`; a `python-requests` match
+identifies a library, not an application
 (`crates/zroutery-core/src/client.rs::Confidence::is_recognised`).
 
 `ClientFamily` is a display and aggregation axis, not a detection input:

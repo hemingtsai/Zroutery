@@ -10,8 +10,9 @@ the UI is the editing surface.
 
 `AppConfig` is the document (`crates/zroutery-core/src/config/app.rs::AppConfig`):
 
-- `server`, `routing`, `classifier`, `window`, `notifications`, `vision`,
-  `balances`, `providers`, `models`, `budgets`;
+- `schema_version`, `server`, `routing`, `classifier`, `window`,
+  `notifications`, `vision`, `balances`, `providers`, `models`, `budgets`,
+  `plugin_instances`;
 - optional `shadow` and `ml_routing` (feature `ml`); provider `accounts` is
   declared unconditionally, while the account subsystem that reads it is gated
   by the `account` feature
@@ -83,8 +84,8 @@ provider key. `SecretStore` is the credential boundary
 ## Feature gates
 
 - `zroutery-core` ships no default feature (`crates/zroutery-core/Cargo.toml::default`).
-- The desktop crate enables `ml`, `account`, `newapi`, `account-maint` and
-  `opencode` by default (`src-tauri/Cargo.toml::default`).
+- The desktop crate enables `ml`, `account`, `newapi`, `account-maint`,
+  `opencode` and `plugin` by default (`src-tauri/Cargo.toml::default`).
 - A capability compiled by a feature is inert until configured; a capability not
   compiled is absent from the command surface, not merely hidden.
 

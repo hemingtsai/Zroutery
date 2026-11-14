@@ -21,8 +21,11 @@ The error's `classified` method is the single mapping from an error to a
   the circuit breaker, retryable on the same candidate, fallbackable to another
   candidate, and whether the failure is a provider fault
   (`crates/zroutery-core/src/failure.rs::FailureImpact`).
-- A caller derives retry and failover behaviour from the impact, not from a
-  second string match on the error (`crates/zroutery-core/src/failure.rs::ClassifiedFailure`).
+- A caller derives retry and failover behaviour from the impact
+  (`crates/zroutery-core/src/failure.rs::ClassifiedFailure`); `retry_advice`
+  may still inspect status or body to pick the delay class or admit the
+  history-resource 400
+  (`crates/zroutery-core/src/upstream/errors.rs::retry_advice`).
 
 ## Retry and failover
 

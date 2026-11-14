@@ -26,8 +26,8 @@ interchangeable.
 2. recovers any transaction already in the journal;
 3. normalises destinations to absolute, rejects duplicates and destinations
    inside the journal;
-4. checks each live file still equals its `before` bytes;
-5. stages snapshots, target blobs, hashes and permissions;
+4. stages snapshots, target blobs, hashes and permissions;
+5. checks each live file still equals its `before` bytes;
 6. flushes the manifest and writes a durable commit marker;
 7. rolls forward each destination, then cleans the completed journal.
 

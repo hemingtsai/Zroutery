@@ -72,8 +72,9 @@ That is the model; hiding the token from the same user is not a goal.
 - Redirects are disabled and both proxy policies stay HTTP/1.1, so a redirect
   cannot carry the provider key to another host
   (`crates/zroutery-core/src/upstream/http.rs::configure`).
-- An upstream error body is truncated for the log and never echoed to the client;
-  the wire error names the provider and status
+- An upstream error body is bounded at construction for the log and never echoed
+  to the client (`crates/zroutery-core/src/upstream/errors.rs::truncate`); the
+  wire error names the provider and status
   (`crates/zroutery-core/src/error.rs::safe_message`).
 - Request and response bodies are not persisted; records carry metadata and
   traces carry features and outcomes.
@@ -117,3 +118,4 @@ That is the model; hiding the token from the same user is not a goal.
 - `src-tauri/tauri.conf.json::security`
 - `crates/zroutery-core/src/upstream/http.rs::configure`
 - `crates/zroutery-core/src/error.rs::safe_message`
+- `crates/zroutery-core/src/upstream/errors.rs::truncate`

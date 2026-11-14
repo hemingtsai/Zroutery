@@ -30,10 +30,10 @@ eligibility, adds a candidate, or bypasses the circuit breaker
    a rejected candidate stays rejected. `rank` predicts for every candidate so
    the engine's own filter excludes it, rather than this layer deciding
    eligibility on the side (`crates/zroutery-core/src/ml/serving.rs::MlRouter::rank`).
-2. **Promotion is explicit.** A round returns a verdict; installing is a
-   separate argument and defaults to false. There is no timer and no path that
-   promotes because a score looked good
-   (`crates/zroutery-core/src/ml/round.rs::run_promotion_round`,
+2. **Promotion is explicit.** A round returns a verdict and installs nothing;
+   installing is a separate call that defaults to false. There is no timer and
+   no path that promotes because a score looked good
+   (`crates/zroutery-core/src/ml/round.rs::PromotionRound::install`,
    `crates/zroutery-core/src/server/ml_state.rs::ml_run_promotion_round`).
 3. **The gate names its baseline.** "Beats the baseline" is a claim about a
    named baseline, not whichever was convenient. The evidence floors are not
@@ -81,8 +81,10 @@ configuration identity, so a decision can be re-derived rather than trusted
 - `run_promotion_round` reads the durable traces, deduplicates samples, trains,
   runs the comparison and evaluates the gate
   (`crates/zroutery-core/src/ml/round.rs::run_promotion_round`).
-- The operator surface is the authenticated `/v1/ml/*` endpoints; installation
-  and rollback are explicit calls, not a background loop
+- With the `ml` feature, the operator surface is the authenticated `/v1/ml/*`
+  endpoints; installation and rollback are explicit calls, not a background
+  loop (`crates/zroutery-core/src/server/handlers.rs::ml_promote`). A build
+  without `ml` registers the same routes, but they are inert stubs
   (`crates/zroutery-core/src/server/handlers.rs::ml_promote`).
 
 ## Failure modes
@@ -108,6 +110,8 @@ configuration identity, so a decision can be re-derived rather than trusted
 - `crates/zroutery-core/src/ml/serving.rs::MlRouter::rank`
 - `crates/zroutery-core/src/ml/shadow.rs::ShadowEngine::evaluate`
 - `crates/zroutery-core/src/ml/traces.rs::TraceLog`
+- `crates/zroutery-core/src/ml/traces.rs::RequestTrace`
+- `crates/zroutery-core/src/ml/comparison.rs::run_comparison`
 - `crates/zroutery-core/src/ml/promotion.rs::PromotionConfig`
 - `crates/zroutery-core/src/ml/promotion.rs::PromotionGate::evaluate`
 - `crates/zroutery-core/src/ml/round.rs::run_promotion_round`

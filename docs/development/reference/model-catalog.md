@@ -11,8 +11,9 @@ configuration stays authoritative.
 
 - The source of record is `https://models.dev/api.json`
   (`crates/zroutery-core/src/models_dev.rs::CATALOG_URL`).
-- The catalogue is several megabytes, fetched at most once per hour and cached
-  in memory (`crates/zroutery-core/src/models_dev.rs::catalog`).
+- The catalogue is large (the module's own estimate, not a measured size),
+  fetched at most once per hour and cached in memory
+  (`crates/zroutery-core/src/models_dev.rs::catalog`).
 - `parse` builds the provider → model map; `parse_provider` takes one section
   (`crates/zroutery-core/src/models_dev.rs::parse`,
   `crates/zroutery-core/src/models_dev.rs::parse_provider`).
@@ -72,8 +73,10 @@ The provider's own `/models` response wins where it already spoke:
 The module only shapes the *discovery* result. The candidate values are copied
 into a `ModelEntry` when the user imports a model; after that the saved
 configuration is the authority. Re-fetching cannot overwrite an edited field,
-because a configured model is not added twice
-(`crates/zroutery-core/src/models_dev.rs::enrich_from`).
+because the import surface does not add a model the configuration already has;
+the backend never merges into configured entries
+(`ui/src/pages/models/CatalogueImport.tsx::CatalogueImport`,
+`crates/zroutery-core/src/models_dev.rs::enrich_from`).
 
 ## Boundaries
 

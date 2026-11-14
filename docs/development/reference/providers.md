@@ -49,8 +49,10 @@ panels, which is why the panel binding carries the user id.
 
 ## OpenCode Zen
 
-OpenCode has two upstream shapes, both under the `opencode` feature
-(`crates/zroutery-core/src/config/provider.rs::ProviderKind`):
+OpenCode has two upstream kinds, and both variants are unconditional
+(`crates/zroutery-core/src/config/provider.rs::ProviderKind`); the shaping module
+they need is behind the `opencode` feature
+(`crates/zroutery-core/src/lib.rs::opencode`):
 
 - **Free tier.** The gateway checks a fixed client fingerprint. The request is
   shaped with the OpenCode identity and a request id generated locally
@@ -63,8 +65,9 @@ OpenCode has two upstream shapes, both under the `opencode` feature
   (`crates/zroutery-core/src/opencode/console.rs::discover`); the inference
   endpoint requires the billing org id.
 
-Neither kind is a generic OpenAI relay: without the shaping, the gateway refuses
-the request.
+Neither kind is a generic OpenAI relay. A build without the `opencode` feature
+still accepts the configuration and sends the request unshaped — no OpenCode
+headers or session, no OAuth refresh — and the upstream then rejects it.
 
 ## CC Switch import
 

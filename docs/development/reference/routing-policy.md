@@ -17,7 +17,10 @@ A request names either a direct model id or a virtual tier:
 The registry's `resolve` method owns the mapping, including aliases and custom tier names
 (`crates/zroutery-core/src/registry.rs::Registry::resolve`). A direct id does not
 bypass capability or provider checks: it is planned through the same hard gate as
-a tier (`crates/zroutery-core/src/router/plan.rs::plan`).
+a tier, with one exception — a direct same-dialect request with an explicit
+effort level drops only the automatic thinking requirement, never the media or
+tool gates (`crates/zroutery-core/src/router/plan.rs::plan`,
+`crates/zroutery-core/src/server/pipeline/effort.rs::direct_requirements`).
 
 ## Policy
 
@@ -53,7 +56,10 @@ The router builds the ordered candidates: `plan` for a bare plan,
 
 The pipeline passes the capabilities it derived from the request
 (`crates/zroutery-core/src/server/pipeline/mod.rs::handle_chat`), so a direct id
-and a tier see the same hard gate.
+and a tier see the same hard gate, except that a direct same-dialect request
+with an explicit effort level drops only the automatic thinking requirement
+(`crates/zroutery-core/src/server/pipeline/effort.rs::direct_requirements`;
+media and tool requirements are unchanged).
 
 ## Strategies
 

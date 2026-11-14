@@ -44,8 +44,8 @@ would claim the call was free (`crates/zroutery-core/src/outcome/attempt.rs::Att
   (`crates/zroutery-core/src/outcome/mod.rs::Outcome::builder`).
 - `Outcome::classify_final(attempts, cancelled)` derives the terminal status
   from the attempt evidence (`crates/zroutery-core/src/outcome/mod.rs::Outcome::classify_final`).
-- The builder is consuming; `served_candidate` refuses to retain a served
-  identity on a non-success terminal state
+- The builder is consuming; `served_candidate` records the identity, `build()`
+  clears it on a non-success terminal, and the accessors refuse to surface it
   (`crates/zroutery-core/src/outcome/builder.rs::OutcomeBuilder`).
 
 ## Validation
