@@ -10,7 +10,9 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import datetime as dt
 import fnmatch
+import subprocess
 import json
 import os
 import re
@@ -221,6 +223,16 @@ def adr_errors(root: Path, entry: dict, text: str) -> list[str]:
         errors.append(f"{entry['path']}: ADR needs `Status: accepted|proposed|superseded by ADR-XXXX`")
     if not date or not re.match(r"^\d{4}-\d{2}-\d{2}$", date.group(1).strip()):
         errors.append(f"{entry['path']}: ADR needs `Date: YYYY-MM-DD`")
+    elif dt.date.fromisoformat(date.group(1).strip()) > dt.date.today():
+        errors.append(f"{entry['path']}: ADR date is in the future")
+    elif (root / ".git").exists():
+        result = subprocess.run(
+            ["git", "log", "--diff-filter=A", "--format=%cs", "--", entry["path"]],
+            cwd=root, text=True, capture_output=True,
+        )
+        first = result.stdout.strip().splitlines()
+        if first and date.group(1).strip() != first[-1]:
+            errors.append(f"{entry['path']}: ADR date {date.group(1).strip()} differs from first commit {first[-1]}")
     if not supersedes or not re.match(r"^(none|ADR-\d{4})$", supersedes.group(1).strip()):
         errors.append(f"{entry['path']}: ADR needs `Supersedes: none|ADR-XXXX`")
     headings = {line.strip() for line in lines if line.startswith("## ")}
@@ -243,6 +255,7 @@ def adr_errors(root: Path, entry: dict, text: str) -> list[str]:
             errors.append(f"{entry['path']}: ADR target `{target}` does not exist")
     if "## Sources" in headings:
         in_sources = False
+        found_source = False
         for line in lines:
             if line.strip() == "## Sources":
                 in_sources = True
@@ -251,9 +264,16 @@ def adr_errors(root: Path, entry: dict, text: str) -> list[str]:
                 break
             if in_sources:
                 for raw in re.findall(r"`([^`]+)`", line):
-                    if (root / raw).exists():
-                        continue
-                    errors.append(f"{entry['path']}: source `{raw}` does not exist")
+                    found_source = True
+                    if "::" in raw:
+                        path, symbol = raw.rsplit("::", 1)
+                        problem = docs_sources.check_citation(root, path, symbol, None, None)
+                        if problem:
+                            errors.append(f"{entry['path']}: source `{raw}`: {problem}")
+                    elif not (root / raw).exists():
+                        errors.append(f"{entry['path']}: source `{raw}` does not exist")
+        if not found_source:
+            errors.append(f"{entry['path']}: `## Sources` needs at least one path or path::symbol")
     return errors
 
 

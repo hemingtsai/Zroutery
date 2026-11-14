@@ -1,16 +1,12 @@
 # ADR-0002: Production ML Boundary
 
 Status: superseded by ADR-0006
-Date: 2026-11-14
+Date: 2026-09-25
 Supersedes: none
 
-## Decision state
-
-**Superseded by ADR-0006.** The boundary this record provisions no longer
-exists. Kept because the reasoning it recorded is the reasoning ADR-0006 had to
-answer, and a reader who has only seen the outcome deserves to see the question.
-
 ## Context
+
+The boundary this record provisions no longer exists; the record is kept because its reasoning is the question ADR-0006 had to answer.
 
 The boundary was: ML is an optional in-process library, shadow evaluation is
 record-only, and "automatic activation, online RL, exploration, or takeover"

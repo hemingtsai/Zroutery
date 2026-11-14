@@ -1,7 +1,7 @@
 # ADR-0008: Nothing Random Decides
 
 Status: accepted
-Date: 2026-11-14
+Date: 2026-10-04
 Supersedes: none
 
 Builds on ADR-0006 and ADR-0007. Does not supersede either.

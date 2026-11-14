@@ -1,15 +1,12 @@
 # ADR-0005: Core P1 Repair Node Boundaries
 
 Status: accepted
-Date: 2026-11-14
+Date: 2026-09-25
 Supersedes: none
 
-## Decision state
-
-Accepted for dispatch sequencing. The node records remain the canonical status
-source; this ADR defines ownership and merge order.
-
 ## Context
+
+The node records remain the canonical status source; this ADR defines ownership and merge order.
 
 The former broad `CORE-P1-REPAIR` package mixed protocol, failure, routing and
 ML schema work in one node. One owner could not review it, and one merge order

@@ -1,15 +1,12 @@
 # ADR-0003: Core Capability and Media Fail-Closed Boundary
 
 Status: accepted
-Date: 2026-11-14
+Date: 2026-09-25
 Supersedes: none
 
-## Decision state
-
-Accepted for the bounded Core P1 repair batch. This ADR does not activate ML or
-change the production routing architecture.
-
 ## Context
+
+This ADR does not activate ML or change the production routing architecture.
 
 The audit found incomplete capability derivation, silent unknown-content loss
 in protocol decoders, and a soft router fallback that can reinsert candidates

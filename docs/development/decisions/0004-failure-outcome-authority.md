@@ -1,15 +1,12 @@
 # ADR-0004: Canonical Failure and Outcome Authority
 
 Status: accepted
-Date: 2026-11-14
+Date: 2026-09-25
 Supersedes: none
 
-## Decision state
-
-Accepted for the bounded Core P1 repair batch. This is a Core contract, not an
-ML training or activation decision.
-
 ## Context
+
+This is a Core contract, not an ML training or activation decision.
 
 `Error`, `FailureClass`, and `FailureImpact` currently make overlapping runtime
 decisions. Stream drops can finalize with a success-defaulted record. Outcome

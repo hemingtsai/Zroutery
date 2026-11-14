@@ -1,16 +1,12 @@
 # ADR-0001: Recoverable Node Record Contract
 
 Status: proposed
-Date: 2026-11-14
+Date: 2026-09-25
 Supersedes: none
 
-## Decision state
-
-Unresolved. The provisional record format is implemented by ORCH-DOCS so the
-repository can recover the audit, but the orchestrator must review the
-schema before it becomes a compatibility promise.
-
 ## Context
+
+The provisional record format is implemented by ORCH-DOCS so the repository can recover the audit, but it awaits review before becoming a compatibility promise.
 
 The repository previously had a prose audit and workflow documents but no
 machine-readable node state, dependency graph, evidence registry, or regression

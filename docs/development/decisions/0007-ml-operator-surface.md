@@ -1,7 +1,7 @@
 # ADR-0007: The Loop Is Legible and Reversible
 
 Status: accepted
-Date: 2026-11-14
+Date: 2026-10-04
 Supersedes: none
 
 Builds on ADR-0006. Does not supersede it.

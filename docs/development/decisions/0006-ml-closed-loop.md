@@ -1,10 +1,9 @@
 # ADR-0006: The ML Closed Loop
 
 Status: accepted
-Date: 2026-11-14
+Date: 2026-10-04
 Supersedes: ADR-0002
 
-Supersedes ADR-0002.
 
 ## Context
 

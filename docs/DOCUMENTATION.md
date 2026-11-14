@@ -40,13 +40,36 @@ Exactly one type per document. The type decides the required sections.
 | `normative` | rules and boundaries | scope, rules, canonical commands, change log, see also | unsourced facts, narrative |
 | `guide` | onboarding and runbook | audience, prerequisites, steps, verify, troubleshoot, pointers | restating normative rules |
 | `reference` | one subsystem | what it does, failure modes (or boundaries), not implemented (or boundaries), sources | plans and roadmaps |
-| `adr` | durable decision | status, context, decision, consequences, sources | implementation diary |
+| `adr` | durable decision | header block (Status, Date, Supersedes), context, decision, consequences, sources | implementation diary |
 | `record` | execution evidence | date, commit range, commands, results, what is not established | being cited as current fact |
 | `index` | navigation, generated | legend, reading paths, tables, health | hand-written metadata |
 | `historical` | archived document | an archive banner only | being edited to match new code |
 
 A cross-cutting layer such as `server` may be owned by
 `docs/development/architecture.md`; it is not forced into a `reference`.
+
+An ADR starts with this header and these sections:
+
+```text
+# ADR-000N: Title
+
+Status: accepted
+Date: YYYY-MM-DD
+Supersedes: none
+
+## Context
+
+## Decision
+
+## Consequences
+
+## Sources
+```
+
+`Status` is `accepted`, `proposed`, or `superseded by ADR-XXXX`. `Date` is the
+date the decision was made, not the date the file was last edited; `docs_check.py`
+compares it with the file's first commit. `Supersedes` is `none` or
+`ADR-XXXX`. `## Sources` needs at least one existing path or `path::symbol`.
 
 ## Metadata lives in one manifest
 

@@ -54,5 +54,5 @@ root `LICENSE` can be added independently at any time.
 - `README.zh-CN.md`
 - `README.zh-TW.md`
 - `docs/images/`
-- `scripts/ui_overflow_test.py`
+- `scripts/ui_overflow_test.py::main`
 - `docs/development/state.json`
