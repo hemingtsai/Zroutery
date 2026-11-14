@@ -1,4 +1,14 @@
 {
+  "docs/development/reference/client-takeover.md": {
+    "verified_at": "2026-11-14",
+    "sources": {
+      "crates/zroutery-core/src/agent_takeover/clients.rs": "sha256:d343bb989db6d0f5986e73b655ca8214395d23aac6ecdce6e48dd4587a124f85",
+      "crates/zroutery-core/src/agent_takeover/ownership.rs": "sha256:29be578e89eaa58afa7f343f8aeffb5980bbfc6d882499ddf4bc57996e9cd594",
+      "src-tauri/src/takeover_commands.rs": "sha256:a3113e7a4e3ecff39306855f16b0a980415e0537fcc7a5651d59c54c41fe70f9"
+    },
+    "commands": ["cargo test --workspace --all-features --locked"],
+    "note": "The ownership state machine and manifest are the source; the production takeover status is deliberately not claimed."
+  },
   "docs/development/reference/ml-routing.md": {
     "verified_at": "2026-11-14",
     "sources": {

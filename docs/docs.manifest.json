@@ -162,6 +162,17 @@
       "max_lines": 250
     },
     {
+      "path": "docs/development/reference/client-takeover.md",
+      "title": "Client Takeover Reference",
+      "type": "reference",
+      "authority": "reference",
+      "audience": ["human", "agent"],
+      "status": "active",
+      "owner": "backend",
+      "summary": "Ownership, preview, fingerprint, adopt and release for an external client configuration.",
+      "max_lines": 250
+    },
+    {
       "glob": "docs/development/decisions/*.md",
       "title": "Architecture decision records",
       "type": "adr",
