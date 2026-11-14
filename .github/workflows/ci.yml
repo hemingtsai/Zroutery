@@ -162,6 +162,30 @@ jobs:
           set -euo pipefail
           python3 scripts/orch_docs_test.py
 
+      # The documentation contract: anchors resolve, links and sizes hold,
+      # generated files are current, and every source that a document cites
+      # forced that document to change in this range. The self-tests prove the
+      # tools can still reject a failure; the real run proves this tree.
+      - name: Documentation contracts
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
+        run: |
+          set -euo pipefail
+          python3 -B scripts/docs_sources.py --self-test
+          python3 -B scripts/docs_check.py --self-test
+          python3 -B scripts/docs_impact.py --self-test
+          python3 -B scripts/docs_sources.py --check
+          python3 -B scripts/docs_check.py
+          if [ -z "$BASE_SHA" ] || [ "$BASE_SHA" = "0000000000000000000000000000000000000000" ]; then
+            echo "::notice title=docs impact::no prior revision in this event; no range to check"
+            exit 0
+          fi
+          if ! git rev-parse --verify --quiet "${BASE_SHA}^{commit}" >/dev/null; then
+            echo "::error title=docs impact::base $BASE_SHA is absent from this checkout; refusing to report a pass we did not earn"
+            exit 1
+          fi
+          python3 -B scripts/docs_impact.py --base "$BASE_SHA" --head HEAD
+
       # Every command the dashboard calls, against every command the backend
       # registers.
       #
