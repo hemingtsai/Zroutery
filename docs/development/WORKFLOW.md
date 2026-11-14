@@ -15,7 +15,9 @@ worktree or commit, so freshness treats the document as re-reviewed and the
 baseline may stay; or they are separate commits, so commit the source first and
 then the document with `reviewed_commit` pointing at that source commit.
 `freshness_report.py --check` fails only when neither path holds; do not update
-only the hash.
+only the hash. `reviewed_commit` is a baseline, not necessarily the latest
+review commit. The pre-commit hook counts staged edits in the range; hook and CI
+details live in [verification.md](verification.md).
 
 ## Commit content
 

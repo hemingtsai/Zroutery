@@ -34,6 +34,7 @@ STEPS = [
     {"name": "invariant evidence", "gate": "invariant evidence", "args": ["scripts/invariant_check.py"]},
     {"name": "coverage self-test", "gate": None, "args": ["scripts/coverage_check.py", "--self-test"]},
     {"name": "module coverage", "gate": "module coverage", "args": ["scripts/coverage_check.py"]},
+    {"name": "freshness self-test", "gate": None, "args": ["scripts/freshness_report.py", "--self-test"]},
     {"name": "freshness", "gate": "freshness", "args": ["scripts/freshness_report.py", "--check"]},
     {"name": "docs_impact self-test", "gate": None, "args": ["scripts/docs_impact.py", "--self-test"]},
 ]
