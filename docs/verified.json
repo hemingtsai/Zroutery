@@ -9,7 +9,8 @@
     "commands": [
       "cargo test --workspace --all-features --locked"
     ],
-    "note": "The ownership state machine and manifest are the source; the production takeover status is deliberately not claimed."
+    "note": "The ownership state machine and manifest are the source; the production takeover status is deliberately not claimed.",
+    "reviewed_commit": "af7fd5f"
   },
   "docs/development/reference/ml-routing.md": {
     "verified_at": "2026-11-14",
@@ -26,7 +27,8 @@
     "commands": [
       "cargo test --workspace --all-features --locked"
     ],
-    "note": "The reference states the mechanism and the gate defaults; production benefit is not claimed, and current status stays in current-state.md."
+    "note": "The reference states the mechanism and the gate defaults; production benefit is not claimed, and current status stays in current-state.md.",
+    "reviewed_commit": "af7fd5f"
   },
   "docs/development/reference/accounting.md": {
     "verified_at": "2026-11-14",
@@ -46,7 +48,8 @@
       "cargo test --workspace --all-features --locked",
       "cargo test -p zroutery-core --all-features billing::"
     ],
-    "note": "The settlement and budget invariants are executed by the workspace suite; this page names the symbols that carry them."
+    "note": "The settlement and budget invariants are executed by the workspace suite; this page names the symbols that carry them.",
+    "reviewed_commit": "af7fd5f"
   },
   "docs/development/reference/ipc.md": {
     "verified_at": "2026-11-14",
@@ -64,7 +67,8 @@
     "commands": [
       "python3 -B scripts/command_surface_test.py"
     ],
-    "note": "The command-surface gate is the executable check; the reference explains the boundary it enforces."
+    "note": "The command-surface gate is the executable check; the reference explains the boundary it enforces.",
+    "reviewed_commit": "af7fd5f"
   },
   "docs/development/WORKFLOW.md": {
     "verified_at": "2026-11-14",
@@ -76,7 +80,8 @@
     "commands": [
       "python3 -B scripts/commit_contract_test.py --self-test"
     ],
-    "note": "The allowlists and trailer keys are owned by the validator; the document points at them instead of copying them."
+    "note": "The allowlists and trailer keys are owned by the validator; the document points at them instead of copying them.",
+    "reviewed_commit": "af7fd5f"
   },
   "docs/development/architecture.md": {
     "verified_at": "2026-11-14",
@@ -129,7 +134,8 @@
       "cargo test --workspace --all-features --locked",
       "python3 -B scripts/docs_sources.py --check"
     ],
-    "note": "Every invariant is cited to the symbol that implements or tests it; the 3,478-test workspace run was the behavioural check."
+    "note": "Every invariant is cited to the symbol that implements or tests it; the 3,478-test workspace run was the behavioural check.",
+    "reviewed_commit": "af7fd5f"
   },
   "AGENTS.md": {
     "verified_at": "2026-11-14",
@@ -140,7 +146,8 @@
     "commands": [
       "python3 -B scripts/command_surface_test.py"
     ],
-    "note": "The command-registration rule is read from build.rs and the capability list; the symbol check resolves both."
+    "note": "The command-registration rule is read from build.rs and the capability list; the symbol check resolves both.",
+    "reviewed_commit": "af7fd5f"
   },
   "CONTRIBUTING.md": {
     "verified_at": "2026-11-14",
@@ -152,7 +159,8 @@
     "commands": [
       "python3 -B scripts/commit_contract_test.py --self-test"
     ],
-    "note": "Toolchain and pnpm pins are read from the manifests; the commit allowlists are owned by the validator and are not copied into prose."
+    "note": "Toolchain and pnpm pins are read from the manifests; the commit allowlists are owned by the validator and are not copied into prose.",
+    "reviewed_commit": "af7fd5f"
   },
   "docs/DOCUMENTATION.md": {
     "verified_at": "2026-11-14",
@@ -162,7 +170,8 @@
     "commands": [
       "python3 -B scripts/docs_check.py --self-test"
     ],
-    "note": "The example anchor is resolved by the checker; the surrounding rules are normative, not factual claims."
+    "note": "The example anchor is resolved by the checker; the surrounding rules are normative, not factual claims.",
+    "reviewed_commit": "af7fd5f"
   },
   "docs/development/verification.md": {
     "verified_at": "2026-11-14",
@@ -193,7 +202,8 @@
       "cargo audit --file Cargo.lock",
       "pnpm audit --prod"
     ],
-    "note": "Commands ran on the local toolchain (rustc 1.98.0). The CI-resolved toolchain was not available offline; this is recorded rather than claimed as a CI-toolchain verification."
+    "note": "Commands ran on the local toolchain (rustc 1.98.0). The CI-resolved toolchain was not available offline; this is recorded rather than claimed as a CI-toolchain verification.",
+    "reviewed_commit": "af7fd5f"
   },
   "docs/development/reference/providers.md": {
     "verified_at": "2026-11-14",
@@ -211,7 +221,8 @@
     "commands": [
       "cargo test --workspace --all-features --locked"
     ],
-    "note": "The panel and OpenCode behaviours are read from their adapters; real-panel acceptance is not claimed."
+    "note": "The panel and OpenCode behaviours are read from their adapters; real-panel acceptance is not claimed.",
+    "reviewed_commit": "af7fd5f"
   },
   "docs/development/reference/ui-design-system.md": {
     "verified_at": "2026-11-14",
@@ -237,7 +248,8 @@
       "pnpm --dir ui build",
       "pnpm --dir ui test"
     ],
-    "note": "Tokens and primitives are cited from source; the harnesses measure the shipped bundle."
+    "note": "Tokens and primitives are cited from source; the harnesses measure the shipped bundle.",
+    "reviewed_commit": "af7fd5f"
   },
   "docs/development/reference/routing-data.md": {
     "verified_at": "2026-11-14",
@@ -249,7 +261,8 @@
     "commands": [
       "cargo test --workspace --all-features --locked"
     ],
-    "note": "The trace and import structs define the privacy and identity boundaries."
+    "note": "The trace and import structs define the privacy and identity boundaries.",
+    "reviewed_commit": "af7fd5f"
   },
   "README.md": {
     "verified_at": "2026-11-14",
@@ -269,7 +282,8 @@
       "pnpm --dir ui build",
       "pnpm --dir ui test"
     ],
-    "note": "Key facts are anchored to the manifest, defaults, routes, bundle and data-path code; translations share the same anchors."
+    "note": "Key facts are anchored to the manifest, defaults, routes, bundle and data-path code; translations share the same anchors.",
+    "reviewed_commit": "af7fd5f"
   },
   "README.zh-CN.md": {
     "verified_at": "2026-11-14",
@@ -289,7 +303,8 @@
       "pnpm --dir ui build",
       "pnpm --dir ui test"
     ],
-    "note": "Key facts are anchored to the manifest, defaults, routes, bundle and data-path code; translations share the same anchors."
+    "note": "Key facts are anchored to the manifest, defaults, routes, bundle and data-path code; translations share the same anchors.",
+    "reviewed_commit": "af7fd5f"
   },
   "README.zh-TW.md": {
     "verified_at": "2026-11-14",
@@ -309,7 +324,8 @@
       "pnpm --dir ui build",
       "pnpm --dir ui test"
     ],
-    "note": "Key facts are anchored to the manifest, defaults, routes, bundle and data-path code; translations share the same anchors."
+    "note": "Key facts are anchored to the manifest, defaults, routes, bundle and data-path code; translations share the same anchors.",
+    "reviewed_commit": "af7fd5f"
   },
   "docs/development/runbook.md": {
     "verified_at": "2026-11-14",
@@ -325,7 +341,8 @@
     "commands": [
       "python3 -B scripts/docs_check.py"
     ],
-    "note": "Operational facts are anchored to the commands, config paths, bundle and rollback state; the start/stop steps are exercised manually."
+    "note": "Operational facts are anchored to the commands, config paths, bundle and rollback state; the start/stop steps are exercised manually.",
+    "reviewed_commit": "af7fd5f"
   },
   "docs/development/reference/migration.md": {
     "verified_at": "2026-11-14",
@@ -340,7 +357,8 @@
     "commands": [
       "cargo test --workspace --all-features --locked"
     ],
-    "note": "The plan/fingerprint/snapshot path is the source; the reference does not claim a specific client migration."
+    "note": "The plan/fingerprint/snapshot path is the source; the reference does not claim a specific client migration.",
+    "reviewed_commit": "af7fd5f"
   },
   "docs/development/reference/accounts.md": {
     "verified_at": "2026-11-14",
@@ -358,7 +376,8 @@
     "commands": [
       "cargo test --workspace --all-features --locked"
     ],
-    "note": "No token is described as crossing a view; the binding and capture paths are the source."
+    "note": "No token is described as crossing a view; the binding and capture paths are the source.",
+    "reviewed_commit": "af7fd5f"
   },
   "docs/development/reference/protocol.md": {
     "verified_at": "2026-11-14",
@@ -385,7 +404,8 @@
     "commands": [
       "cargo test --workspace --all-features --locked"
     ],
-    "note": "The decoders and encoders are the source; Usage normalisation is the invariant they preserve."
+    "note": "The decoders and encoders are the source; Usage normalisation is the invariant they preserve.",
+    "reviewed_commit": "af7fd5f"
   },
   "docs/development/reference/routing-policy.md": {
     "verified_at": "2026-11-14",
@@ -404,7 +424,8 @@
     "commands": [
       "cargo test --workspace --all-features --locked"
     ],
-    "note": "The plan builder and breaker are the source; the reference does not claim a specific provider's latency."
+    "note": "The plan builder and breaker are the source; the reference does not claim a specific provider's latency.",
+    "reviewed_commit": "af7fd5f"
   },
   "docs/development/reference/failure.md": {
     "verified_at": "2026-11-14",
@@ -417,7 +438,8 @@
     "commands": [
       "cargo test --workspace --all-features --locked"
     ],
-    "note": "FailureClass and FailureImpact are the authority; the reference does not add a second classifier."
+    "note": "FailureClass and FailureImpact are the authority; the reference does not add a second classifier.",
+    "reviewed_commit": "af7fd5f"
   },
   "docs/development/reference/observability.md": {
     "verified_at": "2026-11-14",
@@ -433,7 +455,8 @@
     "commands": [
       "cargo test --workspace --all-features --locked"
     ],
-    "note": "The record and observation structs are the source; process-local versus durable is the distinction the page preserves."
+    "note": "The record and observation structs are the source; process-local versus durable is the distinction the page preserves.",
+    "reviewed_commit": "af7fd5f"
   },
   "docs/development/reference/config.md": {
     "verified_at": "2026-11-14",
@@ -451,7 +474,8 @@
     "commands": [
       "cargo test --workspace --all-features --locked"
     ],
-    "note": "Defaults, validation and the save/apply path are the source; the document is declaration, not runtime state."
+    "note": "Defaults, validation and the save/apply path are the source; the document is declaration, not runtime state.",
+    "reviewed_commit": "af7fd5f"
   },
   "docs/development/reference/security.md": {
     "verified_at": "2026-11-14",
@@ -477,7 +501,8 @@
       "cargo test --workspace --all-features --locked",
       "python3 -B scripts/command_surface_test.py"
     ],
-    "note": "The auth layer, capabilities and redaction are the source; the threat model is stated rather than implied."
+    "note": "The auth layer, capabilities and redaction are the source; the threat model is stated rather than implied.",
+    "reviewed_commit": "af7fd5f"
   },
   "docs/development/reference/rectifier.md": {
     "verified_at": "2026-11-14",
@@ -494,7 +519,8 @@
     "commands": [
       "cargo test --workspace --all-features --locked"
     ],
-    "note": "The repair loop and its breaker exception are the source; no retry is described as health-affecting."
+    "note": "The repair loop and its breaker exception are the source; no retry is described as health-affecting.",
+    "reviewed_commit": "af7fd5f"
   },
   "docs/development/reference/outcome.md": {
     "verified_at": "2026-11-14",
@@ -510,7 +536,8 @@
     "commands": [
       "cargo test --workspace --all-features --locked"
     ],
-    "note": "The value model and validation are the source; unknown cost and no-signal feedback remain explicit."
+    "note": "The value model and validation are the source; unknown cost and no-signal feedback remain explicit.",
+    "reviewed_commit": "af7fd5f"
   },
   "docs/development/reference/file-transactions.md": {
     "verified_at": "2026-11-14",
@@ -521,7 +548,8 @@
     "commands": [
       "cargo test --workspace --all-features --locked"
     ],
-    "note": "Recovery is forward-only; a committed transaction is never rolled back by this module."
+    "note": "Recovery is forward-only; a committed transaction is never rolled back by this module.",
+    "reviewed_commit": "af7fd5f"
   },
   "docs/development/reference/model-catalog.md": {
     "verified_at": "2026-11-14",
@@ -531,7 +559,8 @@
     "commands": [
       "cargo test --workspace --all-features --locked"
     ],
-    "note": "The catalogue mapping and lookup rules are the source; prices are not taken from models.dev."
+    "note": "The catalogue mapping and lookup rules are the source; prices are not taken from models.dev.",
+    "reviewed_commit": "af7fd5f"
   },
   "docs/development/reference/request-purpose.md": {
     "verified_at": "2026-11-14",
@@ -543,7 +572,8 @@
     "commands": [
       "cargo test --workspace --all-features --locked"
     ],
-    "note": "Detection is shape-based and fail-closed; the model name is never used as evidence."
+    "note": "Detection is shape-based and fail-closed; the model name is never used as evidence.",
+    "reviewed_commit": "af7fd5f"
   },
   "docs/development/reference/client-attribution.md": {
     "verified_at": "2026-11-14",
@@ -553,7 +583,8 @@
     "commands": [
       "cargo test --workspace --all-features --locked"
     ],
-    "note": "Reporting attribution is separate from routing identity; only a credential binding is Strong."
+    "note": "Reporting attribution is separate from routing identity; only a credential binding is Strong.",
+    "reviewed_commit": "af7fd5f"
   },
   "docs/development/reference/implementation-contracts.md": {
     "verified_at": "2026-11-14",
@@ -584,6 +615,7 @@
     "commands": [
       "cargo test --workspace --all-features --locked"
     ],
-    "note": "AGENTS routes here; the contracts are anchored to the modules that enforce them."
+    "note": "AGENTS routes here; the contracts are anchored to the modules that enforce them.",
+    "reviewed_commit": "af7fd5f"
   }
 }
