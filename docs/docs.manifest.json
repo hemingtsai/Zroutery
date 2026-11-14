@@ -283,10 +283,7 @@
       "max_lines": 250
     }
   ],
-  "pending": [
-    "docs/development/routing-data-collection-guide.md",
-    "docs/development/skin-spec-md3-fluent.md"
-  ],
+  "pending": [],
   "ignore": [
     "docs/images/**",
     "docs/licenses/**",

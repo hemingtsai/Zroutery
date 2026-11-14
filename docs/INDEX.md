@@ -53,8 +53,6 @@ These documents are still in the legacy shape. Each is either archived or rewrit
 
 | Document |
 |---|
-| [docs/development/routing-data-collection-guide.md](development/routing-data-collection-guide.md) |
-| [docs/development/skin-spec-md3-fluent.md](development/skin-spec-md3-fluent.md) |
 
 ## Archive
 
@@ -67,6 +65,6 @@ Audits, findings, triage and risk discussions live in GitHub Issues. Use the `au
 ## Health
 
 - active documents: 27
-- pending migration: 2
+- pending migration: 0
 - source anchors are checked by `scripts/docs_sources.py`
 - links, sizes and freshness are checked by `scripts/docs_check.py`

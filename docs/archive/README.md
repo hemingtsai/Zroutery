@@ -50,6 +50,8 @@ discussed in GitHub Issues, not here.
 | `docs/development/newapi-adapter.md` | `records/newapi-adapter.md` | B | `reference/providers.md` |
 | `docs/development/opencode-zen.md` | `records/opencode-zen.md` | B | `reference/providers.md` |
 | `docs/development/codex-auto-rectifier.md` | `records/codex-auto-rectifier.md` | B | `reference/providers.md` |
+| `docs/development/routing-data-collection-guide.md` | `records/routing-data-collection-guide.md` | B | `reference/routing-data.md` |
+| `docs/development/skin-spec-md3-fluent.md` | `records/skin-spec-md3-fluent.md` | B | `reference/ui-design-system.md` |
 | `docs/development/node-status/` (84 JSON) | `records/node-status/` | D | `current-state.md`, Issues |
 
 ## Rules
