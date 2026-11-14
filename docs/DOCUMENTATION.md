@@ -120,7 +120,7 @@ The default body limit is 32 MiB (`crates/zroutery-core/src/config/server.rs::Se
 | Document | Limit |
 |---|---|
 | `AGENTS.md` | 150 lines |
-| `docs/development/current-state.md` | 50 lines |
+| `docs/development/current-state.md` | no cap; it is a render of `state.json` |
 | `docs/development/verification.md` | 300 lines |
 | `CONTRIBUTING.md` | 60 lines |
 | `docs/DOCUMENTATION.md` | 200 lines |

@@ -112,8 +112,7 @@
       "status": "active",
       "owner": "docs",
       "generated": true,
-      "summary": "Generated snapshot: gates, open issues, blockers, flaky gates, last full green.",
-      "max_lines": 50
+      "summary": "Generated snapshot: gates, open issues, blockers, flaky gates, last full green."
     },
     {
       "path": "docs/development/verification.md",

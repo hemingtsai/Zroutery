@@ -5,6 +5,10 @@
 The pages in this directory are the source-verified subsystem references. A page
 owns its facts; other documents link to it instead of restating it.
 
+Coverage is explicit in [`docs/coverage.json`](../../coverage.json): every public
+Core module is `owned`, `covered_elsewhere` with a named place, or `unowned` with
+a reason. `scripts/coverage_check.py` fails on silence.
+
 ## Core
 
 | Module area | Page |

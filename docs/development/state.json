@@ -62,6 +62,12 @@
       "detail": "three READMEs have matching headings, fences, images and anchors"
     },
     {
+      "name": "module coverage",
+      "status": "pass",
+      "command": "python3 -B scripts/coverage_check.py",
+      "detail": "36 public Core modules owned"
+    },
+    {
       "name": "whitespace",
       "status": "pass",
       "command": "git diff --check",

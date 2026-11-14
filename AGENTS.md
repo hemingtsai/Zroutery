@@ -3,10 +3,11 @@
 > Authority: normative · Owner: docs · Last verified: 2026-11-14 · Verified by: `scripts/docs_check.py`
 
 This is the only agent entry. Read
-[docs/development/current-state.md](docs/development/current-state.md) first: it
-is the generated truth about what is red and what is blocked. If this file and a
-generated file disagree, the generated file wins for facts; this file wins for
-permission and process.
+[docs/development/state.json](docs/development/state.json) first: it is the
+machine truth about what is red and what is blocked, validated against
+`state.schema.json`. [docs/development/current-state.md](docs/development/current-state.md)
+is its rendered view. If this file and the state disagree, the state wins for
+facts; this file wins for permission and process.
 
 ## Project layout
 
