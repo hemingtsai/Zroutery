@@ -1,0 +1,187 @@
+{
+  "schema_version": 1,
+  "docs": [
+    {
+      "path": "AGENTS.md",
+      "title": "Agent entry",
+      "type": "entry",
+      "authority": "normative",
+      "audience": ["agent"],
+      "status": "active",
+      "owner": "docs",
+      "summary": "The only agent entry: current state, non-negotiables, change matrix, verification pointers, stop conditions.",
+      "max_lines": 150,
+      "triggers": [
+        "src-tauri/src/lib.rs",
+        "src-tauri/build.rs",
+        "src-tauri/capabilities/**",
+        "ui/src/api.ts",
+        "ui/mock-bridge.ts"
+      ]
+    },
+    {
+      "path": "CONTRIBUTING.md",
+      "title": "Contributing",
+      "type": "guide",
+      "authority": "guide",
+      "audience": ["human"],
+      "status": "active",
+      "owner": "docs",
+      "summary": "Human onboarding: toolchain, commit format, where the rules live.",
+      "max_lines": 60
+    },
+    {
+      "path": "README.md",
+      "title": "Zroutery",
+      "type": "guide",
+      "authority": "guide",
+      "audience": ["user"],
+      "status": "active",
+      "owner": "docs",
+      "summary": "User-facing overview, setup and platform support."
+    },
+    {
+      "path": "README.zh-CN.md",
+      "title": "Zroutery (Simplified Chinese)",
+      "type": "guide",
+      "authority": "guide",
+      "audience": ["user"],
+      "status": "active",
+      "owner": "docs",
+      "summary": "Simplified Chinese mirror of README.md."
+    },
+    {
+      "path": "docs/DOCUMENTATION.md",
+      "title": "Documentation Standard",
+      "type": "normative",
+      "authority": "normative",
+      "audience": ["human", "agent"],
+      "status": "active",
+      "owner": "docs",
+      "summary": "Document types, authority, source verification, sizes, archive and change synchronization.",
+      "max_lines": 200
+    },
+    {
+      "path": "docs/INDEX.md",
+      "title": "Documentation Index",
+      "type": "index",
+      "authority": "index",
+      "audience": ["human", "agent"],
+      "status": "active",
+      "owner": "docs",
+      "generated": true,
+      "summary": "Generated map of active, pending and archived documents plus the external issue entry points.",
+      "max_lines": 250
+    },
+    {
+      "path": "docs/development/README.md",
+      "title": "Development Record",
+      "type": "index",
+      "authority": "index",
+      "audience": ["human", "agent"],
+      "status": "active",
+      "owner": "docs",
+      "summary": "Short signpost into the development records."
+    },
+    {
+      "path": "docs/development/current-state.md",
+      "title": "Current state",
+      "type": "fact",
+      "authority": "fact",
+      "audience": ["human", "agent"],
+      "status": "active",
+      "owner": "docs",
+      "generated": true,
+      "summary": "Generated snapshot: gates, open issues, blockers, flaky gates, last full green.",
+      "max_lines": 50
+    },
+    {
+      "path": "docs/development/verification.md",
+      "title": "Verification",
+      "type": "normative",
+      "authority": "normative",
+      "audience": ["human", "agent"],
+      "status": "active",
+      "owner": "backend",
+      "summary": "The only toolchain and gate definition, including what CI does and does not run.",
+      "max_lines": 300
+    },
+    {
+      "path": "docs/development/architecture.md",
+      "title": "Architecture",
+      "type": "normative",
+      "authority": "normative",
+      "audience": ["human", "agent"],
+      "status": "active",
+      "owner": "backend",
+      "summary": "Layers, boundaries and invariants of Core, the desktop shell and the learning stack.",
+      "max_lines": 400
+    },
+    {
+      "glob": "docs/development/decisions/*.md",
+      "title": "Architecture decision records",
+      "type": "adr",
+      "authority": "normative",
+      "audience": ["human", "agent"],
+      "status": "active",
+      "owner": "docs",
+      "summary": "Accepted decisions and their consequences; superseded records stay in place."
+    }
+  ],
+  "pending": [
+    "docs/development/WORKFLOW.md",
+    "scripts/desktop_packaging_record.md",
+    "docs/development/account-surface-plan.md",
+    "docs/development/backend-optimization-execution.md",
+    "docs/development/backend-optimization-plan.md",
+    "docs/development/cc-switch-design-notes.md",
+    "docs/development/client-attribution-takeover-audit.md",
+    "docs/development/codex-auto-rectifier.md",
+    "docs/development/dependency-dag.md",
+    "docs/development/evidence-registry.md",
+    "docs/development/godfile-split-plan.md",
+    "docs/development/history-treatment-map.md",
+    "docs/development/ml-closed-loop-report.md",
+    "docs/development/newapi-adapter.md",
+    "docs/development/opencode-zen.md",
+    "docs/development/perf-baseline.md",
+    "docs/development/regression-ledger.md",
+    "docs/development/repository-audit-2026-09-25.md",
+    "docs/development/roadmap.md",
+    "docs/development/routing-data-collection-guide.md",
+    "docs/development/routing-learning-closure-audit.md",
+    "docs/development/skin-spec-md3-fluent.md",
+    "docs/development/tag-remap.md",
+    "docs/development/ui-optimization-plan.md",
+    "docs/development/ui-reference-experience-review-2026-11-06.md",
+    "docs/development/upgrade-contracts.md",
+    "docs/development/upgrade-execution.md",
+    "docs/development/upgrade-master-plan.md",
+    "docs/development/upstream-sse-errors-2026-11-07.md"
+  ],
+  "ignore": [
+    "docs/images/**",
+    "docs/licenses/**",
+    "docs/development/node-status/**",
+    "node_modules/**",
+    "target/**"
+  ],
+  "triggers": {
+    ".github/workflows/**": ["docs/development/verification.md"],
+    "scripts/*gate*.py": ["docs/development/verification.md"],
+    "scripts/ui_*.py": ["docs/development/verification.md"],
+    "scripts/docs_*.py": ["docs/development/verification.md"],
+    "Cargo.toml": ["docs/development/verification.md"],
+    "ui/package.json": ["docs/development/verification.md"],
+    "src-tauri/capabilities/**": ["AGENTS.md"],
+    "src-tauri/build.rs": ["AGENTS.md"],
+    "ui/src/api.ts": ["AGENTS.md"],
+    "ui/mock-bridge.ts": ["AGENTS.md"]
+  },
+  "canonical": [
+    {"fact": "toolchain", "home": "docs/development/verification.md"},
+    {"fact": "gates", "home": "docs/development/verification.md"},
+    {"fact": "current-state", "home": "docs/development/current-state.md"},
+    {"fact": "commit-contract", "home": "docs/development/WORKFLOW.md"}
+  ]
+}
