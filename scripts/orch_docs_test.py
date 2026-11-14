@@ -521,10 +521,13 @@ def main(argv: Iterable[str] | None = None) -> int:
     )
     args = parser.parse_args(list(argv) if argv is not None else None)
 
-    status = 0
+    # The validator is retired and its legacy documents were archived, so the
+    # real tree intentionally no longer contains them. CI runs --self-test only;
+    # it must prove the rules still reject, not re-validate the archived tree.
     if args.self_test:
-        status |= _run_self_test()
+        return _run_self_test()
 
+    status = 0
     root = Path(args.root)
     if not _development_dir(root).is_dir():
         print(f"orch-docs: no docs/development under {root}", file=sys.stderr)
