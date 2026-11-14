@@ -364,7 +364,13 @@
       "crates/zroutery-core/src/media/transform.rs": "sha256:e880137c2975afcc3e0af7f8dc4323fe8ecfc94c8c34e5135c2985911f8bab6c",
       "crates/zroutery-core/src/error.rs": "sha256:81cc8c251bc9f6cba72b525fd7361979faf4425b0e32c323cee3c0b7da241c7d",
       "crates/zroutery-core/src/config/provider.rs": "sha256:5e5c0ad707bae62fcf23bb5b20b0dd1a21a44dc142e3fdb995c4c04bced9391b",
-      "crates/zroutery-core/src/server/pipeline/mod.rs": "sha256:ff5cea3f27a818b38b2a2882c6b64656d342d4344d4c1bee21bdbfaadd5e7320"
+      "crates/zroutery-core/src/server/pipeline/mod.rs": "sha256:ff5cea3f27a818b38b2a2882c6b64656d342d4344d4c1bee21bdbfaadd5e7320",
+      "crates/zroutery-core/src/protocol/anthropic/request_in.rs": "sha256:978137ada580175dbe509ad25b23a851c7ddaa055a06ea5e9ee3cee862be1892",
+      "crates/zroutery-core/src/protocol/anthropic/request_out.rs": "sha256:1ded1b5c63d00767d8710a3267fd75b33d54b578bec0d9ddb74cc68a71a2f458",
+      "crates/zroutery-core/src/protocol/openai/request_in.rs": "sha256:60bba2fb792317ec36248c91229fab1ef9ae98e013770cf8274ff13b13e7bed9",
+      "crates/zroutery-core/src/protocol/openai/request_out.rs": "sha256:c00154fc6f5880e192173d52d3da97e016f690df4653fa9d09d8e2546d3cb852",
+      "crates/zroutery-core/src/protocol/gemini/request_in.rs": "sha256:0267a47e5040b2676a10282783b2e6cac7477c480dff605e96ac1064b2d7de2c",
+      "crates/zroutery-core/src/protocol/gemini/request_out.rs": "sha256:397de88b0e0defd807fb55ac1891f2c00bbb6f9d909b0f7e42e18f5ecde8cb86"
     },
     "commands": [
       "cargo test --workspace --all-features --locked"
