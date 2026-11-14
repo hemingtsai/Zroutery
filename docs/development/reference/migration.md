@@ -12,7 +12,7 @@ and planning are separate from execution.
 detect client state
   -> build MigrationPlan (ordered steps + snapshot target)
   -> preview with a fingerprint
-  -> execute: snapshot, then apply steps
+  -> snapshot the target file (desktop), then execute: apply steps
   -> rollback: restore the snapshot
 ```
 
@@ -28,9 +28,11 @@ each carrying a `MigrationAction`
    fingerprint no longer matches the file it was computed against
    (`src-tauri/src/migration_commands.rs::migration_apply`,
    `src-tauri/src/migration.rs::fingerprint`).
-2. **Snapshot before write.** The executor captures the original file before it
-   replaces anything; a rollback restores those bytes, not a regenerated guess
-   (`crates/zroutery-core/src/migration/executor.rs::execute`,
+2. **Snapshot before write.** The desktop takes the snapshot before it calls the
+   executor, and refuses to run when no bytes could be captured; a rollback
+   restores those bytes, not a regenerated guess
+   (`src-tauri/src/state/migration.rs::migration_apply`,
+   `crates/zroutery-core/src/migration/executor.rs::create_snapshot`,
    `crates/zroutery-core/src/migration/executor.rs::snapshot_from_disk`).
 3. **Rollback needs a snapshot.** A record without a snapshot offers no undo; the
    status says so rather than pretending a rollback is available
@@ -41,8 +43,11 @@ each carrying a `MigrationAction`
 5. **External validation is typed.** A JSON file is parsed; an unsupported format
    is refused rather than accepted without reading
    (`crates/zroutery-core/src/migration/state.rs::MigrationAction`).
-6. **The record survives the process.** `MigrationStore` persists the plan,
-   result and snapshot reference (`crates/zroutery-core/src/migration/store.rs::MigrationStore`).
+6. **The record survives the process.** `MigrationStore` persists the state and
+   the completed results; the rollback snapshot is a separate sidecar file
+   beside the manifest, not part of it
+   (`crates/zroutery-core/src/migration/store.rs::MigrationStore`,
+   `crates/zroutery-core/src/migration/store.rs::save_snapshot`).
 
 ## Operations
 
@@ -80,11 +85,14 @@ start/stop happen in the executor.
 - `crates/zroutery-core/src/migration/state.rs::MigrationAction`
 - `crates/zroutery-core/src/migration/executor.rs::MigrationExecutor`
 - `crates/zroutery-core/src/migration/executor.rs::execute`
+- `crates/zroutery-core/src/migration/executor.rs::create_snapshot`
 - `crates/zroutery-core/src/migration/executor.rs::rollback`
 - `crates/zroutery-core/src/migration/executor.rs::snapshot_from_disk`
 - `crates/zroutery-core/src/migration/result.rs::MigrationResult`
 - `crates/zroutery-core/src/migration/result.rs::MigrationSnapshot`
 - `crates/zroutery-core/src/migration/store.rs::MigrationStore`
+- `crates/zroutery-core/src/migration/store.rs::save_snapshot`
+- `src-tauri/src/state/migration.rs::migration_apply`
 - `src-tauri/src/migration.rs::fingerprint`
 - `src-tauri/src/migration_commands.rs::migration_apply`
 - `src-tauri/src/migration_commands.rs::migration_rollback`

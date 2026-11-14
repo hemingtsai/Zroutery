@@ -27,22 +27,27 @@ A policy can narrow and order what a client is allowed to reach:
   (`crates/zroutery-core/src/policy/policy.rs::RoutingPolicy`);
 - an `EligibilityCheck` records why a candidate was rejected
   (`crates/zroutery-core/src/policy/eligibility.rs::EligibilityCheck`);
-- a candidate decision carries the planned identity and selected candidate
-  (`crates/zroutery-core/src/policy/decision.rs::CandidateDecision`).
+- a candidate decision records one candidate's eligibility, rejection reason and
+  score (`crates/zroutery-core/src/policy/decision.rs::CandidateDecision`); the
+  selected candidate and the planned identity live on the route decision
+  (`crates/zroutery-core/src/policy/decision.rs::RouteDecision`).
 
 Policy is a filter and an ordering input. It cannot reintroduce a candidate that
 the capability or provider gate rejected.
 
 ## The plan
 
-The router's `plan` method builds the ordered candidates
+The router builds the ordered candidates: `plan` for a bare plan,
+`plan_with_policy` and `plan_with_policy_order` when a policy applies
 (`crates/zroutery-core/src/router/plan.rs::plan`,
+`crates/zroutery-core/src/router/plan.rs::plan_with_policy`,
 `crates/zroutery-core/src/router/mod.rs::Router`):
 
 1. resolve the requested model;
 2. reject a disabled provider;
 3. apply the hard capability gate (tools, vision, thinking);
-4. apply the policy's requirements and ordering;
+4. apply the policy's requirements, preferences and ordering
+   (`crates/zroutery-core/src/router/plan.rs::plan_with_policy`);
 5. drop candidates whose breaker refuses;
 6. order the survivors by the configured strategy.
 
@@ -57,7 +62,7 @@ and a tier see the same hard gate.
 
 | Strategy | Order |
 |---|---|
-| `Priority` | stable priority order; equal priorities keep registry/policy order |
+| `Priority` | priority order; equal priorities are broken by exposed id, so the order is a function of the configuration alone (`crates/zroutery-core/src/router/helpers.rs::by_priority`) |
 | `WeightedRandom` | weighted across healthy candidates |
 | `RoundRobin` | rotation across healthy candidates |
 | `LowestLatency` | lowest observed latency first |
@@ -86,9 +91,9 @@ exception; it is durable.
 
 The plan is the failover order. An attempt fails, the failure is classified, and
 the loop decides whether to retry the same candidate or move to the next one;
-the order comes from the router, not from the caller. A plan can be empty; that
-is reported as no candidate rather than silently served by a fallback that was
-rejected.
+the order comes from the router, not from the caller. An empty candidate set is
+the `NoCandidate` error, never an empty plan served by a rejected fallback
+(`crates/zroutery-core/src/router/selection.rs::plan_candidates`).
 
 ## Failure modes
 
@@ -113,6 +118,11 @@ rejected.
 - `crates/zroutery-core/src/policy/policy.rs::RoutingPolicy`
 - `crates/zroutery-core/src/policy/eligibility.rs::EligibilityCheck`
 - `crates/zroutery-core/src/policy/decision.rs::CandidateDecision`
+- `crates/zroutery-core/src/router/selection.rs::plan_candidates`
+- `crates/zroutery-core/src/router/helpers.rs::by_priority`
+- `crates/zroutery-core/src/router/plan.rs::plan_with_policy`
+- `crates/zroutery-core/src/policy/decision.rs::CandidateDecision`
+- `crates/zroutery-core/src/policy/decision.rs::RouteDecision`
 - `crates/zroutery-core/src/config/routing.rs::RoutingStrategy`
 - `crates/zroutery-core/src/election.rs::Election`
 - `crates/zroutery-core/src/election.rs::ScoringConfig`

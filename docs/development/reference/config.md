@@ -10,9 +10,13 @@ the UI is the editing surface.
 
 `AppConfig` is the document (`crates/zroutery-core/src/config/app.rs::AppConfig`):
 
-- `server`, `providers`, `models`, `routing`, `budgets`, `classifier`, `vision`;
-- optional `ml_routing` (feature `ml`) and provider `accounts`
-  (feature `account`).
+- `server`, `routing`, `classifier`, `window`, `notifications`, `vision`,
+  `balances`, `providers`, `models`, `budgets`;
+- optional `shadow` and `ml_routing` (feature `ml`); provider `accounts` is
+  declared unconditionally, while the account subsystem that reads it is gated
+  by the `account` feature
+  (`crates/zroutery-core/src/config/registry.rs::ProviderConfig`,
+  `crates/zroutery-core/src/lib.rs::account`).
 
 Provider entries carry a `key_ref`, not a key
 (`crates/zroutery-core/src/config/registry.rs::ProviderConfig`). A model entry

@@ -10,7 +10,7 @@ clears the durable trace log explicitly.
 
 | Family | Lifetime | Contains | Owner |
 |---|---|---|---|
-| request log | process memory, bounded | metadata for the Activity page | `Stats` |
+| request log (recent ring) | process memory, bounded; durable usage facts live in the runtime store | metadata for the Activity page | `Stats`, runtime store |
 | spend ledger | durable (`spend.json` / runtime store) | settled cost per scope, period and currency | accounting |
 | routing traces | durable JSONL, operator-cleared | decision-time features, attempt outcomes, execution identity | ML |
 | imported history | durable SQLite facts | a source's accounting rows, normalised | history import |
@@ -81,3 +81,5 @@ imported day total is not a local request.
 - `crates/zroutery-core/src/history_import/mod.rs::ImportedFact`
 - `crates/zroutery-core/src/history_import/mod.rs::ImportPreview`
 - `crates/zroutery-core/src/runtime_store/imports.rs::commit_import`
+- `crates/zroutery-core/src/stats.rs::Stats`
+- `crates/zroutery-core/src/runtime_store/history.rs::query_usage`

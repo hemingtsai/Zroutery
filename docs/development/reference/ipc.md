@@ -17,13 +17,19 @@ pair of files below and the command-surface gate.
   capability files grant them per window
   (`src-tauri/capabilities/default.json::permissions`,
   `src-tauri/capabilities/tray-panel.json::permissions`).
-- `scripts/command_surface_test.py` compares the three lists in both directions.
+- `scripts/command_surface_test.py` compares the frontend contract against the
+  registered handler and the capability grants against the handler. It does not
+  read `APP_COMMANDS`, and nothing in the repository compares the app manifest
+  with `generate_handler!`.
 
 ## Invariants
 
-1. **The handler list and the app manifest agree.** A command registered but not
-   declared is refused at the IPC boundary; a declaration with no handler is a
-   surface wider than the tree. The gate fails on either difference
+1. **The handler list and the app manifest are kept equal by hand.** A command
+   registered but not declared is refused at the IPC boundary; a declaration
+   with no handler is a surface wider than the tree. No script compares the two
+   lists (`src-tauri/build.rs::APP_COMMANDS`,
+   `src-tauri/src/lib.rs::generate_handler`); the gate covers the frontend
+   contract and the capability grants instead
    (`scripts/command_surface_test.py::main`).
 2. **Capabilities grant exactly what is registered.** Every app command gets a
    grant in `default.json`; the tray panel gets only its read/action subset. A
@@ -56,7 +62,7 @@ pair of files below and the command-surface gate.
 | Credentials and configuration | `save_config`, `set_provider_key`, `clear_provider_key` | keys go to the credential store, not the document |
 | Learning stack | `get_ml_status`, `get_ml_shadow`, `run_ml_promotion_round` | feature `ml`; gated by `ml_available` |
 | Accounts | `reconcile_accounts`, `set_account_key`, `set_account_inference_key` | feature `account`; panel token and inference keys are separate |
-| Check-in and token capture | `start_checkin`, `start_token_capture`, `complete_token_capture` | feature `account-maint`; browser-driven |
+| Check-in and token capture | `start_checkin`, `start_token_capture`, `complete_token_capture` | check-in needs `account-maint`; `api_checkin` also needs `newapi`; token capture needs `account-maint` + `account`; browser-driven |
 | Migration and takeover | `migration_previews`, `migration_apply`, `takeover_adopt` | file-writing; preview and fingerprint required |
 | Tray panel | `get_tray_snapshot`, `tray_set_gateway_running` | second capability file, minimal surface |
 
@@ -72,6 +78,8 @@ pair of files below and the command-surface gate.
 
 ## Not implemented
 
+- No check that `APP_COMMANDS` and `generate_handler!` agree; a divergence is a
+  review question, not a gate.
 - Mock-bridge coverage is not enforced: a fixture may be missing while the real
   command exists, and the preview rejects at invoke time. `command_surface_test`
   checks the contract against Rust, not against the mock.

@@ -61,7 +61,10 @@ A request reaches exactly one terminal state and is charged once
   (`crates/zroutery-core/src/server/pipeline/lifecycle.rs::TerminalKind`).
 - An auxiliary call made on a request's behalf (a vision description) is charged
   to the provider and tier that answered it; it is not folded into the main
-  request's settlement (`crates/zroutery-core/src/server/ledger.rs::charge_auxiliary`).
+  request's settlement. It settles through the same durable attempt path as any
+  other attempt
+  (`crates/zroutery-core/src/server/pipeline/auxiliary.rs::AuxiliaryAttempt`,
+  `crates/zroutery-core/src/server/accounting.rs::persist_attempt`).
 
 ## Budgets
 
@@ -81,14 +84,17 @@ before the ledger check; the permit is held until the terminal settlement
 per scope is therefore in flight across the line, and the next request reads a
 ledger that already includes the crossing spend.
 
-The check itself is `crates/zroutery-core/src/budget.rs::check`; the durable
-accumulator is `crates/zroutery-core/src/budget.rs::Ledger`. The ledger is
-charged with the settled cost
-(`crates/zroutery-core/src/server/ledger.rs::charge`), and the desktop writes its
-projection through `flush_ledger` and `save_ledger`
+The check itself is `crates/zroutery-core/src/budget.rs::check`;
+`crates/zroutery-core/src/budget.rs::Ledger` is the value type the check reads.
+The durable accumulator is the runtime store's `accounting_ledger` table:
+attempts and settlements commit there
+(`crates/zroutery-core/src/runtime_store/accounting.rs::record_attempt`,
+`crates/zroutery-core/src/runtime_store/accounting.rs::settle`), and the server
+publishes the committed ledger to the in-process one
+(`crates/zroutery-core/src/server/accounting.rs::publish_accounting_ledger`).
+The desktop writes the spend projection through `flush_ledger` and `save_ledger`
 (`src-tauri/src/state/budget.rs::flush_ledger`,
-`src-tauri/src/store.rs::save_ledger`). Durable accounting facts also live in the
-runtime store (`crates/zroutery-core/src/runtime_store.rs::RuntimeStore`).
+`src-tauri/src/store.rs::save_ledger`).
 
 The classifier pool is the one scope exception: a tier budget neither rejects nor
 degrades a side request, because the pool is chosen by classifier configuration
@@ -124,8 +130,11 @@ rather than tier policy. Global and provider limits still apply
 - `crates/zroutery-core/src/budget.rs::Budget`
 - `crates/zroutery-core/src/budget.rs::check`
 - `crates/zroutery-core/src/budget.rs::Ledger`
+- `crates/zroutery-core/src/runtime_store/accounting.rs::record_attempt`
+- `crates/zroutery-core/src/runtime_store/accounting.rs::settle`
+- `crates/zroutery-core/src/server/accounting.rs::publish_accounting_ledger`
+- `crates/zroutery-core/src/server/pipeline/auxiliary.rs`
 - `crates/zroutery-core/src/server/state.rs::AdmissionGuard`
-- `crates/zroutery-core/src/server/ledger.rs::charge`
 - `crates/zroutery-core/src/server/ledger.rs::classifier_budget_verdict`
 - `src-tauri/src/state/budget.rs::flush_ledger`
 - `src-tauri/src/store.rs::save_ledger`

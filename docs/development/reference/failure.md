@@ -11,13 +11,15 @@ is covered by [accounting.md](accounting.md).
 The error's `classified` method is the single mapping from an error to a
 `ClassifiedFailure` (`crates/zroutery-core/src/error.rs::classified`).
 
-- `FailureClass` names the cause: transport, timeout, rate limit,
-  authentication, provider unavailable, provider rejected, protocol, capability,
-  invalid request, client cancelled, missing key
-  (`crates/zroutery-core/src/failure.rs::FailureClass`).
-- `FailureImpact` carries the decisions as four bits: affects observation,
-  affects the circuit breaker, retryable on the same candidate, fallbackable to
-  another candidate, and whether it is a provider fault
+- `FailureClass` names the cause in one canonical vocabulary: transport, timeout,
+  rate limit, authentication, provider unavailable, provider rejected, protocol,
+  capability, invalid request, client cancelled, missing key, over budget, no
+  candidate, configuration, quota exhausted, interrupted, unknown and balance
+  exhausted (`crates/zroutery-core/src/failure.rs::FailureClass`,
+  `crates/zroutery-core/src/failure.rs::FailureClass::ALL`).
+- `FailureImpact` carries five boolean decisions: affects observation, affects
+  the circuit breaker, retryable on the same candidate, fallbackable to another
+  candidate, and whether the failure is a provider fault
   (`crates/zroutery-core/src/failure.rs::FailureImpact`).
 - A caller derives retry and failover behaviour from the impact, not from a
   second string match on the error (`crates/zroutery-core/src/failure.rs::ClassifiedFailure`).
@@ -63,10 +65,13 @@ request (`crates/zroutery-core/src/server/pipeline/lifecycle.rs::TerminalKind`):
 | Terminal | Meaning |
 |---|---|
 | `Served` | the upstream answer was delivered |
-| `Failed` | a canonical failure class ended the request |
-| `ClientDisconnected` | the client left; output may be truncated |
-| `ClientCancelled` | the client asked to cancel |
-| `InterruptedStream` | the upstream ended before a normal terminal; output already sent is kept |
+| `Failed` | a canonical failure class ended the request; it carries the class, the retry-after floor and the safe log message |
+| `ClientDisconnected { emitted }` | the client left before the answer finished; `emitted: true` is an interrupted stream whose already-sent output is kept, `emitted: false` is a cancel before the first byte |
+| `ClientCancelled` | the client explicitly cancelled |
+
+`InterruptedStream` is the transport error that feeds `ClientDisconnected {
+emitted: true }`, not a separate terminal variant
+(`crates/zroutery-core/src/error.rs::Error`).
 
 ## Session binding
 

@@ -10,20 +10,28 @@ and covered by [accounting.md](accounting.md).
 
 A request record is metadata, not content:
 
-- `RequestRecord` carries the request id, client, resolved model/provider, tier,
-  attempts, latency, usage, cost and terminal status
-  (`crates/zroutery-core/src/stats.rs::RequestRecord`);
+- `RequestRecord` carries the request id, client, resolved model/provider, the
+  tier a request was escalated away from, attempts, latency, usage, cost and
+  terminal status (`crates/zroutery-core/src/stats.rs::RequestRecord`);
 - `RecordBuilder` builds exactly one record per request
   (`crates/zroutery-core/src/stats.rs::RecordBuilder`);
-- The stats store inserts it, `recent` returns the newest slice, `summary`
-  aggregates by model/provider/tier/client and keeps currencies separate
+- The stats store inserts it, `recent` returns the newest slice, and `summary`
+  aggregates by model, request kind and client, keeping currencies separate
   (`crates/zroutery-core/src/stats.rs::Stats`,
   `crates/zroutery-core/src/stats.rs::Stats::record`,
-  `crates/zroutery-core/src/stats.rs::Stats::summary`);
-- the log is bounded by the configured `log_limit`; it is in memory and cleared
-  on restart (`crates/zroutery-core/src/stats.rs::Stats::clear_history`).
+  `crates/zroutery-core/src/stats.rs::Stats::summary`,
+  `crates/zroutery-core/src/stats.rs::StatsSummary`);
+- the in-memory ring is bounded by the configured `log_limit` and is not
+  restored on restart
+  (`crates/zroutery-core/src/stats.rs::Stats::clear_history`).
 
 A prompt or response body is never stored in a record.
+
+The ring is not the only copy of a request: when a runtime store is attached,
+`Stats` reloads committed usage rows into its totals and serves paged history,
+so a restart loses the recent view but not the usage history
+(`crates/zroutery-core/src/stats.rs::Stats::attach_store`,
+`crates/zroutery-core/src/runtime_store/history.rs::query_usage`).
 
 ## Health and latency
 
@@ -43,9 +51,11 @@ not the same as "every model healthy"; it means there are no samples yet.
 
 ## Activity projection
 
-The dashboard's Activity view is a bounded projection, not a second store
-(`crates/zroutery-core/src/server/projection_log.rs::ProjectionLog`). It holds
-the recent records the UI reads; clearing it is an explicit operation.
+The dashboard's Activity view is assembled from the live health snapshot, the
+stats summary and the newest 200 records; it is a read, not a second store
+(`src-tauri/src/state/budget.rs::Desktop::activity`). The accounting projection
+log is a separate mechanism and is not the Activity feed
+(`crates/zroutery-core/src/server/projection_log.rs::ProjectionLog`).
 
 ## Sessions and response retention
 
@@ -69,8 +79,10 @@ the recent records the UI reads; clearing it is an explicit operation.
   decision summary, status, failure class, planned/last-attempted/served labels,
   usage, costs and the inert recorded clock
   (`crates/zroutery-core/src/observability.rs::RequestProjection`);
-- `CorrelationKeys` names the four UUID-derived ids (`out_`, `req_`, `dec-`,
-  `att_`) (`crates/zroutery-core/src/observability.rs::CorrelationKeys`).
+- `CorrelationKeys` names the three request-scoped ids (`out_`, `req_`, `dec_`)
+  (`crates/zroutery-core/src/observability.rs::CorrelationKeys`); the attempt id
+  (`att_`) lives on the attempt projection
+  (`crates/zroutery-core/src/observability.rs::AttemptProjection`).
 
 The projection is pure: no I/O, clock read, interior state or thread. Ordering
 is by identifiers through the projection's `content_order` method, never by a
@@ -93,7 +105,8 @@ closed failure class, impact bits and HTTP status cross the boundary. The
 
 ## Not implemented
 
-- No durable request log; use the runtime store or an export for history.
+- The recent-request ring is not durable; usage history is read from the runtime
+  store through the history query and export paths.
 - No health carried across restarts.
 - No prompt/response content in any observation record.
 
@@ -104,7 +117,10 @@ closed failure class, impact bits and HTTP status cross the boundary. The
 - `crates/zroutery-core/src/stats.rs::Stats`
 - `crates/zroutery-core/src/stats.rs::Stats::record`
 - `crates/zroutery-core/src/stats.rs::Stats::summary`
+- `crates/zroutery-core/src/stats.rs::StatsSummary`
 - `crates/zroutery-core/src/stats.rs::Stats::clear_history`
+- `crates/zroutery-core/src/stats.rs::Stats::attach_store`
+- `crates/zroutery-core/src/runtime_store/history.rs::query_usage`
 - `crates/zroutery-core/src/stats_ext.rs::StatsStore`
 - `crates/zroutery-core/src/stats_ext.rs::Ewma`
 - `crates/zroutery-core/src/stats_ext.rs::PercentileEstimator`
@@ -112,5 +128,8 @@ closed failure class, impact bits and HTTP status cross the boundary. The
 - `crates/zroutery-core/src/observation.rs::RuntimeObservation`
 - `crates/zroutery-core/src/observation.rs::HealthState`
 - `crates/zroutery-core/src/server/projection_log.rs::ProjectionLog`
+- `src-tauri/src/state/budget.rs::Desktop::activity`
+- `crates/zroutery-core/src/observability.rs::CorrelationKeys`
+- `crates/zroutery-core/src/observability.rs::AttemptProjection`
 - `crates/zroutery-core/src/session.rs::SessionStore`
 - `crates/zroutery-core/src/ir/response.rs::ResponseStore`

@@ -23,8 +23,9 @@ It does not cover model resolution; see [routing-policy.md](routing-policy.md).
 `crates/zroutery-core/src/query.rs::SideQueryKind::uses_block_verdict`).
 
 The kind is a routing intent, not a field on the protocol IR. The same model id
-can arrive as a main request or a classifier request; the model name is never
-evidence for the kind.
+can arrive as a main request or a classifier request; the model id's `[1m]`
+modifier can only nudge an existing match, never carry one
+(`crates/zroutery-core/src/classifier.rs::detect`).
 
 ## Detection
 
@@ -67,8 +68,9 @@ side-query pool (`crates/zroutery-core/src/classifier.rs::detect`).
 
 An unparseable answer is **not** an Allow. The gate is fail-closed.
 
-- `parse_verdict` accepts only exact `<block>no</block>` (allow) or
-  `<block>yes</block>` (block); prose is unparseable
+- `parse_verdict` scans for a `<block>`, `<block yes>` or `<block no>` tag pair
+  and accepts only an exact `no` (allow) or `yes` (block) between the tags;
+  surrounding prose is ignored and never mapped to a verdict
   (`crates/zroutery-core/src/classifier.rs::parse_verdict`).
 - `parse_verdict_for` dispatches to the JSON contract for Guardian: only
   `{"outcome":"allow"}` or `{"outcome":"deny"}` count
@@ -106,7 +108,8 @@ Guardian answer is not a verdict.
 
 ## Not implemented
 
-- No detection by model name; shape is the only evidence.
+- No detection by model name alone; the `[1m]` modifier can only nudge an
+  existing structural match.
 - No natural-language verdict mapping; prose is unparseable and closes the gate.
 - No silent approval when detection is uncertain.
 

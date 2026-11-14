@@ -22,8 +22,9 @@ shape, then sends again.
 
 ## Repair loop
 
-- Each enabled rectifier may run up to three repair rounds; a rectifier is tried
-  at most once per request (`crates/zroutery-core/src/server/pipeline/repair.rs::try_rectify_buffered`).
+- Each enabled rectifier that applies is retried against the same candidate for
+  up to three failed sends; a rectifier that keeps failing is abandoned and the
+  next one is tried (`crates/zroutery-core/src/server/pipeline/repair.rs::try_rectify_buffered`).
 - A rectifier retry is **not** reported to the circuit breaker. It is the same
   provider and model, and the failure was a request-shape problem, not provider
   health.
@@ -89,7 +90,7 @@ attempt marked degraded. It is visible in the route decision, never silent.
 | Symptom | Cause | Handling |
 |---|---|---|
 | the repair is refused | no rectifier matched | ordinary failover (`crates/zroutery-core/src/server/pipeline/repair.rs::try_rectify_buffered`) |
-| the wrong repair fires | broad keyword match | narrow the signature; the try set prevents repeats |
+| the wrong repair fires | broad keyword match | narrow the signature; a rectifier that still fails is abandoned after three sends |
 | vision is unavailable | no target configured | placeholders, not silent deletion (`crates/zroutery-core/src/media/vision.rs::resolve`) |
 
 ## Not implemented

@@ -44,11 +44,17 @@ Each dialect owns its decoder and encoder:
 | Dialect | Ingress | Egress |
 |---|---|---|
 | Anthropic Messages | `crates/zroutery-core/src/protocol/anthropic/request_in.rs::decode_request` | `crates/zroutery-core/src/protocol/anthropic/request_out.rs::encode_request` |
-| OpenAI Chat/Responses | `crates/zroutery-core/src/protocol/openai/request_in.rs::decode_request` | `crates/zroutery-core/src/protocol/openai/request_out.rs::encode_request` |
+| OpenAI Chat | `crates/zroutery-core/src/protocol/openai/request_in.rs::decode_request` | `crates/zroutery-core/src/protocol/openai/request_out.rs::encode_request` |
+| OpenAI Responses | `crates/zroutery-core/src/protocol/responses/request_in.rs::decode_request` | `crates/zroutery-core/src/protocol/responses/request_out.rs::encode_request` |
 | Gemini | `crates/zroutery-core/src/protocol/gemini/request_in.rs::decode_request` | `crates/zroutery-core/src/protocol/gemini/request_out.rs::encode_request` |
 
-Only Anthropic and OpenAI-compatible are **upstream** dialects; Gemini and
-Responses are client entry protocols (`crates/zroutery-core/src/config/provider.rs::ProviderKind`).
+Anthropic, OpenAI Chat and OpenAI Responses are **upstream** dialects: a
+provider's `ApiSurface` selects which OpenAI surface it answers
+(`crates/zroutery-core/src/config/provider.rs::ApiSurface`,
+`crates/zroutery-core/src/config/registry.rs::ProviderConfig`), and
+`encode_request` dispatches on the resulting `Dialect`
+(`crates/zroutery-core/src/protocol/mod.rs::encode_request`). Gemini is a client
+entry protocol only (`crates/zroutery-core/src/config/provider.rs::ProviderKind`).
 
 ## Streaming
 
@@ -83,7 +89,9 @@ zero by `crates/zroutery-core/src/ir/mod.rs::Usage::fresh_input_tokens`, never w
 - Effort is decoded and encoded through the bridge, not copied as free text
   (`crates/zroutery-core/src/protocol/reasoning_bridge.rs::decode_effort`,
   `crates/zroutery-core/src/protocol/reasoning_bridge.rs::encode_effort`).
-- A thinking block is encoded only for a dialect that accepts it
+- `encode_thinking_block` filters by block shape (a signed thinking block or a
+  redacted one) and builds the Responses reasoning item; deciding whether the
+  target dialect accepts it is the caller's job
   (`crates/zroutery-core/src/protocol/reasoning_bridge.rs::encode_thinking_block`).
 - An explicit client disable clears thinking; the pipeline does not re-enable it
   for a candidate (`crates/zroutery-core/src/server/pipeline/mod.rs::handle_chat`).
@@ -96,20 +104,24 @@ zero by `crates/zroutery-core/src/ir/mod.rs::Usage::fresh_input_tokens`, never w
   describes it and the description replaces the slot
   (`crates/zroutery-core/src/media/vision.rs::resolve`,
   `crates/zroutery-core/src/media/transform.rs::replace`).
-- Without a reachable vision target, the image is not silently dropped; the
-  capability boundary fails closed.
+- Without a configured vision target, each image slot is replaced with the
+  configured text placeholder and the request is sent: the content is not
+  silently dropped, but the request is not refused either
+  (`crates/zroutery-core/src/server/pipeline/mod.rs::apply_vision_fallback_inner`).
 
 ## Failure modes
 
 | Symptom | Cause | Handling |
 |---|---|---|
-| unsupported upstream dialect | Gemini/Responses as upstream | refuse; only Anthropic/OpenAI-compatible are upstream (`crates/zroutery-core/src/config/provider.rs::ProviderKind`) |
+| unsupported upstream dialect | Gemini selected as an upstream | refused; Gemini is a client-entry protocol only (`crates/zroutery-core/src/config/provider.rs::ProviderKind`) |
 | malformed body | bad provider payload | protocol failure (`crates/zroutery-core/src/error.rs::safe_message`) |
 | stream ends without a terminal | truncation | `InterruptedStream`, keep sent output (`crates/zroutery-core/src/ir/mod.rs::StreamEvent`) |
 
 ## Not implemented
 
-- No upstream Gemini or Responses dialect; those are client-facing only.
+- No upstream Gemini dialect; Gemini is client-facing only. Responses exists on
+  both sides: as a client entry and as an upstream `ApiSurface`
+  (`crates/zroutery-core/src/config/provider.rs::ApiSurface`).
 - No generic unknown-field translation between dialects; passthrough is retained
   where the IR has a slot.
 - No image generation.
@@ -130,6 +142,8 @@ zero by `crates/zroutery-core/src/ir/mod.rs::Usage::fresh_input_tokens`, never w
 - `crates/zroutery-core/src/protocol/mod.rs::StreamEncoder`
 - `crates/zroutery-core/src/protocol/anthropic/response.rs::decode_response`
 - `crates/zroutery-core/src/protocol/openai/response.rs::decode_response`
+- `crates/zroutery-core/src/protocol/responses/request_in.rs::decode_request`
+- `crates/zroutery-core/src/protocol/responses/request_out.rs::encode_request`
 - `crates/zroutery-core/src/protocol/gemini/response.rs::decode_response`
 - `crates/zroutery-core/src/protocol/reasoning_bridge.rs::decode_effort`
 - `crates/zroutery-core/src/protocol/reasoning_bridge.rs::encode_effort`
@@ -137,4 +151,9 @@ zero by `crates/zroutery-core/src/ir/mod.rs::Usage::fresh_input_tokens`, never w
 - `crates/zroutery-core/src/media/collect.rs::collect`
 - `crates/zroutery-core/src/media/vision.rs::resolve`
 - `crates/zroutery-core/src/media/transform.rs::replace`
+- `crates/zroutery-core/src/server/pipeline/mod.rs::apply_vision_fallback_inner`
+- `crates/zroutery-core/src/error.rs::safe_message`
+- `crates/zroutery-core/src/error.rs::stream_payload`
+- `crates/zroutery-core/src/config/provider.rs::ApiSurface`
+- `crates/zroutery-core/src/config/registry.rs::ProviderConfig`
 - `crates/zroutery-core/src/config/provider.rs::ProviderKind`
