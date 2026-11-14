@@ -52,6 +52,10 @@ stage token
 - Each entry has its own `key_ref` and priority; reordering the pool changes the
   order, not the secret.
 - Replacing or removing a key does not rewrite the account's panel token.
+- The desktop commands for the pool are `set_account_inference_key` and
+  `remove_account_inference_key`
+  (`src-tauri/src/inference_commands.rs::set_account_inference_key`,
+  `src-tauri/src/inference_commands.rs::remove_account_inference_key`).
 
 ## Check-in
 

@@ -340,7 +340,10 @@
       "crates/zroutery-core/src/account/types.rs": "sha256:4371384f3422f6cabe378e8623b62e0ec8390582e52041ddf3bd12ffc6b72fca",
       "src-tauri/src/account_binding.rs": "sha256:a8b5e75fc93b6a654898f269b6bc1c3bbb97248d59191f18ad782c68e34c0835",
       "src-tauri/src/checkin_commands.rs": "sha256:8a1a299cef652d6c01a14219b24347501c253376a692579a870df3368204fab1",
-      "src-tauri/src/token_capture/mod.rs": "sha256:b85091be81c04944ebb29009ce8e77b4abadf1d7c2b0014602f8bd1acd8aab68"
+      "src-tauri/src/token_capture/mod.rs": "sha256:b85091be81c04944ebb29009ce8e77b4abadf1d7c2b0014602f8bd1acd8aab68",
+      "src-tauri/src/checkin/cdp.rs": "sha256:1b7650860564b66aa342886f398e0d9923460373f3ecbba03444d1d14068931b",
+      "src-tauri/src/checkin/profile.rs": "sha256:a35578aa48f44c2f28dc46e4224cf1de44f850129832d0450a22602b30fb8747",
+      "src-tauri/src/inference_commands.rs": "sha256:6b222457deac8560502db952da7e3dbf0dd42d3728d8ababed6b985b5766bac4"
     },
     "commands": [
       "cargo test --workspace --all-features --locked"
