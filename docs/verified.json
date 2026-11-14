@@ -367,5 +367,24 @@
       "cargo test --workspace --all-features --locked"
     ],
     "note": "The decoders and encoders are the source; Usage normalisation is the invariant they preserve."
+  },
+  "docs/development/reference/routing-policy.md": {
+    "verified_at": "2026-11-14",
+    "sources": {
+      "crates/zroutery-core/src/registry.rs": "sha256:87960ce3e031c1cca1bbae795fe844ff666c42cb74af1a15dcc4345f2c34423f",
+      "crates/zroutery-core/src/router/plan.rs": "sha256:895c36cc279590f0442e1d4d45cd10713420579ede16c2821e66b26ebb80c9c2",
+      "crates/zroutery-core/src/router/mod.rs": "sha256:ab4ec03549964d3b04b2a1827143351c5d648c489cd3480461530a3d3b24bbca",
+      "crates/zroutery-core/src/policy/policy.rs": "sha256:5097f2bba8f402aa00dc518744fc7825efd9831be8068394cea4348ef51505c1",
+      "crates/zroutery-core/src/policy/eligibility.rs": "sha256:4f8da8580b2efc1896d4ab4adf8020cf466cb89295ea021bd03ce80b840efbad",
+      "crates/zroutery-core/src/policy/decision.rs": "sha256:0a22c4ea2a5f6de1ba93aeac0de7715550a6ab708391b996c9a14cda4c0b3221",
+      "crates/zroutery-core/src/config/routing.rs": "sha256:5867f6a23b6568bbe71957a4bb9c776d5d4686f67c2dfd922f95f4d0c14f77e3",
+      "crates/zroutery-core/src/election.rs": "sha256:892246047a6346abe37c328b441f68b42c68ef00395768c01c4dd1efee727824",
+      "crates/zroutery-core/src/circuit_breaker.rs": "sha256:945a6a2f66fec1a7d19ada3436ca36142780419e189ede2d2e3d62bd6850dbf3",
+      "crates/zroutery-core/src/server/pipeline/mod.rs": "sha256:ff5cea3f27a818b38b2a2882c6b64656d342d4344d4c1bee21bdbfaadd5e7320"
+    },
+    "commands": [
+      "cargo test --workspace --all-features --locked"
+    ],
+    "note": "The plan builder and breaker are the source; the reference does not claim a specific provider's latency."
   }
 }

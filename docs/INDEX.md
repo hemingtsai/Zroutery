@@ -51,6 +51,7 @@ This file is generated from `docs/docs.manifest.json`. Do not edit it.
 | [docs/development/reference/migration.md](development/reference/migration.md) | reference | reference | backend | Client cutover: plan, fingerprint, snapshot, execution and rollback. |
 | [docs/development/reference/accounts.md](development/reference/accounts.md) | reference | reference | backend | Account declarations, panel-token binding, inference keys, check-in and token capture. |
 | [docs/development/reference/protocol.md](development/reference/protocol.md) | reference | reference | backend | Canonical IR, dialect encode/decode, SSE, usage normalisation, reasoning and media. |
+| [docs/development/reference/routing-policy.md](development/reference/routing-policy.md) | reference | reference | backend | Resolution, policy, eligibility, strategy, election and the circuit breaker. |
 
 ## Pending migration
 
@@ -68,9 +69,9 @@ Audits, findings, triage and risk discussions live in GitHub Issues. Use the `au
 
 ## Health
 
-- active documents: 32
-- source-anchored (non-ADR): 20
-- hash-ledgered: 20
+- active documents: 33
+- source-anchored (non-ADR): 21
+- hash-ledgered: 21
 - guides: 5
 - ADRs: 8 (5 with code anchors; decision records, not machine-verified)
 - generated/index: 4

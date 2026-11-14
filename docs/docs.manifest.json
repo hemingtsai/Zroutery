@@ -347,6 +347,20 @@
       "owner": "backend",
       "summary": "Canonical IR, dialect encode/decode, SSE, usage normalisation, reasoning and media.",
       "max_lines": 300
+    },
+    {
+      "path": "docs/development/reference/routing-policy.md",
+      "title": "Routing and Policy Reference",
+      "type": "reference",
+      "authority": "reference",
+      "audience": [
+        "human",
+        "agent"
+      ],
+      "status": "active",
+      "owner": "backend",
+      "summary": "Resolution, policy, eligibility, strategy, election and the circuit breaker.",
+      "max_lines": 250
     }
   ],
   "pending": [],
