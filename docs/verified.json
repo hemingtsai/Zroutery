@@ -202,5 +202,43 @@
       "cargo test --workspace --all-features --locked"
     ],
     "note": "The panel and OpenCode behaviours are read from their adapters; real-panel acceptance is not claimed."
+  },
+  "docs/development/reference/ui-design-system.md": {
+    "verified_at": "2026-11-14",
+    "sources": {
+      "ui/src/styles.css": "sha256:cd838ffded7202194a0a1a6915c7a260f62d0f27c859e88e517fdfffbc27957d",
+      "ui/src/theme.ts": "sha256:9d03fe6fc79f670af66cabfa4d89d38ab7862f333687110efb2d7fe4906b843f",
+      "ui/src/skin.ts": "sha256:e4189c43b8ca0397c596e795843d20a3af92b77beeffb1974b1e775219b77be5",
+      "ui/src/accent.ts": "sha256:a4d18a28be58bfe586a90d682934b94a66381587569301fe11ec8e4cb6608662",
+      "ui/src/shell/nav.ts": "sha256:7bd030c577e65221176338012cd7ddc6ebc600cc6b3e89024684ca48d4258ed8",
+      "ui/src/components/tabs.tsx": "sha256:e9d2349912d5a39342c860b4b3b62f049e1a1583f67dfa3259df55fb657943d0",
+      "ui/src/components/drawer.tsx": "sha256:8d269a3891f2fe20ddc3add33c4fea725e79d17d1ac558228bd7ec1f0d407d99",
+      "ui/src/saveQueue.ts": "sha256:e811077a9ebb5dae4c57ad1b52f4948112c5bb334558bf380ef45f3ad43f6ce8",
+      "ui/src/i18n.tsx": "sha256:3020ad8c7e3c1fe921c0ded9308534527a6a02abadc8957e668359793586a424",
+      "ui/src/i18n/en.ts": "sha256:75cca3166b00abb50e9710f150e609e11c8e931e021770a3ad87fff51ed6913e",
+      "ui/src/i18n/zh.ts": "sha256:ee0f9045fe5a9194c04e5ff51bea3ef494849baa25a6f5070215061f4bbc491e",
+      "ui/src/i18n.zhTW.ts": "sha256:db80720e7a75943e574ee329e004031611b8b5e26010c9475d64d8a2b6fb7962",
+      "scripts/ui_budget_test.py": "sha256:1f9ee4cc7688f748e7c61b75713ad2b103192c065dd7403f19ab22abfcda7835",
+      "scripts/ui_layout_test.py": "sha256:3650561a5d8c0cfbed86928bbdd44122706b76ad5cb6a0f1535680abc5d0fa52",
+      "scripts/ui_interaction_test.py": "sha256:c58917111ce2fef4805c5aa2f795138c1fc00ab3fc89d6cac3267a9103dfc194",
+      "scripts/ui_overflow_test.py": "sha256:bd59428a8b64b6d5f6d1756efdb580d7371dc67b12966688ea86646ec0de5cc7"
+    },
+    "commands": [
+      "pnpm --dir ui build",
+      "pnpm --dir ui test"
+    ],
+    "note": "Tokens and primitives are cited from source; the harnesses measure the shipped bundle."
+  },
+  "docs/development/reference/routing-data.md": {
+    "verified_at": "2026-11-14",
+    "sources": {
+      "crates/zroutery-core/src/ml/traces.rs": "sha256:b98f7bdf9ba3b02f11c8db5b5ea18b93f6112d374f18256652e3483ba9c54f97",
+      "crates/zroutery-core/src/history_import/mod.rs": "sha256:3ccc19db786c7a8426cacb5c88038e8f251880b65b94374186a20d0dacaa638b",
+      "crates/zroutery-core/src/runtime_store/imports.rs": "sha256:c0a3cb5fc4c979e476e01428195ad8e083f130f24f209c918bf4318183d1ebb5"
+    },
+    "commands": [
+      "cargo test --workspace --all-features --locked"
+    ],
+    "note": "The trace and import structs define the privacy and identity boundaries."
   }
 }

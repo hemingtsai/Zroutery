@@ -253,6 +253,34 @@
       "owner": "backend",
       "summary": "Provider kinds, NewAPI panels, OpenCode Zen shaping and the CC Switch import.",
       "max_lines": 300
+    },
+    {
+      "path": "docs/development/reference/ui-design-system.md",
+      "title": "UI Design System Reference",
+      "type": "reference",
+      "authority": "reference",
+      "audience": [
+        "human",
+        "agent"
+      ],
+      "status": "active",
+      "owner": "frontend",
+      "summary": "Tokens, skins, shell primitives, languages and the frontend gates.",
+      "max_lines": 250
+    },
+    {
+      "path": "docs/development/reference/routing-data.md",
+      "title": "Routing Data Reference",
+      "type": "reference",
+      "authority": "reference",
+      "audience": [
+        "human",
+        "agent"
+      ],
+      "status": "active",
+      "owner": "backend",
+      "summary": "Local usage, routing traces and imported history: identity, privacy and retention.",
+      "max_lines": 250
     }
   ],
   "pending": [
