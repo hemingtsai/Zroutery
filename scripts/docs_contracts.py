@@ -154,7 +154,14 @@ def main(argv: list[str] | None = None) -> int:
         print("docs-contracts: FAILED", file=sys.stderr)
         print("fix: update the affected document or trigger, then re-run the same command", file=sys.stderr)
         return 1
-    print("docs-contracts: all documentation contracts passed", flush=True)
+    range_unverified = any(
+        item["gate"] == "documentation impact (range)" and item["status"] == "unverified"
+        for item in results
+    )
+    if range_unverified:
+        print("docs-contracts: local documentation contracts passed; range UNVERIFIED", flush=True)
+    else:
+        print("docs-contracts: all documentation contracts passed", flush=True)
     return 0
 
 

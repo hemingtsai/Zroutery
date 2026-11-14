@@ -152,7 +152,8 @@
     "verified_at": "2026-11-14",
     "sources": {
       "Cargo.toml": "sha256:ce0ae62212c2262d2d937127a803bb2f277f5198df56bd88ef976f0f3b490f86",
-      "scripts/commit_contract_test.py": "sha256:a853098040da40b7f2a0cec3878f19a9079bbb938ae3ad2de62c7af76bb4255b"
+      "scripts/commit_contract_test.py": "sha256:a853098040da40b7f2a0cec3878f19a9079bbb938ae3ad2de62c7af76bb4255b",
+      "package.json": "sha256:487c40e417797bce3c7d46b2715d3c3a664a905f87689972f683430f3001f83c"
     },
     "commands": [
       "python3 -B scripts/commit_contract_test.py --self-test"
@@ -273,7 +274,8 @@
       "src-tauri/src/store.rs": "sha256:05701f3f4375c52e4ee1e4fd6d1c41566777992edcb0f12e72ac14d8f0dfd12c",
       "src-tauri/Cargo.toml": "sha256:026dc0aedd8b657559ac6e1cfa61011f588917bf3164a3bb42966d7bfbc40783",
       "src-tauri/src/platform.rs": "sha256:32b5068e409a2a44caa8aabdbee0438aa3fba903f0bc81325ce40738eb91d181",
-      "crates/zroutery-core/src/runtime_store.rs": "sha256:aae22be67ec6374ee9c733e40bf329d1f9a6a2b71552819c2e4cf1d86baefce9"
+      "crates/zroutery-core/src/runtime_store.rs": "sha256:aae22be67ec6374ee9c733e40bf329d1f9a6a2b71552819c2e4cf1d86baefce9",
+      "package.json": "sha256:487c40e417797bce3c7d46b2715d3c3a664a905f87689972f683430f3001f83c"
     },
     "commands": [
       "pnpm --dir ui build",
@@ -293,7 +295,8 @@
       "src-tauri/src/store.rs": "sha256:05701f3f4375c52e4ee1e4fd6d1c41566777992edcb0f12e72ac14d8f0dfd12c",
       "src-tauri/Cargo.toml": "sha256:026dc0aedd8b657559ac6e1cfa61011f588917bf3164a3bb42966d7bfbc40783",
       "src-tauri/src/platform.rs": "sha256:32b5068e409a2a44caa8aabdbee0438aa3fba903f0bc81325ce40738eb91d181",
-      "crates/zroutery-core/src/runtime_store.rs": "sha256:aae22be67ec6374ee9c733e40bf329d1f9a6a2b71552819c2e4cf1d86baefce9"
+      "crates/zroutery-core/src/runtime_store.rs": "sha256:aae22be67ec6374ee9c733e40bf329d1f9a6a2b71552819c2e4cf1d86baefce9",
+      "package.json": "sha256:487c40e417797bce3c7d46b2715d3c3a664a905f87689972f683430f3001f83c"
     },
     "commands": [
       "pnpm --dir ui build",
@@ -313,7 +316,8 @@
       "src-tauri/src/store.rs": "sha256:05701f3f4375c52e4ee1e4fd6d1c41566777992edcb0f12e72ac14d8f0dfd12c",
       "src-tauri/Cargo.toml": "sha256:026dc0aedd8b657559ac6e1cfa61011f588917bf3164a3bb42966d7bfbc40783",
       "src-tauri/src/platform.rs": "sha256:32b5068e409a2a44caa8aabdbee0438aa3fba903f0bc81325ce40738eb91d181",
-      "crates/zroutery-core/src/runtime_store.rs": "sha256:aae22be67ec6374ee9c733e40bf329d1f9a6a2b71552819c2e4cf1d86baefce9"
+      "crates/zroutery-core/src/runtime_store.rs": "sha256:aae22be67ec6374ee9c733e40bf329d1f9a6a2b71552819c2e4cf1d86baefce9",
+      "package.json": "sha256:487c40e417797bce3c7d46b2715d3c3a664a905f87689972f683430f3001f83c"
     },
     "commands": [
       "pnpm --dir ui build",
@@ -330,7 +334,8 @@
       "src-tauri/tauri.conf.json": "sha256:ba1bd4d259ff2a0fc355e3e5a075da8a2c3f64fd27ae289a9565942042c14782",
       "crates/zroutery-core/src/server/ml_state.rs": "sha256:3b7a4a6e92058113ad7031fa747ff5fc563cc677066173c792476441fc0fa0bf",
       "crates/zroutery-core/src/migration/state.rs": "sha256:3d683b8a4f97f62fdb00b20843dc6012b33ee34ac4bef445b3265d7d43308728",
-      "crates/zroutery-core/src/agent_takeover/ownership.rs": "sha256:29be578e89eaa58afa7f343f8aeffb5980bbfc6d882499ddf4bc57996e9cd594"
+      "crates/zroutery-core/src/agent_takeover/ownership.rs": "sha256:29be578e89eaa58afa7f343f8aeffb5980bbfc6d882499ddf4bc57996e9cd594",
+      "package.json": "sha256:487c40e417797bce3c7d46b2715d3c3a664a905f87689972f683430f3001f83c"
     },
     "commands": [
       "python3 -B scripts/docs_check.py"

@@ -24,6 +24,30 @@ def changed_since(commit: str, sources: list[str]) -> list[str]:
     return [line for line in result.stdout.splitlines() if line]
 
 
+def worktree_paths() -> set[str]:
+    paths = set()
+    for args in (("diff", "--name-only"), ("diff", "--cached", "--name-only")):
+        result = git(*args)
+        if result.returncode == 0:
+            paths.update(line for line in result.stdout.splitlines() if line)
+    return paths
+
+
+def commit_files(rev: str) -> set[str]:
+    result = git("show", "--name-only", "--format=", rev)
+    return {line for line in result.stdout.splitlines() if line} if result.returncode == 0 else set()
+
+
+def reviewed_in_same_change(commit: str, doc: str, source: str) -> bool:
+    work = worktree_paths()
+    if source in work and doc in work:
+        return True
+    result = git("log", "--format=%H", f"{commit}..HEAD", "--", source)
+    if result.returncode != 0 or not result.stdout.strip():
+        return False
+    return all(doc in commit_files(rev) for rev in result.stdout.splitlines() if rev)
+
+
 def check() -> tuple[list[str], list[str]]:
     data = json.loads((ROOT / VERIFIED).read_text(encoding="utf-8"))
     stale: list[str] = []
@@ -40,8 +64,9 @@ def check() -> tuple[list[str], list[str]]:
         if not sources:
             continue
         changed = changed_since(commit, sources)
-        if changed:
-            stale.append(f"{doc}: {len(changed)} source(s) changed after {commit}: {', '.join(changed)}")
+        unresolved = [source for source in changed if not reviewed_in_same_change(commit, doc, source)]
+        if unresolved:
+            stale.append(f"{doc}: {len(unresolved)} source(s) changed after {commit}: {', '.join(unresolved)}")
     return errors, stale
 
 

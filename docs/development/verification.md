@@ -149,8 +149,9 @@ Consequences, stated rather than discovered:
   `manifest.canonical[].home` anchor. `docs_contracts.py` also compares the
   executed step statuses with `state.json`; a state file that disagrees fails
   with the `record_state.py --no-range` repair command. A zero or empty CI base
-  prints a GitHub warning and leaves the range unverified instead of silently
-  claiming it. An ADR `Date` must equal the file's first
+  prints a GitHub warning and leaves the range unverified; the final summary then
+  says `local documentation contracts passed; range UNVERIFIED`, not
+  `all passed`. An ADR `Date` must equal the file's first
   commit date (`git log --diff-filter=A --format=%cs`); `## Sources` needs at
   least one existing path or `path::symbol`.
 - `invariant_check.py` requires every architecture invariant to name a test anchor
@@ -175,7 +176,8 @@ Consequences, stated rather than discovered:
 - `docs_check.py` compares `docs/verified.json` source content hashes with
   the current tree. A moved source means the document must be re-read.
 - `freshness_report.py --check` fails when a cited source changed after the
-  document's `reviewed_commit`; the review point must be advanced.
+  document's `reviewed_commit` and the document did not change in the same
+  worktree or commit; otherwise the review point must be advanced.
 - `docs_impact.py` fails when a changed source file is cited by a document that
   did not change. There is no bypass flag; `--include-staged` is used by the
   pre-commit hook so an uncommitted documentation edit counts as changed.

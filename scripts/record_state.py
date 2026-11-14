@@ -25,7 +25,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--head", default="HEAD")
     parser.add_argument("--no-range", action="store_true")
     parser.add_argument("--dry-run", action="store_true")
-    parser.add_argument("--check", action="store_true")
+    parser.add_argument("--check", action="store_true", help="diagnostic: compare state with a fresh run")
     args = parser.parse_args(argv)
 
     if not args.check:
