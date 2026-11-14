@@ -445,6 +445,20 @@
       "owner": "backend",
       "summary": "One request outcome: attempts, terminal status, identity evidence, validation and fan-out.",
       "max_lines": 300
+    },
+    {
+      "path": "docs/development/reference/file-transactions.md",
+      "title": "File Transactions Reference",
+      "type": "reference",
+      "authority": "reference",
+      "audience": [
+        "human",
+        "agent"
+      ],
+      "status": "active",
+      "owner": "backend",
+      "summary": "Crash-recoverable multi-file commits: snapshot, journal, marker, forward recovery and external-edit refusal.",
+      "max_lines": 250
     }
   ],
   "pending": [],

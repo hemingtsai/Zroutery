@@ -491,5 +491,16 @@
       "cargo test --workspace --all-features --locked"
     ],
     "note": "The value model and validation are the source; unknown cost and no-signal feedback remain explicit."
+  },
+  "docs/development/reference/file-transactions.md": {
+    "verified_at": "2026-11-14",
+    "sources": {
+      "crates/zroutery-core/src/file_transaction.rs": "sha256:5d6516c3cf37977cbb92a17bc8c7ddec8efc41d3a2b6e9e7c8f3025128257212",
+      "crates/zroutery-core/src/agent_takeover/gemini.rs": "sha256:bbb66d63ea9a456089317c50bd38409b76fb7f0944a7981339dadcc7569aa56b"
+    },
+    "commands": [
+      "cargo test --workspace --all-features --locked"
+    ],
+    "note": "Recovery is forward-only; a committed transaction is never rolled back by this module."
   }
 }
