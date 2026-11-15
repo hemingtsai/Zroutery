@@ -29,7 +29,8 @@ cargo +1.90.0 check --workspace --all-targets --locked
 ```
 
 The frontend is Node 22 with the pinned pnpm (`package.json::packageManager`),
-and the workspace also carries the plugin crates (`Cargo.toml::workspace`).
+the workspace carries the plugin crates (`Cargo.toml::workspace`), and the Tauri
+CLI/API pins live in `package.json` and `ui/package.json`.
 
 ## Commit format
 

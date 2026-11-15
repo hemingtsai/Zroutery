@@ -14,6 +14,9 @@ pnpm install
 pnpm dev
 ```
 
+`pnpm install` installs the shell's pinned Tauri CLI from `package.json`; the
+Rust dependencies resolve from `Cargo.lock`.
+
 The app lives in the menu bar / tray. Closing the window does not stop the
 gateway; quit from the tray menu to stop it.
 
