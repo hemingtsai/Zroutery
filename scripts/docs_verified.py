@@ -36,7 +36,7 @@ def expected(root: Path) -> dict[str, dict[str, str]]:
         sources = [source for source in sources if (root / source).is_file()]
         if not sources:
             continue
-        relative = str(doc.relative_to(root)).replace("\\", "/")
+        relative = doc.relative_to(root).as_posix()
         result[relative] = {source: source_hash(root, source) or "" for source in sources}
     return result
 

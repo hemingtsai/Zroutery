@@ -19,7 +19,7 @@ use zroutery_core::ir::{Dialect, Usage};
 use zroutery_core::router::Candidate;
 use zroutery_core::runtime_store::{RuntimeStore, SCHEMA_VERSION};
 use zroutery_core::server::{AppState, ServerHandle};
-use zroutery_core::stats::RecordBuilder;
+use zroutery_core::stats::{RecordBuilder, Stats};
 
 fn candidate() -> Candidate {
     let mut model = ModelEntry::for_upstream("relay", "mock", Some(ModelTier::Standard));
@@ -68,6 +68,93 @@ fn daily(ledger: &Ledger) -> f64 {
         &Budget::new(BudgetScope::Global, BudgetPeriod::Day, "USD", 100.0),
         chrono::Local::now(),
     )
+}
+
+#[test]
+fn a_settled_row_replaces_the_provisional_summary_contribution() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("runtime.sqlite3");
+    let store = Arc::new(RuntimeStore::open(&path).unwrap());
+
+    // What a completion's pending flush publishes before the settlement lands.
+    let provisional = {
+        let mut builder = RecordBuilder::new(Dialect::OpenAI, "standard-class", false);
+        builder.resolved("relay-mock", "Relay").attempt();
+        let mut record = builder.finish(10);
+        record.id = "req".into();
+        record.usage = Usage {
+            input_tokens: 999,
+            output_tokens: 1,
+            ..Default::default()
+        };
+        record
+    };
+    store.append_usage(&[provisional]).unwrap();
+    let stats = Arc::new(Stats::new(10));
+    stats.attach_store(Arc::clone(&store)).unwrap();
+    store
+        .initialize_accounting(&Ledger::new(), "test opening")
+        .unwrap();
+
+    let fact = settlement("req", vec![completed("attempt-1", "req", &candidate())]);
+    assert!(store.settle(&fact).unwrap().inserted);
+    stats.refresh_history().unwrap();
+    let summary = stats.summary();
+    assert_eq!(
+        summary.requests, 1,
+        "the settled row replaced the provisional one, not added to it"
+    );
+    assert_eq!(
+        summary.input_tokens, 10_000,
+        "the settled usage replaced the provisional usage"
+    );
+
+    // Re-settling the same fact touches nothing, and the projection agrees.
+    assert!(!store.settle(&fact).unwrap().inserted);
+    stats.refresh_history().unwrap();
+    assert_eq!(stats.summary().requests, 1);
+    assert_eq!(stats.summary().input_tokens, 10_000);
+}
+
+#[test]
+fn a_summary_from_a_foreign_write_is_rebuilt_from_the_table() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("runtime.sqlite3");
+    let store = Arc::new(RuntimeStore::open(&path).unwrap());
+    let stats = Arc::new(Stats::new(10));
+    stats.attach_store(Arc::clone(&store)).unwrap();
+
+    // An older binary writes usage rows without maintaining the summary:
+    // a raw insert moves the revision and leaves the stored aggregate behind.
+    let foreign = {
+        let mut builder = RecordBuilder::new(Dialect::OpenAI, "standard-class", false);
+        builder.resolved("relay-mock", "Relay").attempt();
+        let mut record = builder.finish(30);
+        record.id = "foreign".into();
+        record.usage = Usage {
+            input_tokens: 77,
+            ..Default::default()
+        };
+        record
+    };
+    let json = serde_json::to_string(&foreign).unwrap();
+    {
+        let db = rusqlite::Connection::open(&path).unwrap();
+        db.execute(
+            "INSERT INTO usage(id, client, at, record) VALUES ('foreign', 'unknown', ?1, ?2)",
+            rusqlite::params![foreign.at.to_rfc3339(), json],
+        )
+        .unwrap();
+    }
+
+    stats.refresh_history().unwrap();
+    let summary = stats.summary();
+    assert_eq!(summary.requests, 1);
+    assert_eq!(summary.input_tokens, 77);
+    // The rebuild stored a fresh summary, so the next refresh reads the row
+    // rather than scanning the table again.
+    stats.refresh_history().unwrap();
+    assert_eq!(stats.summary().requests, 1);
 }
 
 #[test]

@@ -162,5 +162,6 @@ MIT（见 `Cargo.toml` 的 `license`）。
 - Linux 凭据依赖：`src-tauri/Cargo.toml::keyring`。
 - 数据位置：`src-tauri/src/platform.rs::default_config_dir`、`crates/zroutery-core/src/runtime_store.rs::RuntimeStore`。
 - 服务端 auto 审核：`crates/zroutery-core/src/server/pipeline/safeguards/mod.rs::ReviewContext`、`ui/src/pages/routing/AutoModeDrawer.tsx::AutoModeDrawer`。
+- 数据位置：`src-tauri/src/platform.rs::default_config_dir`、`crates/zroutery-core/src/runtime_store.rs::RuntimeStore`、`crates/zroutery-core/src/runtime_store.rs::RuntimeStore::usage_snapshot`。
 
 每个重复事实的权威归属：[config.md](docs/development/reference/config.md) 负责监听地址/端口，[protocol.md](docs/development/reference/protocol.md) 负责协议，[routing-data.md](docs/development/reference/routing-data.md) 负责数据位置。本指南只是指针；冲突时以 reference 为准。

@@ -59,8 +59,8 @@
       "crates/zroutery-core/src/ir/mod.rs": "sha256:cc2c048c066f034bf55107f3e28aa2a97d19c6103044aaf35c7583fff57b980a",
       "crates/zroutery-core/src/ir/observation.rs": "sha256:17f2b6102d861962e40fbb89aa92450a7764b45c076c86ecaa43c70fb675eff6",
       "crates/zroutery-core/src/protocol/anthropic/usage.rs": "sha256:bd7d0b3f13a9e34d6175bae37aedb175d86dbc32f391991c95d3be233cf4bc3d",
-      "crates/zroutery-core/src/runtime_store.rs": "sha256:4b69eafeb73d556bc953f06e09c2a64000951b8336f3788e52a664a71b358399",
-      "crates/zroutery-core/src/runtime_store/accounting.rs": "sha256:eb1e4fcb424eb6d37ce4246b6c1681394fe8fe1cd15f821040a47813b8abd285",
+      "crates/zroutery-core/src/runtime_store.rs": "sha256:554ec5ce787f90e2dc5a45984fac428cd64caeb1f5f20021d6d27890aa35fdc1",
+      "crates/zroutery-core/src/runtime_store/accounting.rs": "sha256:d272144dbfc6268ccc71af2dc437c8173a50597b1cc9752cfb61cd82c235e1d9",
       "crates/zroutery-core/src/server/accounting.rs": "sha256:bc192e6b31e0f0b3c9c12c231ff7acb158b74f1537c64a8edae223776a9ce259",
       "crates/zroutery-core/src/server/ledger.rs": "sha256:c07c31a6e4bc8cbd3440deb619204f5cf20dc52935198084b7b5c2c69930e216",
       "crates/zroutery-core/src/server/pipeline/auxiliary.rs": "sha256:3a0057eb4cc6b02a7e80f06694cba4ec11a34e2f022aeaba39e87b54e1a02f18",
@@ -82,10 +82,10 @@
     "reviewed_at": "2026-11-15",
     "sample": [
       "`crates/zroutery-core/src/runtime_store/accounting.rs::settle`",
-      "The desktop writes the spend projection through `flush_ledger` and `save_ledger`",
-      "`RequestAccounting` aggregates the attempts, separating known cost from"
+      "`crates/zroutery-core/src/runtime_store.rs::RuntimeStore::usage_snapshot`",
+      "The desktop writes the spend projection through `flush_ledger` and `save_ledger`"
     ],
-    "reviewed_sha": "sha256:dba5da164ac18f7619309d09e6bf910a55d85fc616b6760f7f630a0608312c2e",
+    "reviewed_sha": "sha256:9ff44c096475288d3dbc599943039c424f53db322c9c8208de72c261be1ed2ec",
     "reviewed_note": "model=lightvela-auto; session=ses_e252286ddffe8Z3GfQw4rQOiDF"
   },
   "docs/development/reference/ipc.md": {
@@ -95,7 +95,7 @@
       "src-tauri/build.rs": "sha256:66d3e6fb7b9de8e1057e25ad718501426a2d274af3c22540649ebd5c0e400072",
       "src-tauri/capabilities/default.json": "sha256:f12182d774e87351ed10eef21e06582c6ae8539dd92ef8f49bfaa47904862544",
       "src-tauri/capabilities/tray-panel.json": "sha256:bb0ac1094707d01458be1dda839c2c5435684fb9a037367b31891998a749e1fa",
-      "src-tauri/src/commands.rs": "sha256:301b4065855b39debaa98228b18657b418c87efc660953d0da26c0bd656a0982",
+      "src-tauri/src/commands.rs": "sha256:04c7da949582e81e7b1f7a748702177dcf97f6be3ed98c85b2b71fabff86d74f",
       "src-tauri/src/lib.rs": "sha256:959763329f18fa91032764d6f02a4e55398424f8590754e6997577a387d54714",
       "src-tauri/src/plugins/views.rs": "sha256:a18b7a3f7f4db15d7eb64d70075a42a620eda862dc833e29054ba700d3fd92c4",
       "src-tauri/src/state/snapshot.rs": "sha256:ed31d3476d836aa3631ed6ad900b74d6bd4b91a22f1c3f1ddf71bc3a748289e5",
@@ -114,7 +114,7 @@
       "stale (`src-tauri/capabilities/default.json::permissions`).",
       "build-time app manifest (`src-tauri/build.rs::APP_COMMANDS`)."
     ],
-    "reviewed_sha": "sha256:47da28feef31c958c5ba9ab6c819b7e7342c797c1beb7b98b8d378d4d01b7d28",
+    "reviewed_sha": "sha256:40e833e5b7aed768019f0f99aceab7734d9df2b80ab9ef5bde923be198b212c5",
     "reviewed_note": "model=lightvela-auto; session=ses_e252286ddffe8Z3GfQw4rQOiDF"
   },
   "docs/development/WORKFLOW.md": {
@@ -159,7 +159,7 @@
       "crates/zroutery-core/src/policy/policy.rs": "sha256:92a1091e6352fc30353c0f99bbee339f59a134cc56e0e88b180412d8ffdd15e4",
       "crates/zroutery-core/src/protocol/mod.rs": "sha256:23d1ffdbe58f7ebbc0f40d152fcd53644940a9fbdd73dad7836b71ee5c8325c0",
       "crates/zroutery-core/src/router/mod.rs": "sha256:3527af63e679f0df9b47b53dda17cf1aa22aae84c52da469412cb5e6489c418c",
-      "crates/zroutery-core/src/runtime_store.rs": "sha256:4b69eafeb73d556bc953f06e09c2a64000951b8336f3788e52a664a71b358399",
+      "crates/zroutery-core/src/runtime_store.rs": "sha256:554ec5ce787f90e2dc5a45984fac428cd64caeb1f5f20021d6d27890aa35fdc1",
       "crates/zroutery-core/src/server/handlers.rs": "sha256:9fcabdd8007b77f529f5f7e5bc8ad380f4f1a43efe07bf77645c9d58e9f97952",
       "crates/zroutery-core/src/server/ledger.rs": "sha256:c07c31a6e4bc8cbd3440deb619204f5cf20dc52935198084b7b5c2c69930e216",
       "crates/zroutery-core/src/server/pipeline/lifecycle.rs": "sha256:e269fa36d7e527a6d804a17247abd6eb41638ab32cc086d3b61e0233e5b25c21",
@@ -173,7 +173,7 @@
       "crates/zroutery-core/src/upstream/mod.rs": "sha256:538a88174ca32181c2cb68526159e9e50784c382856f7f14bc61c15242725a3f",
       "crates/zroutery-core/tests/attempt_observation_test.rs": "sha256:c0c1b5ced61cf40e0e56ef17f5df29c2a0675f1dc57f9b430c629c2b3b915678",
       "crates/zroutery-core/tests/decision_contract_test.rs": "sha256:817ea78722887cb581155292b50ef350f18cca48fab48dfa869dd789e2d86fde",
-      "crates/zroutery-core/tests/durable_accounting_test.rs": "sha256:764e3009c7ec6c730c73e73780e62f69ac773c469cbdc2b3c7c55126d0bbd312",
+      "crates/zroutery-core/tests/durable_accounting_test.rs": "sha256:06ae2687c99713c0658c0ca2b9fd674797fe2943d483953873d7d7972ada8586",
       "crates/zroutery-core/tests/e2e/budget.rs": "sha256:cd76bb09a0a9895cce5b81df6fa063deb9eb7932eaf742ae616445eae65ec513",
       "crates/zroutery-core/tests/eligibility_trace_test.rs": "sha256:860de1fc1f9e08ac41c2474a061daf33e1ad7faf01dadb282e87ca5884792da6",
       "crates/zroutery-core/tests/failure_authority_test.rs": "sha256:bbe3868553f7d5a47122a651e5d7b205c73ea65ea6866b3d5ac78b0177f771f7",
@@ -202,7 +202,7 @@
       "against the frontend contract by `scripts/command_surface_test.py`.",
       "early exit; `/health` is the only unauthenticated route"
     ],
-    "reviewed_sha": "sha256:af2d0d44e739de25ec50c599f6d9cd16b0544eee6e8d70ac45aea1690df2710a",
+    "reviewed_sha": "sha256:f46044d9f4fdd474a71eb05a40db1e1e51e5520df1096f6bbd75eba3ae3b7e5d",
     "reviewed_note": "model=lightvela-auto; session=ses_e252286ddffe8Z3GfQw4rQOiDF"
   },
   "CONTRIBUTING.md": {
@@ -254,7 +254,11 @@
       "Cargo.toml": "sha256:9d61b23ce7ee6b937ba14eeecebcbb79c9ddc8d13bd7a9e5eb714034eca16e4a",
       "package.json": "sha256:36aa0e0b2d07e6ee310e382aeb024a5ca2cb2a5749880e6b41d3a1a4ae3ed2a8",
       "scripts/command_surface_test.py": "sha256:b093e498d9af114e63421fbf99bf810a50fb3ed607cd348181c4501940fb5eff",
-      "scripts/docs_sources.py": "sha256:187c0352c05d9b2b98e2e15cfad47fd005000c8806c3053992e36b64149384d6",
+      "scripts/coverage_check.py": "sha256:69cf4c642a4d12568e1ae3a4080691fce5b400a6d7c574213a87d8e38ff6b8ed",
+      "scripts/docs_check.py": "sha256:306ccd8ad11a27749b4ef46b6a26fb890a4da3b2c78d39d63601af8d5fa53f14",
+      "scripts/docs_rules.py": "sha256:114b2aeb67fe815f19b274a2c5226f5c6959125cbea0e4b34054286198424cde",
+      "scripts/docs_sources.py": "sha256:c8caf54ddebc9e79d279e5c45f99fc0e180d6bb788fca8d7324bf79e1f8830b7",
+      "scripts/docs_verified.py": "sha256:22031d758b5c4ed666d1416e2b374affe5fa51f52f3a3de4b08134881de55aa4",
       "scripts/plugin_theme_test.py": "sha256:fc580a1af11c21e92b40704a3b9357b579d777edbeb0cfee3103c86de097c84c",
       "scripts/toolchain_gate.py": "sha256:d8bfb38a8cce41cb048c44a502e8bcb67dc4d636e2449f9a690bb8bdbc8ace58",
       "scripts/ui_budget_test.py": "sha256:09b1a5ac499496bd2531bb30c46e47b1161910e8a86b3141ffede13c00bd4dcc",
@@ -284,7 +288,7 @@
       "is an ancestor of HEAD, and that `ran_at` is an ISO timestamp.",
       "(`scripts/docs_sources.py::reverse_index`)."
     ],
-    "reviewed_sha": "sha256:73b7b1c5ad058fddf068f53c51c00fd92fbccf679483031051a8cc00e56b319e",
+    "reviewed_sha": "sha256:6816566f1b152f4a09f04570c36372bb00fb08f4daaba3c62ff8bdcc5d2985fb",
     "reviewed_note": "model=lightvela-auto; session=ses_e25b26f55ffeXFN449tWoeGvHw"
   },
   "docs/development/reference/providers.md": {
@@ -368,9 +372,10 @@
     "sources": {
       "crates/zroutery-core/src/history_import/mod.rs": "sha256:74b351de9175170e9749a960d6588961362e31458ff6277dfeef6813c49db596",
       "crates/zroutery-core/src/ml/traces.rs": "sha256:6d6c3ce971fe6e111d54c669f6db12cdb1784ceeae752a6017f4c248d85ff995",
+      "crates/zroutery-core/src/runtime_store.rs": "sha256:554ec5ce787f90e2dc5a45984fac428cd64caeb1f5f20021d6d27890aa35fdc1",
       "crates/zroutery-core/src/runtime_store/history.rs": "sha256:6ea3e1b45ff1d1dc75b53e7bb41064980dbff2ae343e8b642b2bf256ebf1256c",
       "crates/zroutery-core/src/runtime_store/imports.rs": "sha256:fd478b89ff1df82f0149985e7f8c8e5ee99aa6521edb462a68e63aa2acaa84e0",
-      "crates/zroutery-core/src/stats.rs": "sha256:a9805e5cb5dae603ca7390276be424fff41e43cfbc699abb71fac75e1f0973c4"
+      "crates/zroutery-core/src/stats.rs": "sha256:e10188022206b468f0580c1b4330ca58dcb51b00a812f6b68ee9c7e35ac8770f"
     },
     "commands": [
       "cargo test --workspace --all-features --locked"
@@ -384,7 +389,7 @@
       "`crates/zroutery-core/src/stats.rs::Stats`",
       "`crates/zroutery-core/src/ml/traces.rs::TraceLog`"
     ],
-    "reviewed_sha": "sha256:dbcf97682449f28146bb255a741a311a59b635761d385aad607f603ba35443bd",
+    "reviewed_sha": "sha256:eaa1dc351e07ef57004001c2521b60a2ede67eae3546464670a18c9e9594f7c7",
     "reviewed_note": "model=lightvela-auto; session=re-record-after-eol-normalization"
   },
   "README.md": {
@@ -396,7 +401,7 @@
       "crates/zroutery-core/src/config/provider.rs": "sha256:d241d6b81689b603f733ede67e5ee491587a08e9efcc1578022363144e236acb",
       "crates/zroutery-core/src/config/registry.rs": "sha256:3675fdf6fa3531071b1041ecc59324fbb65f86ce21312e4465230cd7ffe67e90",
       "crates/zroutery-core/src/config/server.rs": "sha256:ab8131463ef7b37805256803e70f3b6708e13387ac10a2c09199bf61c4a461f6",
-      "crates/zroutery-core/src/runtime_store.rs": "sha256:4b69eafeb73d556bc953f06e09c2a64000951b8336f3788e52a664a71b358399",
+      "crates/zroutery-core/src/runtime_store.rs": "sha256:554ec5ce787f90e2dc5a45984fac428cd64caeb1f5f20021d6d27890aa35fdc1",
       "crates/zroutery-core/src/server/handlers.rs": "sha256:9fcabdd8007b77f529f5f7e5bc8ad380f4f1a43efe07bf77645c9d58e9f97952",
       "crates/zroutery-core/src/server/pipeline/safeguards/mod.rs": "sha256:4ab0c918c788b37742ade830ea56329a85716ca5e2ed246206d9b061b6895c89",
       "crates/zroutery-plugin-api/src/capability.rs": "sha256:7a5c4868e770c2b95e694b1235feb5d3b0fdff2085e54ce047d2893ff2b2fd15",
@@ -422,7 +427,7 @@
       "Point `ZROUTERY_CONFIG_DIR` at a custom config directory.",
       "Desktop builds include the `ml` module, disabled by default: no collection, no training, no effect on routing."
     ],
-    "reviewed_sha": "sha256:5f2b74d8597e5fcf3bffe5b12713e4bafa0cdbf128802e0a71f425ff581d88fe",
+    "reviewed_sha": "sha256:2f025f7b2f444c39639bcf8da50acb6f34c746d215de3482207f89de1c6d795d",
     "reviewed_note": "model=lightvela-auto; session=ses_e252286ddffe8Z3GfQw4rQOiDF"
   },
   "README.zh-CN.md": {
@@ -434,7 +439,7 @@
       "crates/zroutery-core/src/config/provider.rs": "sha256:d241d6b81689b603f733ede67e5ee491587a08e9efcc1578022363144e236acb",
       "crates/zroutery-core/src/config/registry.rs": "sha256:3675fdf6fa3531071b1041ecc59324fbb65f86ce21312e4465230cd7ffe67e90",
       "crates/zroutery-core/src/config/server.rs": "sha256:ab8131463ef7b37805256803e70f3b6708e13387ac10a2c09199bf61c4a461f6",
-      "crates/zroutery-core/src/runtime_store.rs": "sha256:4b69eafeb73d556bc953f06e09c2a64000951b8336f3788e52a664a71b358399",
+      "crates/zroutery-core/src/runtime_store.rs": "sha256:554ec5ce787f90e2dc5a45984fac428cd64caeb1f5f20021d6d27890aa35fdc1",
       "crates/zroutery-core/src/server/handlers.rs": "sha256:9fcabdd8007b77f529f5f7e5bc8ad380f4f1a43efe07bf77645c9d58e9f97952",
       "crates/zroutery-core/src/server/pipeline/safeguards/mod.rs": "sha256:4ab0c918c788b37742ade830ea56329a85716ca5e2ed246206d9b061b6895c89",
       "crates/zroutery-plugin-api/src/capability.rs": "sha256:7a5c4868e770c2b95e694b1235feb5d3b0fdff2085e54ce047d2893ff2b2fd15",
@@ -460,7 +465,7 @@
       "\u63d0\u4ea4\u4fe1\u606f\u6309 Conventional Commits \u4e66\u5199\uff0cCI \u4f1a\u9010\u6761\u68c0\u67e5\u3002\u67b6\u6784\u51b3\u7b56\u548c\u5404\u9636\u6bb5\u7684\u8bb0\u5f55\u5728 `docs/development/`\uff1b\u6539\u4ee3\u7801\u524d\u5148\u770b `CONTRIBUTING.md` \u548c `AGENTS.md`\u3002",
       "\u6253\u5305\u76ee\u6807\uff1a`src-tauri/tauri.conf.json::bundle`\u3002"
     ],
-    "reviewed_sha": "sha256:7eb97c16dc82ad806cdffa87cba5dd76a28ee854ea5f7951f6ef14f803978d5d",
+    "reviewed_sha": "sha256:7a73ad9a3fee44841e4476eeace251d0a5f852a790c37eae183e9cd08aad6bab",
     "reviewed_note": "model=lightvela-auto; session=ses_e252286ddffe8Z3GfQw4rQOiDF"
   },
   "README.zh-TW.md": {
@@ -472,7 +477,7 @@
       "crates/zroutery-core/src/config/provider.rs": "sha256:d241d6b81689b603f733ede67e5ee491587a08e9efcc1578022363144e236acb",
       "crates/zroutery-core/src/config/registry.rs": "sha256:3675fdf6fa3531071b1041ecc59324fbb65f86ce21312e4465230cd7ffe67e90",
       "crates/zroutery-core/src/config/server.rs": "sha256:ab8131463ef7b37805256803e70f3b6708e13387ac10a2c09199bf61c4a461f6",
-      "crates/zroutery-core/src/runtime_store.rs": "sha256:4b69eafeb73d556bc953f06e09c2a64000951b8336f3788e52a664a71b358399",
+      "crates/zroutery-core/src/runtime_store.rs": "sha256:554ec5ce787f90e2dc5a45984fac428cd64caeb1f5f20021d6d27890aa35fdc1",
       "crates/zroutery-core/src/server/handlers.rs": "sha256:9fcabdd8007b77f529f5f7e5bc8ad380f4f1a43efe07bf77645c9d58e9f97952",
       "crates/zroutery-core/src/server/pipeline/safeguards/mod.rs": "sha256:4ab0c918c788b37742ade830ea56329a85716ca5e2ed246206d9b061b6895c89",
       "crates/zroutery-plugin-api/src/capability.rs": "sha256:7a5c4868e770c2b95e694b1235feb5d3b0fdff2085e54ce047d2893ff2b2fd15",
@@ -498,7 +503,7 @@
       "\u4e3b\u984c\u8207\u5916\u639b\u7aef\u9762\uff1a`crates/zroutery-plugin-api/src/capability.rs::Capability`\u3001`crates/zroutery-plugin-api/src/manifest.rs::PluginManifestV1`\u3001`crates/zroutery-plugin-api/src/options.rs::OptionsSchemaV1`\u3001`crates/zroutery-core/src/config/plugin.rs::PluginInstanceConfig`\u3001`ui/src/themes/registry.ts`\u3001`scripts/plugin_theme_test.py`\u3001`scripts/theme_sources/manifest.json`\u3002",
       "\u53e6\u5916\u6709 `GET /v1/models`\uff08\u5217\u51fa\u6240\u6709\u53ef\u547c\u53eb\u7684 id\uff09\u3001`GET /v1/status` \u548c `GET /health`\uff08\u552f\u4e00\u4e0d\u9700\u8981\u9a57\u8b49\u7684\u4ecb\u9762\uff09\u3002\u9a57\u8b49\u652f\u63f4 `x-api-key` \u548c `Authorization: Bearer`\uff0ctoken \u5728\u300c\u9598\u9053\u300d\u9078\u55ae\u88e1\u8907\u88fd\u3002"
     ],
-    "reviewed_sha": "sha256:38dbfdbab3c5692f1510dfae7c46ac727c0ed114d9a7cb19e766c0d595ce4d3e",
+    "reviewed_sha": "sha256:e40ed2043ec32a62aeede6da0b3d95b68ab3be955fd831a9316fbb6fcff184c0",
     "reviewed_note": "model=lightvela-auto; session=ses_e252286ddffe8Z3GfQw4rQOiDF"
   },
   "docs/development/runbook.md": {
@@ -702,10 +707,11 @@
       "crates/zroutery-core/src/ir/response.rs": "sha256:7ac5f7357144a078fae3bff1ad6f5f86c5947381699a9cf40c7c43ecb8dd6068",
       "crates/zroutery-core/src/observability.rs": "sha256:9c5240f497a3c59d56e9f5b26625a00a89ce8f6e3a900ca0ff1236cf40028aa1",
       "crates/zroutery-core/src/observation.rs": "sha256:1714d38146266ca781ebc060d451fb22ab41df364a98b66c04ed2dfd936fedeb",
+      "crates/zroutery-core/src/runtime_store.rs": "sha256:554ec5ce787f90e2dc5a45984fac428cd64caeb1f5f20021d6d27890aa35fdc1",
       "crates/zroutery-core/src/runtime_store/history.rs": "sha256:6ea3e1b45ff1d1dc75b53e7bb41064980dbff2ae343e8b642b2bf256ebf1256c",
       "crates/zroutery-core/src/server/projection_log.rs": "sha256:0c10c9d7bbbc2e06362573c5e1d8e2d5c2e7e83c91c1382d10bf0eaab945a811",
       "crates/zroutery-core/src/session.rs": "sha256:e33be9d213091260a8c9216e3ea7422e9fae82da9d4fd37e6e41bbc264f9ce04",
-      "crates/zroutery-core/src/stats.rs": "sha256:a9805e5cb5dae603ca7390276be424fff41e43cfbc699abb71fac75e1f0973c4",
+      "crates/zroutery-core/src/stats.rs": "sha256:e10188022206b468f0580c1b4330ca58dcb51b00a812f6b68ee9c7e35ac8770f",
       "crates/zroutery-core/src/stats_ext.rs": "sha256:d54201fb9cf17d004ac9884ab008e25d5d85f7c6b5927344e039852ef86d1f2d",
       "src-tauri/src/state/budget.rs": "sha256:033fefd3dca92e7bdc3f6e19655797cbacfa0bfc6460d3bbe0371c50ac7223ba"
     },
@@ -721,7 +727,7 @@
       "`crates/zroutery-core/src/observability.rs::AttemptProjection`",
       "(`crates/zroutery-core/src/observability.rs::CorrelationKeys`); the attempt id"
     ],
-    "reviewed_sha": "sha256:33b77537705811bd9b1320a41ab1a0ca33c1477151dbda9d32565ea29fbdda9a",
+    "reviewed_sha": "sha256:64b33eb00b1a8f13dad67ae66ce21a3531971a540ffabf1bbc14677341f007f6",
     "reviewed_note": "model=lightvela-auto; session=re-record-after-eol-normalization"
   },
   "docs/development/reference/config.md": {
