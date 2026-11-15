@@ -2,7 +2,7 @@
 
 # Current state
 
-as of `2026-11-15` · branch `dev` · verified code head `1063fe0`
+as of `2026-11-15` · branch `dev` · verified code head `7dd682b`
 
 ## Gates
 
@@ -11,7 +11,7 @@ as of `2026-11-15` · branch `dev` · verified code head `1063fe0`
 | documentation contracts (local) | **pass** | recorded | `python3 -B scripts/docs_contracts.py` | all non-range documentation gates |
 | fmt | **pass** | asserted | `cargo fmt --all -- --check` | ran on local rustc 1.98.0; the CI-resolved toolchain was not available, so this is not a CI-toolchain pass |
 | clippy (workspace, all targets, all features) | **pass** | asserted | `cargo clippy --workspace --all-targets --all-features --locked -- -D warnings` | ran on local rustc 1.98.0; the CI-resolved toolchain was not available, so this is not a CI-toolchain pass |
-| tests (workspace, all features) | **pass** | asserted | `cargo test --workspace --all-features --locked` | 3550 passed, 0 failed, 22 ignored, 122 suites; ran on local rustc 1.98.0; the CI-resolved toolchain was not available, so this is not a CI-toolchain pass |
+| tests (workspace, all features) | **pass** | asserted | `cargo test --workspace --all-features --locked` | 3556 passed, 0 failed, 22 ignored, 122 suites; ran on local rustc 1.98.0; the CI-resolved toolchain was not available, so this is not a CI-toolchain pass |
 | frontend build | **pass** | asserted | `pnpm --dir ui build` |  |
 | frontend tests | **pass** | asserted | `pnpm --dir ui test` | 86 passed |
 | command surface | **pass** | asserted | `python3 -B scripts/command_surface_test.py` | 90 interface commands, 254 registered |
