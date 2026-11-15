@@ -27,7 +27,7 @@ Clients can speak Anthropic, OpenAI Chat, OpenAI Responses, or Gemini; Claude Co
 
 ## Quick start
 
-Requirements: Rust 1.90 (the minimum required by Tauri 2.12), Node 22, and pnpm 11.
+Requirements: Rust 1.90 (the minimum required by Tauri 2.12), Node 22, and pnpm 11; the Tauri CLI and API pins are in `package.json` and `ui/package.json`.
 
 ```sh
 rustup toolchain install 1.90.0

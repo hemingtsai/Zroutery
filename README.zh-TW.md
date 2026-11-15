@@ -27,7 +27,7 @@ Zroutery 是一個本機 LLM 閘道：把多家模型供應商接到同一個本
 
 ## 快速開始
 
-環境：Rust 1.90（Tauri 2.12 要求的最低版本）、Node 22 和 pnpm 11。
+環境：Rust 1.90（Tauri 2.12 要求的最低版本）、Node 22 和 pnpm 11；Tauri CLI 與 API 的版本固定在 `package.json` 和 `ui/package.json` 中。
 
 ```sh
 rustup toolchain install 1.90.0
