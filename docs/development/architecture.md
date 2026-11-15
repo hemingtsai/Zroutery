@@ -129,19 +129,19 @@ evidence. `untested` is an explicit gap, not a pass.
 |---|---|---|
 | 1 | Eligibility is authoritative | `crates/zroutery-core/tests/eligibility_trace_test.rs::direct_and_tier_resolution_have_request_capability_parity` |
 | 2 | Planned and served identity are separate | `crates/zroutery-core/tests/decision_contract_test.rs::planned_attempted_and_served_stay_three_separate_facts` |
-| 3 | One terminal settlement | `crates/zroutery-core/tests/pipeline_lifecycle_test.rs::every_request_reaches_exactly_one_terminal_transition` |
+| 3 | One terminal settlement | `crates/zroutery-core/tests/pipeline_lifecycle_test/identity_and_classification.rs::every_request_reaches_exactly_one_terminal_transition` |
 | 4 | Cancellation is not success | `crates/zroutery-core/tests/failure_authority_test.rs::cancellation_and_interruption_are_terminal_non_successes` |
 | 5 | Unknown is not zero | `crates/zroutery-core/tests/attempt_observation_test.rs::an_all_zero_usage_is_never_a_measured_zero` |
 | 6 | Token subsets are respected | `crates/zroutery-core/tests/gemini_test.rs::cached_content_is_a_subset_of_the_gemini_prompt_total` |
 | 7 | Currencies do not mix | `crates/zroutery-core/src/budget.rs::currencies_are_counted_separately_and_never_added` |
-| 8 | Budgets are admission plus a ledger | `crates/zroutery-core/tests/e2e.rs::concurrent_requests_cannot_all_pass_the_same_budget` |
+| 8 | Budgets are admission plus a ledger | `crates/zroutery-core/tests/e2e/budget.rs::concurrent_requests_cannot_all_pass_the_same_budget` |
 | 9 | Failure has one authority | `crates/zroutery-core/tests/failure_authority_test.rs::one_impact_table_covers_routing_health_stats_and_fault_effects` |
 | 10 | Upstream bodies do not reach the client | untested — source-enforced; no test asserts body absence |
 | 11 | Redirects are off | `crates/zroutery-core/src/upstream/client_tests.rs::a_redirect_is_answered_as_a_refusal_not_followed` |
 | 12 | Auth is constant-time and local | `crates/zroutery-core/src/server/tests.rs::token_comparison_is_length_safe_and_exact` |
 | 13 | Secrets live in the credential store | untested — config shape is enforced; no test asserts no plaintext secret |
 | 14 | A local persistence failure does not replay an upstream action | `crates/zroutery-core/tests/durable_accounting_test.rs::required_storage_failure_never_silently_starts_volatile_serving` |
-| 15 | Runtime health is process-local; spend is durable | `crates/zroutery-core/tests/e2e.rs::spend_survives_a_restart` |
+| 15 | Runtime health is process-local; spend is durable | `crates/zroutery-core/tests/e2e/budget.rs::spend_survives_a_restart` |
 
 ## 4. Desktop surface
 
