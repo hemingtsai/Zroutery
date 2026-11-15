@@ -126,6 +126,10 @@ gate.
 ## Commits
 
 - Commit when the change is verified; do not wait to be asked.
+- Commit with the local machine's configured Git identity: the human GitHub
+  account's username and email. Never invent an author name or email, and do not
+  let a tool or fixture override it; use another identity only when the user
+  names it explicitly.
 - One file or one module per commit; independently understandable and green.
 - Format: `<type>(<scope>): <imperative summary>`, lowercase, at most 72
   characters. `scripts/commit_contract_test.py` is authoritative.
