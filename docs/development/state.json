@@ -1,6 +1,6 @@
 {
   "as_of": "2026-11-15",
-  "head": "1063fe0",
+  "head": "7dd682b",
   "branch": "dev",
   "gates": [
     {
@@ -18,8 +18,8 @@
       "command": "cargo fmt --all -- --check",
       "detail": "ran on local rustc 1.98.0; the CI-resolved toolchain was not available, so this is not a CI-toolchain pass",
       "source": "asserted",
-      "ran_at": "2026-11-15T09:05:00+08:00",
-      "commit": "6e8b03d"
+      "ran_at": "2026-11-15T09:35:00+08:00",
+      "commit": "7dd682b"
     },
     {
       "name": "clippy (workspace, all targets, all features)",
@@ -27,17 +27,17 @@
       "command": "cargo clippy --workspace --all-targets --all-features --locked -- -D warnings",
       "detail": "ran on local rustc 1.98.0; the CI-resolved toolchain was not available, so this is not a CI-toolchain pass",
       "source": "asserted",
-      "ran_at": "2026-11-15T09:05:00+08:00",
-      "commit": "6e8b03d"
+      "ran_at": "2026-11-15T09:35:00+08:00",
+      "commit": "7dd682b"
     },
     {
       "name": "tests (workspace, all features)",
       "status": "pass",
       "command": "cargo test --workspace --all-features --locked",
-      "detail": "3550 passed, 0 failed, 22 ignored, 122 suites; ran on local rustc 1.98.0; the CI-resolved toolchain was not available, so this is not a CI-toolchain pass",
+      "detail": "3556 passed, 0 failed, 22 ignored, 122 suites; ran on local rustc 1.98.0; the CI-resolved toolchain was not available, so this is not a CI-toolchain pass",
       "source": "asserted",
-      "ran_at": "2026-11-15T09:05:00+08:00",
-      "commit": "6e8b03d"
+      "ran_at": "2026-11-15T09:35:00+08:00",
+      "commit": "7dd682b"
     },
     {
       "name": "frontend build",
