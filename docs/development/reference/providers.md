@@ -1,6 +1,6 @@
 # Provider Surfaces Reference
 
-> Authority: reference · Owner: backend · Last verified: 2026-11-14 · Verified by: `cargo test --workspace --all-features --locked`
+> Authority: reference · Owner: backend · Last verified: 2026-11-15 · Verified by: `cargo test --workspace --all-features --locked`
 
 This page covers the provider kinds that are not the plain Anthropic/OpenAI
 upstream: NewAPI account panels, OpenCode Zen, and the CC Switch import. It does
@@ -97,6 +97,20 @@ CC Switch is a client provider database, imported read-only.
   request body is stored.
 
 ## Failure modes
+
+Native Messages ingress/egress bypasses OpenCode agent-body shaping and injected
+tool filtering so signed history and opaque native response blocks remain
+unchanged (`crates/zroutery-core/src/upstream/encode.rs::encode_for_mode`,
+`crates/zroutery-core/src/server/pipeline/repair.rs::maybe_filter_stream`).
+SystemOne safety reviewers receive a model, transient state and one binary
+decision question per action. No main conversation is ever answered by a
+decision endpoint: an exact-ID resolution to a decision provider is refused
+before any send, and a native-only request additionally refuses a tier whose
+every member is a decision endpoint
+(`crates/zroutery-core/src/upstream/decision.rs::build_body`,
+`crates/zroutery-core/src/server/pipeline/anthropic_native.rs::validate_resolution`,
+`crates/zroutery-core/src/server/pipeline/safeguards/reviewer.rs::ReviewContext::classify`,
+`crates/zroutery-core/tests/gateway_safeguards_test.rs::an_exact_decision_model_is_not_a_native_main_generator`).
 
 | Symptom | Cause | Handling |
 |---|---|---|

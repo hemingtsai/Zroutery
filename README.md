@@ -86,6 +86,14 @@ export ANTHROPIC_AUTH_TOKEN=<paste token>
 export ANTHROPIC_MODEL=standard-class
 ```
 
+For server-side auto mode, enable **Auto review** and its **Claude Code
+server-side auto review** switch, then add a trusted classifier model to the
+pool. Native review results are preserved; other upstreams use that pool and
+return per-tool results before the final stream event. Classifier traffic sees
+the conversation/tool inputs and is accounted separately. This matches the
+client protocol, not Anthropic's private classifier or free-review eligibility.
+See [Auto review](docs/development/reference/request-purpose.md#embedded-claude-code-auto-review).
+
 OpenAI-style clients:
 
 ```sh
@@ -150,10 +158,11 @@ MIT (see the `license` field in `Cargo.toml`).
 - Default bind address, port and body limit: `crates/zroutery-core/src/config/server.rs::ServerConfig`.
 - HTTP routes: `crates/zroutery-core/src/server/handlers.rs::build_app`.
 - Upstream protocol kinds and surfaces: `crates/zroutery-core/src/config/provider.rs::ProviderKind`, `crates/zroutery-core/src/config/provider.rs::ApiSurface`, `crates/zroutery-core/src/config/provider.rs::ProviderKind::is_decision`, `crates/zroutery-core/src/config/registry.rs::ProviderConfig::dialect`.
-- Theme and plugin surfaces: `crates/zroutery-plugin-api/src/capability.rs::Capability`, `crates/zroutery-plugin-api/src/manifest.rs::PluginManifestV1`, `crates/zroutery-core/src/config/plugin.rs::PluginInstanceConfig`, `ui/src/themes/registry.ts`, `scripts/plugin_theme_test.py`, `scripts/theme_sources/manifest.json`.
+- Theme and plugin surfaces: `crates/zroutery-plugin-api/src/capability.rs::Capability`, `crates/zroutery-plugin-api/src/manifest.rs::PluginManifestV1`, `crates/zroutery-plugin-api/src/options.rs::OptionsSchemaV1`, `crates/zroutery-core/src/config/plugin.rs::PluginInstanceConfig`, `ui/src/themes/registry.ts`, `scripts/plugin_theme_test.py`, `scripts/theme_sources/manifest.json`.
 - Bundle targets: `src-tauri/tauri.conf.json::bundle`.
 - Config file and gateway token: `src-tauri/src/store.rs::FILE_NAME`, `src-tauri/src/store.rs::generate_token`.
 - Linux credential dependency: `src-tauri/Cargo.toml::keyring`.
 - Data locations: `src-tauri/src/platform.rs::default_config_dir`, `crates/zroutery-core/src/runtime_store.rs::RuntimeStore`.
+- Server auto review: `crates/zroutery-core/src/server/pipeline/safeguards/mod.rs::ReviewContext`, `ui/src/pages/routing/AutoModeDrawer.tsx::AutoModeDrawer`.
 
 The canonical owner of each repeated fact is [config.md](docs/development/reference/config.md) for bind/port, [protocol.md](docs/development/reference/protocol.md) for dialects, and [routing-data.md](docs/development/reference/routing-data.md) for data locations. This guide is a pointer; the reference wins.

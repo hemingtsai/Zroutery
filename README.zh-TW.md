@@ -86,6 +86,12 @@ export ANTHROPIC_AUTH_TOKEN=<貼上 token>
 export ANTHROPIC_MODEL=standard-class
 ```
 
+使用伺服器端 auto 模式時，開啟 **自動審查** 和 **Claude Code 伺服器端 auto 審核**，
+並向模型池加入可信的審核模型。原生審核結果原樣保留；其他上游由本池審核，逐工具結果
+隨串流終態傳回。審核模型會看到對話及工具輸入，實際用量單獨記帳。這是客戶端協定相容，
+不代表官方私有分類器或官方免費審核資格。
+詳見 [Auto 審核](docs/development/reference/request-purpose.md#embedded-claude-code-auto-review)。
+
 OpenAI 系客戶端：
 
 ```sh
@@ -150,10 +156,11 @@ MIT（見 `Cargo.toml` 的 `license`）。
 - 預設監聽位址、連接埠與請求本文上限：`crates/zroutery-core/src/config/server.rs::ServerConfig`。
 - HTTP 路由：`crates/zroutery-core/src/server/handlers.rs::build_app`。
 - 上游協定型別與 API 端面：`crates/zroutery-core/src/config/provider.rs::ProviderKind`、`crates/zroutery-core/src/config/provider.rs::ApiSurface`、`crates/zroutery-core/src/config/provider.rs::ProviderKind::is_decision`、`crates/zroutery-core/src/config/registry.rs::ProviderConfig::dialect`。
-- 主題與外掛端面：`crates/zroutery-plugin-api/src/capability.rs::Capability`、`crates/zroutery-plugin-api/src/manifest.rs::PluginManifestV1`、`crates/zroutery-core/src/config/plugin.rs::PluginInstanceConfig`、`ui/src/themes/registry.ts`、`scripts/plugin_theme_test.py`、`scripts/theme_sources/manifest.json`。
+- 主題與外掛端面：`crates/zroutery-plugin-api/src/capability.rs::Capability`、`crates/zroutery-plugin-api/src/manifest.rs::PluginManifestV1`、`crates/zroutery-plugin-api/src/options.rs::OptionsSchemaV1`、`crates/zroutery-core/src/config/plugin.rs::PluginInstanceConfig`、`ui/src/themes/registry.ts`、`scripts/plugin_theme_test.py`、`scripts/theme_sources/manifest.json`。
 - 打包目標：`src-tauri/tauri.conf.json::bundle`。
 - 設定檔與閘道 token：`src-tauri/src/store.rs::FILE_NAME`、`src-tauri/src/store.rs::generate_token`。
 - Linux 憑證相依：`src-tauri/Cargo.toml::keyring`。
 - 資料位置：`src-tauri/src/platform.rs::default_config_dir`、`crates/zroutery-core/src/runtime_store.rs::RuntimeStore`。
+- 伺服器端 auto 審核：`crates/zroutery-core/src/server/pipeline/safeguards/mod.rs::ReviewContext`、`ui/src/pages/routing/AutoModeDrawer.tsx::AutoModeDrawer`。
 
 每個重複事實的權威歸屬：[config.md](docs/development/reference/config.md) 負責監聽位址/連接埠，[protocol.md](docs/development/reference/protocol.md) 負責協定，[routing-data.md](docs/development/reference/routing-data.md) 負責資料位置。本指南只是指標；衝突時以 reference 為準。

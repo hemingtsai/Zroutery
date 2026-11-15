@@ -1276,6 +1276,8 @@ fn apply_newapi_prices(
             output_per_mtok: output,
             cache_read_per_mtok: price.cache_read_per_mtok,
             cache_write_per_mtok: price.cache_write_per_mtok,
+            cache_write_5m_per_mtok: None,
+            cache_write_1h_per_mtok: None,
         };
         if !pricing.problems().is_empty() {
             continue;

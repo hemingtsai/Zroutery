@@ -1,6 +1,6 @@
 # Architecture
 
-> Authority: normative · Owner: backend · Last verified: 2026-11-14 · Verified by: `scripts/docs_check.py`
+> Authority: normative · Owner: backend · Last verified: 2026-11-15 · Verified by: `scripts/docs_check.py`
 
 This document describes the current boundaries and the invariants a change must
 preserve. It does not track pass/fail status (`current-state.md`), command
@@ -99,9 +99,12 @@ test; the evidence table below marks the two that are source-only.
    `FailureClass`/`FailureImpact`, and the wire error is derived from the same
    canonical failure (`crates/zroutery-core/src/failure.rs::ClassifiedFailure`,
    `crates/zroutery-core/src/error.rs::safe_message`).
-10. **Upstream bodies do not reach the client.** The wire error carries a
-    provider name and status; the body is truncated for the log, never echoed
-    (`crates/zroutery-core/src/error.rs::safe_message`).
+10. **Persisted errors are metadata, not upstream bodies.** Ordinary wire errors
+    carry the safe provider/status message. Native Messages errors may be
+    relayed request-locally for client capability recovery, but are never added
+    to history or training (`crates/zroutery-core/src/error.rs::safe_message`,
+    `crates/zroutery-core/src/ir/headers.rs::ReplyHeaders::capture_native_error`,
+    `crates/zroutery-core/src/server/pipeline/mod.rs::handle_chat`).
 11. **Redirects are off.** An upstream redirect cannot carry the provider key to
     another host (`crates/zroutery-core/src/upstream/http.rs::configure`).
 12. **Auth is constant-time and local.** The gateway token is compared without
@@ -136,7 +139,7 @@ evidence. `untested` is an explicit gap, not a pass.
 | 7 | Currencies do not mix | `crates/zroutery-core/src/budget.rs::currencies_are_counted_separately_and_never_added` |
 | 8 | Budgets are admission plus a ledger | `crates/zroutery-core/tests/e2e/budget.rs::concurrent_requests_cannot_all_pass_the_same_budget` |
 | 9 | Failure has one authority | `crates/zroutery-core/tests/failure_authority_test.rs::one_impact_table_covers_routing_health_stats_and_fault_effects` |
-| 10 | Upstream bodies do not reach the client | untested — source-enforced; no test asserts body absence |
+| 10 | Persisted errors are metadata, not upstream bodies | `crates/zroutery-core/tests/durable_accounting_test.rs::failed_attempt_known_cost_survives_and_late_finalization_cannot_rebind_it` |
 | 11 | Redirects are off | `crates/zroutery-core/src/upstream/client_tests.rs::a_redirect_is_answered_as_a_refusal_not_followed` |
 | 12 | Auth is constant-time and local | `crates/zroutery-core/src/server/tests.rs::token_comparison_is_length_safe_and_exact` |
 | 13 | Secrets live in the credential store | untested — config shape is enforced; no test asserts no plaintext secret |
@@ -144,6 +147,13 @@ evidence. `untested` is an explicit gap, not a pass.
 | 15 | Runtime health is process-local; spend is durable | `crates/zroutery-core/tests/e2e/budget.rs::spend_survives_a_restart` |
 
 ## 4. Desktop surface
+
+Claude Code server review is a request-local pipeline layer, not a generation
+candidate or a separate execution engine. It preserves native results and uses
+the configured purpose pool only for missing results, with actual per-tool
+verdicts and separate accounting
+(`crates/zroutery-core/src/server/pipeline/safeguards/mod.rs::ReviewContext`,
+`crates/zroutery-core/src/server/pipeline/safeguards/reviewer.rs::ReviewContext::send_review`).
 
 The desktop shell is not a second Core. It owns five things:
 

@@ -71,6 +71,7 @@ pub use decision::{
     build_body as build_decision_body, parse_answer as parse_decision_answer,
     question_of as decision_question, Decision, DecisionReply, BLOCK_POLARITY,
 };
+pub(crate) use encode::anthropic_version_for;
 pub use encode::{encode_for, encode_for_mode, EncodeMode};
 pub use headers::{build_headers, build_headers_for_identity, build_headers_for_profile};
 
@@ -235,6 +236,11 @@ impl Upstream {
 
         if let Ok(value) = serde_json::from_str::<Value>(&text) {
             observation::capture(&observation, provider.dialect(), &value);
+            if !status.is_success() && client.native_anthropic {
+                client
+                    .reply_headers
+                    .capture_native_error(status.as_u16(), &value);
+            }
         }
         if !status.is_success() {
             return Err(Error::Upstream {
@@ -250,7 +256,12 @@ impl Upstream {
         if let Some(error) = Error::session_binding_payload(&provider.name, &json) {
             return Err(error);
         }
-        let response = protocol::decode_response(provider.dialect(), json)?;
+        let response =
+            if provider.dialect() == crate::ir::Dialect::Anthropic && client.native_anthropic {
+                crate::protocol::anthropic::decode_native_response(json)?
+            } else {
+                protocol::decode_response(provider.dialect(), json)?
+            };
         observation.observe_decoded(
             &crate::ir::declaration_from_passthrough(&response).unwrap_or_default(),
             response.usage,

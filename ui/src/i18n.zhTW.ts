@@ -881,6 +881,11 @@ export const zhTW: Dict = {
     "權限檢查走下方模型池而非會話模型，涵蓋 Claude Code 自動審查與 Codex Guardian",
   "routing.review_failover": "池內失敗轉移",
   "routing.review_failover_hint": "出錯時嘗試下一個候選",
+  "routing.server_review": "Claude Code 伺服器端 auto 審核",
+  "routing.server_review_hint":
+    "權限路由開啟時，上游未提供審核結果就由本池審核。審核模型會看到對話和工具輸入，實際用量單獨計費；原生審核結果保持不變。",
+  "routing.server_review_timeout": "審核總逾時（秒）",
+  "routing.server_review_contract": "逐工具結果隨串流終態傳回；無有效判定不放行",
   "routing.pool": "模型池",
   "routing.pool_hint": "模型來自模型頁，設定直接複用",
   "routing.no_candidates": "暫無候選，在下方選擇。",
@@ -898,7 +903,7 @@ export const zhTW: Dict = {
   "routing.verdict_parsing": "判定解析",
   "routing.verdict_only": "僅 <block>yes|no</block>",
   "routing.verdict_only_hint":
-    "Claude Code 要的是 <block>yes|no</block>，Codex Guardian 要的是 JSON 裡的 outcome，決策模型只給機率，最終判定由該供應商的閾值決定",
+    "獨立 Claude 檢查使用 <block> 或 <severity>，伺服器端審核使用逐工具 JSON；Codex Guardian 使用 outcome。決策模型給出機率，按供應商閾值映射。",
   "routing.no_verdict": "無判定時",
   "routing.fails_closed": "失敗即攔截，由客戶端詢問使用者",
   "routing.fail_closed_note":

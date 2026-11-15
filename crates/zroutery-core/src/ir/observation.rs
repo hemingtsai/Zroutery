@@ -14,6 +14,8 @@ pub struct ObservedResponse {
     /// unaffected by this field: an absent or refused reading is never
     /// dressed up as a measured total.
     pub usage_evidence: UsageEvidence,
+    pub usage_iterations: Option<Vec<super::UsageIteration>>,
+    pub(crate) iterated: bool,
 }
 
 impl ObservedResponse {
@@ -104,6 +106,14 @@ impl AttemptObservation {
         if matches!(state.usage_evidence, UsageEvidence::Invalid) {
             return;
         }
+        if state.iterated {
+            if state.usage_iterations.is_some()
+                && !matches!(state.usage_evidence, UsageEvidence::Conflicting)
+            {
+                state.usage_evidence = UsageEvidence::Measured;
+            }
+            return;
+        }
         record_usage(&mut state, usage, true);
     }
 
@@ -119,7 +129,7 @@ impl AttemptObservation {
     pub fn observe_parsed_usage(&self, declaration: &UpstreamModelDeclaration, usage: Usage) {
         let mut state = crate::sync::lock(&self.0);
         state.declaration.merge(declaration);
-        if matches!(state.usage_evidence, UsageEvidence::Invalid) {
+        if state.iterated || matches!(state.usage_evidence, UsageEvidence::Invalid) {
             return;
         }
         record_usage(&mut state, usage, false);
@@ -141,6 +151,14 @@ impl AttemptObservation {
         let mut state = crate::sync::lock(&self.0);
         state.declaration.merge(declaration);
         if matches!(state.usage_evidence, UsageEvidence::Invalid) {
+            return;
+        }
+        if state.iterated {
+            if state.usage_iterations.is_some()
+                && !matches!(state.usage_evidence, UsageEvidence::Conflicting)
+            {
+                state.usage_evidence = UsageEvidence::Measured;
+            }
             return;
         }
         if usage == Usage::default() {
@@ -172,6 +190,47 @@ impl AttemptObservation {
         }
         state.usage = None;
         state.usage_evidence = UsageEvidence::Invalid;
+    }
+
+    pub(crate) fn observe_iterations(&self, iterations: Result<Vec<super::UsageIteration>, ()>) {
+        let mut state = crate::sync::lock(&self.0);
+        let was_iterated = state.iterated;
+        state.iterated = true;
+        match iterations.ok().and_then(|iterations| {
+            super::iteration_total(&iterations).map(|usage| (iterations, usage))
+        }) {
+            Some((iterations, usage)) => {
+                if was_iterated
+                    && (state
+                        .usage
+                        .is_some_and(|previous| !dominates(&usage, &previous))
+                        || state.usage_iterations.as_ref().is_some_and(|previous| {
+                            iterations.len() < previous.len()
+                                || iterations.iter().zip(previous).any(|(next, previous)| {
+                                    next.kind != previous.kind
+                                        || next.model != previous.model
+                                        || !dominates(&next.usage, &previous.usage)
+                                })
+                        }))
+                {
+                    state.usage_evidence = UsageEvidence::Conflicting;
+                    return;
+                }
+                state.usage_iterations = Some(iterations);
+                state.usage = Some(usage);
+                if !matches!(state.usage_evidence, UsageEvidence::Conflicting) {
+                    state.usage_evidence = UsageEvidence::Partial;
+                }
+            }
+            None => {
+                if matches!(state.usage_evidence, UsageEvidence::Conflicting) {
+                    return;
+                }
+                state.usage_iterations = None;
+                state.usage = None;
+                state.usage_evidence = UsageEvidence::Invalid;
+            }
+        }
     }
 }
 

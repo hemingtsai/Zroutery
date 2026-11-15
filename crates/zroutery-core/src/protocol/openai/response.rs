@@ -27,10 +27,10 @@ pub(super) fn finish_reason_from_str(s: &str) -> StopReason {
 pub(super) fn finish_reason_to_str(r: StopReason) -> Option<&'static str> {
     match r {
         StopReason::EndTurn | StopReason::StopSequence => Some("stop"),
-        StopReason::MaxTokens => Some("length"),
+        StopReason::MaxTokens | StopReason::ModelContextWindowExceeded => Some("length"),
         StopReason::ToolUse => Some("tool_calls"),
         StopReason::Refusal => Some("content_filter"),
-        StopReason::Unknown => None,
+        StopReason::Unknown | StopReason::PauseTurn | StopReason::Compaction => None,
     }
 }
 

@@ -1,6 +1,6 @@
 # Observability Reference
 
-> Authority: reference · Owner: backend · Last verified: 2026-11-14 · Verified by: `cargo test --workspace --all-features --locked`
+> Authority: reference · Owner: backend · Last verified: 2026-11-15 · Verified by: `cargo test --workspace --all-features --locked`
 
 This page describes the request log, the health view, the activity projection and
 the sessions kept in memory. It does not describe accounting; spend is durable

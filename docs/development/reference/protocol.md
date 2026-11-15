@@ -1,6 +1,6 @@
 # Protocol Reference
 
-> Authority: reference · Owner: backend · Last verified: 2026-11-14 · Verified by: `cargo test --workspace --all-features --locked`
+> Authority: reference · Owner: backend · Last verified: 2026-11-15 · Verified by: `cargo test --workspace --all-features --locked`
 
 This page describes the canonical IR, the four client dialects, SSE and the
 media/reasoning bridges. It does not define routing; see the routing reference.
@@ -58,6 +58,33 @@ entry protocol only (`crates/zroutery-core/src/config/provider.rs::ProviderKind`
 
 ## Streaming
 
+Native Messages envelopes preserve nested content and unknown extensions,
+signed thinking, model/tool IDs and SSE events; in ordinary encoding only model
+routing, the output cap and the explicitly selected API-version migration
+reshape the request. Two documented exceptions deliberately change the body:
+an upstream that rejects the review extension recovers once by removing that
+field and its beta pair, and a thread continuation may replace its
+upstream-only carrier id with a renewed binding
+(`crates/zroutery-core/src/protocol/anthropic/request_out.rs::encode_request_for`,
+`crates/zroutery-core/src/protocol/anthropic/response.rs::decode_native_response`,
+`crates/zroutery-core/src/protocol/anthropic/stream_out.rs::AnthropicStreamEncoder`,
+`crates/zroutery-core/src/server/pipeline/safeguards/mod.rs::recover_rejected_review`,
+`crates/zroutery-core/src/server/pipeline/session_binding.rs::UpstreamSessions`).
+Requests with no portable representation remain on Messages upstreams and
+return capability-recovery wording instead of silently dropping context,
+tool-search or advisor semantics
+(`crates/zroutery-core/src/protocol/anthropic/native.rs::validate_bridge`,
+`crates/zroutery-core/src/server/pipeline/anthropic_native.rs::registry_for`).
+
+Strict tools and JSON Schema formats have explicit Messages/OpenAI conversions;
+Gemini refuses strict tool enforcement rather than claiming an equivalent
+(`crates/zroutery-core/src/protocol/anthropic/request_in.rs::decode_request`,
+`crates/zroutery-core/src/protocol/anthropic/request_out.rs::encode_request_for`,
+`crates/zroutery-core/src/protocol/responses/request_out.rs::encode_request_with`,
+`crates/zroutery-core/src/protocol/gemini/request_out.rs::encode_request`).
+The effective per-message effort is used for eligibility without changing the
+cached top-level config (`crates/zroutery-core/src/protocol/anthropic/request_in.rs::decode_request`).
+
 - `StreamEncoder` turns canonical `StreamEvent`s into the client's SSE frames
   (`crates/zroutery-core/src/protocol/mod.rs::StreamEncoder`).
 - A normal terminal is what makes a stream complete. A body that ends without it
@@ -66,6 +93,33 @@ entry protocol only (`crates/zroutery-core/src/config/provider.rs::ProviderKind`
 - An explicit upstream error envelope is an upstream refusal, not malformed
   JSON; the parser keeps bounded `code`/`type`/`message` for classification
   (`crates/zroutery-core/src/error.rs::stream_payload`).
+
+Native completion requires `message_stop`, not only a stop-reason delta; an
+error or EOF before it preserves partial output without a synthetic success
+(`crates/zroutery-core/src/protocol/anthropic/stream_in.rs::AnthropicStreamParser`,
+`crates/zroutery-core/src/upstream/stream.rs::Upstream::stream_with_identity_policy`).
+Gateway-owned auto-review results use the same final Messages delta slot;
+native results stay unmodified (see [request-purpose.md](request-purpose.md))
+(`crates/zroutery-core/src/server/pipeline/safeguards/stream.rs::ReviewFrames::release`).
+
+## Messages versions, threads and counting
+
+Encoding chooses the version actually forwarded: inbound native version,
+provider extra header, then provider default. The `2026-10-21` migration drops
+retired sampling controls and rejects assistant documents/user citations rather
+than rewriting signed history
+(`crates/zroutery-core/src/upstream/encode.rs::anthropic_version_for`,
+`crates/zroutery-core/src/protocol/anthropic/request_out.rs::apply_version`).
+Message-thread continuation is scoped to its original provider, endpoint,
+model, account/key, binding version and profile. Changed/expired/conflicting
+bindings require full-history reconstruction; bindings are process-local
+(`crates/zroutery-core/src/server/pipeline/session_binding.rs::Scope`,
+`crates/zroutery-core/src/server/pipeline/session_binding.rs::UpstreamSessions`).
+Native token counting forwards the original shape with the routed model and
+version, performs no inference settlement, and uses estimation only when no
+native route or a 404/405 optional endpoint is available
+(`crates/zroutery-core/src/server/pipeline/mod.rs::native_count_tokens`,
+`crates/zroutery-core/src/upstream/json.rs::Upstream::count_messages_tokens`).
 
 ## Usage normalisation
 

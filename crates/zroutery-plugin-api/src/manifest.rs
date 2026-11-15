@@ -209,6 +209,17 @@ impl PluginManifestV1 {
         {
             return Err(PluginError::InvalidManifest);
         }
+        // Options validation and migration run in the control facet; a schema
+        // without that entry could never be honoured.
+        if self.options_schema.is_some()
+            && self
+                .runtime
+                .as_ref()
+                .and_then(|runtime| runtime.entries.control.as_ref())
+                .is_none()
+        {
+            return Err(PluginError::InvalidManifest);
+        }
         let c = &self.contributions;
         let mut ids = BTreeSet::new();
         for id in c

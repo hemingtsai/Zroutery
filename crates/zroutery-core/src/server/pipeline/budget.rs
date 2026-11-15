@@ -29,13 +29,22 @@ pub(super) async fn apply_budgets(
     registry: &Registry,
     resolution: Resolution,
 ) -> Result<(Resolution, AdmissionGuard)> {
-    let admission = state
-        .admit(&main_admission_scopes(
-            registry.config(),
-            registry,
-            &resolution,
-        ))
-        .await;
+    apply_budgets_with_scopes(state, registry, resolution, &[]).await
+}
+
+/// A main call and its embedded review acquire their union once, in canonical
+/// order. Re-acquiring the global/provider gate inside review would deadlock.
+pub(super) async fn apply_budgets_with_scopes(
+    state: &AppState,
+    registry: &Registry,
+    resolution: Resolution,
+    extra_scopes: &[BudgetScope],
+) -> Result<(Resolution, AdmissionGuard)> {
+    let mut scopes: BTreeSet<_> = main_admission_scopes(registry.config(), registry, &resolution)
+        .into_iter()
+        .collect();
+    scopes.extend(extra_scopes.iter().cloned());
+    let admission = state.admit(&scopes.into_iter().collect::<Vec<_>>()).await;
     let mut resolution = resolution;
     let mut visited: Vec<ModelTier> = Vec::new();
 

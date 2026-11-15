@@ -109,9 +109,11 @@ impl AppState {
         if runtime.status.required {
             return Err(Error::Persistence);
         }
-        if let Some(cost) = &attempt.cost {
-            if runtime.charged.insert(attempt.id.clone()) {
-                crate::sync::write(&self.ledger).charge_windows(
+        let costs = attempt.known_costs();
+        if !costs.is_empty() && runtime.charged.insert(attempt.id.clone()) {
+            let mut ledger = crate::sync::write(&self.ledger);
+            for cost in &costs {
+                ledger.charge_windows(
                     &attempt.budget_day,
                     &attempt.budget_month,
                     &attempt.execution.provider_id,
@@ -179,9 +181,11 @@ impl AppState {
         }
         if runtime.settled.insert(fact.request.id.clone()) {
             for attempt in &fact.attempts {
-                if let Some(cost) = &attempt.cost {
-                    if runtime.charged.insert(attempt.id.clone()) {
-                        crate::sync::write(&self.ledger).charge_windows(
+                let costs = attempt.known_costs();
+                if !costs.is_empty() && runtime.charged.insert(attempt.id.clone()) {
+                    let mut ledger = crate::sync::write(&self.ledger);
+                    for cost in &costs {
+                        ledger.charge_windows(
                             &attempt.budget_day,
                             &attempt.budget_month,
                             &attempt.execution.provider_id,

@@ -287,6 +287,7 @@ pub fn encode_request(
     quirks: &ProviderQuirks,
     anthropic_version: anthropic::AnthropicApiVersion,
 ) -> Result<Value> {
+    anthropic::validate_bridge(req, dialect)?;
     if req.responses_native_only && dialect != Dialect::OpenAIResponses {
         return Err(Error::invalid("Responses context or hosted tools require a Responses upstream; refusing to discard context"));
     }

@@ -66,19 +66,25 @@ impl AnthropicApiVersion {
     }
 }
 
+mod native;
 mod request_in;
 mod request_out;
 mod response;
 mod stream_in;
 mod stream_out;
+mod usage;
 
 #[cfg(test)]
 mod tests;
 
+pub(crate) use native::{native_requirements, validate_bridge};
 pub use request_in::decode_request;
+pub(crate) use request_out::apply_version;
 pub use request_out::encode_request;
 pub use request_out::encode_request_for;
+pub(crate) use response::decode_native_response;
 pub use response::{decode_response, encode_response, stop_reason_from_str, stop_reason_to_str};
+pub(crate) use usage::decode_iterations;
 // `decode_usage` is read only by billing.rs's own unit tests; nothing in the
 // shipping build reaches it, so gate the re-export rather than leave it dead.
 #[cfg(test)]

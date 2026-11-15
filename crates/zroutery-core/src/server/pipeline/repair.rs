@@ -38,7 +38,7 @@ pub(super) async fn try_rectify_buffered(
     error: &Error,
     lifecycle: &mut RequestLifecycle,
 ) -> std::result::Result<Option<crate::ir::ChatResponse>, Error> {
-    if candidate.provider.kind.is_decision() {
+    if candidate.provider.kind.is_decision() || req.anthropic_native_only {
         return Ok(None);
     }
     // Every repair below answers to this provider's overrides over the global
@@ -193,7 +193,7 @@ pub(super) async fn try_rectify_stream(
     error: &Error,
     lifecycle: &mut RequestLifecycle,
 ) -> std::result::Result<Option<crate::upstream::EventStream>, Error> {
-    if candidate.provider.kind.is_decision() {
+    if candidate.provider.kind.is_decision() || req.anthropic_native_only {
         return Ok(None);
     }
     // Every repair below answers to this provider's overrides over the global
@@ -344,7 +344,9 @@ pub(super) fn maybe_filter_stream(
     req: &ChatRequest,
 ) -> crate::upstream::EventStream {
     #[cfg(feature = "opencode")]
-    if client.profile == crate::config::ProviderClientProfile::OpenCodeCli {
+    if client.profile == crate::config::ProviderClientProfile::OpenCodeCli
+        && !client.native_anthropic
+    {
         let declared: std::collections::HashSet<String> =
             req.tools.iter().map(|tool| tool.name.clone()).collect();
         return crate::opencode::filter_injected_tool_calls(events, declared);

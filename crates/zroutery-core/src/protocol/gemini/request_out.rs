@@ -13,6 +13,23 @@ use crate::protocol::apply_content_policy;
 // --------------------------------------------------------------- request out
 
 pub fn encode_request(req: &ChatRequest, upstream_model: &str) -> Result<Value> {
+    crate::protocol::anthropic::validate_bridge(req, Dialect::Gemini)?;
+    if req
+        .anthropic_body
+        .as_ref()
+        .and_then(|body| body.get("metadata"))
+        .and_then(Value::as_object)
+        .is_some_and(|metadata| metadata.keys().any(|key| key != "user_id"))
+    {
+        return Err(crate::error::Error::invalid(
+            "Anthropic request metadata is not representable on the Gemini surface",
+        ));
+    }
+    if req.tool_strict.values().any(|strict| *strict) {
+        return Err(crate::error::Error::invalid(
+            "strict tool schemas require an upstream that enforces them",
+        ));
+    }
     let mut body = Map::new();
     body.insert("model".into(), json!(upstream_model));
 

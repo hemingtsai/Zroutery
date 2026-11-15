@@ -71,6 +71,25 @@ pub(super) fn capture(observation: &AttemptObservation, dialect: Dialect, body: 
     if !std::ptr::eq(inner, body) {
         declaration.merge(&crate::ir::declaration_from_wire(inner));
     }
+    if dialect == Dialect::Anthropic {
+        match crate::protocol::anthropic::decode_iterations(body) {
+            Ok(Some(iterations)) => {
+                observation.observe(&declaration, None);
+                observation.observe_iterations(Ok(iterations));
+                return;
+            }
+            Err(()) => {
+                observation.observe(&declaration, None);
+                observation.observe_iterations(Err(()));
+                return;
+            }
+            Ok(None) if observation.snapshot().iterated => {
+                observation.observe(&declaration, None);
+                return;
+            }
+            Ok(None) => {}
+        }
+    }
     let wire = match dialect {
         Dialect::OpenAIResponses => {
             inner

@@ -6,6 +6,8 @@ use std::sync::{Arc, Mutex};
 #[derive(Debug, Default)]
 struct ReplyMetadata {
     headers: HeaderMap,
+    /// Request-local only, never serialized into diagnostics or accounting.
+    native_error: Option<(u16, serde_json::Value)>,
     session_id: Option<HeaderValue>,
     claude_session: bool,
 }
@@ -72,12 +74,48 @@ impl ReplyHeaders {
         }
         // A later attempt replaces metadata; stale headers from a failed
         // sibling must not survive into the final reply.
-        crate::sync::lock(&self.0).headers = kept;
+        let mut metadata = crate::sync::lock(&self.0);
+        metadata.headers = kept;
+        metadata.native_error = None;
+    }
+
+    pub(crate) fn clear_upstream_response(&self) {
+        let mut metadata = crate::sync::lock(&self.0);
+        metadata.headers.clear();
+        metadata.native_error = None;
+    }
+
+    pub(crate) fn capture_native_error(&self, status: u16, body: &serde_json::Value) {
+        if body.get("type").and_then(serde_json::Value::as_str) == Some("error")
+            && body
+                .pointer("/error/type")
+                .and_then(serde_json::Value::as_str)
+                .is_some()
+            && body
+                .pointer("/error/message")
+                .and_then(serde_json::Value::as_str)
+                .is_some()
+            && body.to_string().len() <= 64 * 1024
+        {
+            crate::sync::lock(&self.0).native_error = Some((status, body.clone()));
+        }
+    }
+
+    pub(crate) fn native_error(&self, status: u16) -> Option<serde_json::Value> {
+        crate::sync::lock(&self.0)
+            .native_error
+            .as_ref()
+            .filter(|(upstream_status, _)| *upstream_status == status)
+            .map(|(_, body)| body.clone())
     }
 
     pub fn apply(&self, headers: &mut HeaderMap) {
-        for (name, value) in &self.snapshot() {
-            headers.insert(name.clone(), value.clone());
+        let snapshot = self.snapshot();
+        for name in snapshot.keys() {
+            headers.remove(name);
+            for value in snapshot.get_all(name) {
+                headers.append(name.clone(), value.clone());
+            }
         }
     }
 }

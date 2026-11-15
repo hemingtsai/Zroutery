@@ -435,22 +435,31 @@ fn parses_incremental_tool_calls() {
             name: "get_weather".into()
         }
     );
+    // An empty argument fragment is preserved as an explicit delta: a missing
+    // fragment could leave the bridge's start `{}` looking like valid input.
     assert_eq!(
         events[3],
         StreamEvent::ToolUseDelta {
             index: 0,
-            partial_json: "{\"ci".into()
+            partial_json: "".into()
         }
     );
     assert_eq!(
         events[4],
         StreamEvent::ToolUseDelta {
             index: 0,
-            partial_json: "ty\":1}".into()
+            partial_json: "{\"ci".into()
         }
     );
     assert_eq!(
         events[5],
+        StreamEvent::ToolUseDelta {
+            index: 0,
+            partial_json: "ty\":1}".into()
+        }
+    );
+    assert_eq!(
+        events[6],
         StreamEvent::ToolUseStart {
             index: 1,
             id: "call_2".into(),
@@ -458,16 +467,16 @@ fn parses_incremental_tool_calls() {
         }
     );
     assert_eq!(
-        events[6],
+        events[7],
         StreamEvent::ToolUseDelta {
             index: 1,
             partial_json: "{}".into()
         }
     );
     // Both calls stay open until the stream ends, then stop in order.
-    assert_eq!(events[7], StreamEvent::BlockStop { index: 0 });
-    assert_eq!(events[8], StreamEvent::BlockStop { index: 1 });
-    assert!(matches!(events[9], StreamEvent::Stop { .. }));
+    assert_eq!(events[8], StreamEvent::BlockStop { index: 0 });
+    assert_eq!(events[9], StreamEvent::BlockStop { index: 1 });
+    assert!(matches!(events[10], StreamEvent::Stop { .. }));
     assert_legal_lifecycle(&events);
 }
 

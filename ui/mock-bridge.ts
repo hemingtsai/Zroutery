@@ -91,7 +91,9 @@ import type {
   UsageHistoryQuery,
   UsageAttempt,
   PluginInstallation,
+  PluginUiView,
 } from "./src/api";
+import type { PermissionRequest } from "../docs/development/plugin-api-v1";
 
 /**
  * Stress fixture mode — MEASUREMENT ONLY, never a product path.
@@ -440,6 +442,8 @@ const appConfig = (): AppConfig => ({
   },
   classifier: {
     enabled: true,
+    server_review: true,
+    server_review_timeout_secs: 30,
     strategy: "priority",
     failover: true,
     max_attempts: 2,
@@ -1334,21 +1338,84 @@ const setupPreviewFor = (agent: TakeoverAgent, options: ClientSetupOptions): Cli
 };
 
 const handlers: Record<string, (args: any) => Json | Promise<Json>> = {
-  list_plugins: (): PluginInstallation[] => [],
-  instantiate_plugin_provider: () => { throw new Error("permission_denied"); },
-  store_plugin_credential: () => { throw new Error("permission_denied"); },
-  clear_plugin_credential: () => { throw new Error("permission_denied"); },
-  get_plugin_credential_status: () => { throw new Error("permission_denied"); },
+  list_plugins: (): PluginInstallation[] => mockPlugins,
+  instantiate_plugin_provider: (args: { installationId?: string; contributionId?: string; name?: string }) => {
+    const installation = mockPlugins.find((p) => p.installation_id === args.installationId);
+    if (!installation || !installation.enabled) throw new Error("permission_denied");
+    const provider = installation.manifest.contributions.providers?.find((p) => p.id === args.contributionId);
+    if (!provider) throw new Error("permission_denied");
+    const id = `plugin-${Math.random().toString(36).slice(2, 10)}`;
+    const next = structuredClone(currentConfig);
+    next.schema_version = Math.max(next.schema_version ?? 1, 2);
+    next.plugin_instances = [...(next.plugin_instances ?? []), {
+      id, name: args.name ?? provider.name.en, installation_id: installation.installation_id,
+      contribution_id: args.contributionId ?? provider.id, package_digest: installation.package_digest,
+      enabled: true, credentials: [], accounts: [],
+    }];
+    currentConfig = next;
+    sessionStorage.setItem(CONFIG_STORE_KEY, JSON.stringify(currentConfig));
+    return snapshot();
+  },
+  store_plugin_credential: () => snapshot(),
+  clear_plugin_credential: () => snapshot(),
+  get_plugin_credential_status: () => ({ present: false, state: "missing" }),
   get_plugin_themes: () => [],
   inspect_plugin_package: () => null,
   install_plugin_package: () => { throw new Error("invalid_manifest"); },
-  activate_plugin: () => { throw new Error("permission_denied"); },
-  disable_plugin: () => { throw new Error("permission_denied"); },
-  remove_plugin: () => { throw new Error("permission_denied"); },
+  activate_plugin: (args: { installationId?: string; packageDigest?: string; permissions?: PermissionRequest[] }) => {
+    const plugin = mockPlugins.find((p) => p.installation_id === args.installationId);
+    if (!plugin || plugin.package_digest !== args.packageDigest) throw new Error("stale_revision");
+    if (plugin.manifest.runtime && !plugin.sandbox_available && !(plugin.manifest.contributions.providers?.length || plugin.manifest.contributions.themes?.length)) {
+      throw new Error("sandbox_unavailable");
+    }
+    plugin.enabled = true;
+    plugin.permissions = args.permissions ?? [...plugin.manifest.permissions];
+    plugin.grant_epoch = String(Number(plugin.grant_epoch) + 1);
+    return structuredClone(plugin);
+  },
+  disable_plugin: (args: { installationId?: string }) => {
+    const plugin = mockPlugins.find((p) => p.installation_id === args.installationId);
+    if (!plugin) throw new Error("permission_denied");
+    plugin.enabled = false;
+    plugin.grant_epoch = String(Number(plugin.grant_epoch) + 1);
+    return structuredClone(plugin);
+  },
+  remove_plugin: (args: { installationId?: string }) => {
+    const index = mockPlugins.findIndex((p) => p.installation_id === args.installationId);
+    if (index < 0) throw new Error("permission_denied");
+    mockPlugins.splice(index, 1);
+    return null;
+  },
   update_plugin: () => { throw new Error("invalid_manifest"); },
   rollback_plugin: () => { throw new Error("stale_revision"); },
-  render_plugin_ui: () => { throw new Error("sandbox_unavailable"); },
-  invoke_plugin_ui_action: () => { throw new Error("permission_denied"); },
+  render_plugin_ui: (args: { installationId?: string; contributionId?: string }) => {
+    const plugin = mockPlugins.find((p) => p.installation_id === args.installationId && p.enabled);
+    if (!plugin) throw new Error("permission_denied");
+    const contribution = plugin.manifest.contributions.ui?.find((u) => u.id === args.contributionId);
+    if (!contribution) throw new Error("permission_denied");
+    const revision = `mock:${plugin.package_digest}:${Date.now()}`;
+    const token = `mock-action-${Math.random().toString(36).slice(2)}`;
+    mockPluginActions.set(token, { installationId: plugin.installation_id, contributionId: contribution.id, revision, actionId: (plugin.manifest.contributions.actions?.[0] as any)?.id ?? "action" });
+    return {
+      installation_id: plugin.installation_id,
+      contribution_id: contribution.id,
+      revision,
+      node: contribution.title ? { kind: "stack", children: [{ kind: "text", text: contribution.title.en }, { kind: "notice", text: "Mock plugin UI", tone: "info" }] } : { kind: "stack", children: [{ kind: "notice", text: "Mock plugin UI", tone: "info" }] },
+      actions: {},
+    } satisfies PluginUiView;
+  },
+  invoke_plugin_ui_action: (args: { installationId?: string; action?: string; revision?: string }) => {
+    const pending = mockPluginActions.get(args.action ?? "");
+    if (!pending || pending.installationId !== args.installationId || pending.revision !== args.revision) throw new Error("stale_revision");
+    mockPluginActions.delete(args.action ?? "");
+    return null;
+  },
+  reset_plugin_options: (args: { installationId?: string }) => {
+    const plugin = mockPlugins.find((p) => p.installation_id === args.installationId);
+    if (!plugin) throw new Error("permission_denied");
+    if (!plugin.manifest.options_schema) throw new Error("invalid_result");
+    return null;
+  },
   enter_safe_appearance: () => {
     document.documentElement.dataset.safeAppearance = "true";
     document.getElementById("zroutery-plugin-theme")?.remove();
@@ -1485,6 +1552,8 @@ const handlers: Record<string, (args: any) => Json | Promise<Json>> = {
     return outcome;
   },
   pending_usage_history_imports: () => [...pendingImports.values()],
+  // Legacy fixture has no sub-inference metadata; optional usage_iterations and
+  // iteration_pricing stay absent rather than inventing measured empty arrays.
   get_usage_attempts: (): UsageAttempt[] => [],
   import_newapi_pricing: () => snapshot(),
   cancel_usage_history_import: (args: { runId: string }) => {
@@ -2066,6 +2135,9 @@ const handlers: Record<string, (args: any) => Json | Promise<Json>> = {
   reset_model_health: () => snapshot(),
   ccswitch_import: () => snapshot(),
 };
+
+const mockPlugins: PluginInstallation[] = [];
+const mockPluginActions = new Map<string, { installationId: string; contributionId: string; revision: string; actionId: string }>();
 
 const callbacks = new Map<number, (payload: any) => void>();
 let nextCallback = 1;

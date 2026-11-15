@@ -1,11 +1,19 @@
 /** Compile-only design assertions; these do not prove runtime enforcement. */
 import type {
+  ArrayRuleV1,
   CallContext,
   Capability,
   CredentialSlotDeclaration,
+  FieldRuleV1,
+  IntegerRuleV1,
+  ItemRuleV1,
+  NumberRuleV1,
+  ObjectRuleV1,
+  OptionsSchemaV1,
   PermissionRequest,
   PluginHooksV1,
   PluginManifestV1,
+  StringRuleV1,
   WorkerCall,
 } from "./plugin-api-v1";
 
@@ -59,4 +67,35 @@ export type PermissionVocabularyAgrees = Assert<Equal<PermissionRequest["capabil
 export type ManifestRequiresPermissionList = Assert<Equal<
   Omit<PluginManifestV1, "permissions"> extends PluginManifestV1 ? true : false,
   false
+>>;
+
+/** The options schema is declarative data: closed vocabulary, no execution. */
+export type OptionsSchemaTopLevelIsVersionAndFields = Assert<Equal<
+  keyof OptionsSchemaV1,
+  "schema_version" | "fields"
+>>;
+
+export type OptionsRuleVocabularyIsClosed = Assert<Equal<
+  FieldRuleV1["type"],
+  "string" | "integer" | "number" | "boolean" | "array" | "object"
+>>;
+
+/** Object properties are scalars: an object can never nest a container. */
+export type ObjectPropertiesCannotNestContainers = Assert<Equal<
+  ObjectRuleV1["properties"][string]["type"],
+  "string" | "integer" | "number" | "boolean"
+>>;
+
+/** Depth is frozen at 2: array items are scalars or objects of scalars. */
+export type ArrayItemsCannotNestArrays = Assert<Equal<
+  Exclude<ItemRuleV1["type"], "object">,
+  "string" | "integer" | "number" | "boolean"
+>>;
+
+/** No default injection, no pattern matching, no conditional logic. */
+export type OptionsRulesCarryNoExecutionSurface = Assert<IsNever<
+  Extract<
+    keyof StringRuleV1 | keyof IntegerRuleV1 | keyof NumberRuleV1 | keyof ArrayRuleV1 | keyof ObjectRuleV1,
+    "pattern" | "format" | "default" | "if" | "then" | "$ref" | "oneOf"
+  >
 >>;

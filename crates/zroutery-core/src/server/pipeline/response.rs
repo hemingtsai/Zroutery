@@ -62,8 +62,10 @@ pub(super) fn stream_response(
     admission: AdmissionGuard,
     classifier_severity: bool,
     reply_headers: &crate::ir::ReplyHeaders,
+    server_review: Option<Arc<super::safeguards::ReviewContext>>,
 ) -> Response {
     let mut encoder = protocol::stream_encoder(dialect, &candidate.exposed_id, include_usage);
+    let require_streamed_arguments = candidate.provider.dialect() != Dialect::Anthropic;
     if let Some(ref id) = response_id {
         lifecycle.note_response_id(id);
         // The response was registered under this id before the handshake, so
@@ -89,6 +91,8 @@ pub(super) fn stream_response(
             input_items,
             previous_response_id,
             admission,
+            server_review,
+            require_streamed_arguments,
         },
     ));
     // Built from a plain body and static headers, so nothing here can fail and

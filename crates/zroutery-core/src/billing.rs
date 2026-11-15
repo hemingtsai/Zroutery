@@ -34,6 +34,12 @@ pub struct Pricing {
     /// input-price fallback as an estimate, never as evidence of free writes.
     #[serde(default)]
     pub cache_write_per_mtok: Option<f64>,
+    /// Optional TTL-specific write tariffs. The shared write/input fallback is
+    /// still an explicit estimate when a provider has not declared these rates.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cache_write_5m_per_mtok: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cache_write_1h_per_mtok: Option<f64>,
     /// A per-call tariff is not a token rate; present means charge per execution.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub per_request: Option<f64>,
@@ -47,6 +53,8 @@ impl Pricing {
             output_per_mtok,
             cache_read_per_mtok: None,
             cache_write_per_mtok: None,
+            cache_write_5m_per_mtok: None,
+            cache_write_1h_per_mtok: None,
             per_request: None,
         }
     }
@@ -84,6 +92,32 @@ impl Pricing {
         }
     }
 
+    pub(crate) fn cost_of_iteration(&self, iteration: &crate::ir::UsageIteration) -> Cost {
+        if self.per_request.is_some() {
+            return self.cost_of(&iteration.usage);
+        }
+        let usage = &iteration.usage;
+        let five = iteration.cache_write_5m_tokens.unwrap_or(0);
+        let hour = iteration.cache_write_1h_tokens.unwrap_or(0);
+        let other = usage
+            .cache_write_tokens
+            .saturating_sub(five)
+            .saturating_sub(hour);
+        let write = self.cache_write_per_mtok.unwrap_or(self.input_per_mtok);
+        let amount = (self.input_per_mtok * f64::from(usage.fresh_input_tokens())
+            + self.cache_read_per_mtok.unwrap_or(self.input_per_mtok)
+                * f64::from(usage.cache_read_tokens)
+            + write * f64::from(other)
+            + self.cache_write_5m_per_mtok.unwrap_or(write) * f64::from(five)
+            + self.cache_write_1h_per_mtok.unwrap_or(write) * f64::from(hour)
+            + self.output_per_mtok * f64::from(usage.output_tokens))
+            / 1_000_000.0;
+        Cost {
+            currency: self.currency.clone(),
+            amount,
+        }
+    }
+
     /// Cost of a prompt that has not been sent yet, from an estimated token count.
     pub fn estimate_input(&self, input_tokens: u32) -> Cost {
         Cost {
@@ -105,6 +139,8 @@ impl Pricing {
             ("output", Some(self.output_per_mtok)),
             ("cache read", self.cache_read_per_mtok),
             ("cache write", self.cache_write_per_mtok),
+            ("cache write 5m", self.cache_write_5m_per_mtok),
+            ("cache write 1h", self.cache_write_1h_per_mtok),
             ("per request", self.per_request),
         ] {
             if let Some(v) = value {

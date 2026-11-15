@@ -21,6 +21,9 @@ pub fn stop_reason_from_str(s: &str) -> StopReason {
         "stop_sequence" => StopReason::StopSequence,
         "tool_use" => StopReason::ToolUse,
         "refusal" => StopReason::Refusal,
+        "pause_turn" => StopReason::PauseTurn,
+        "compaction" => StopReason::Compaction,
+        "model_context_window_exceeded" => StopReason::ModelContextWindowExceeded,
         _ => StopReason::Unknown,
     }
 }
@@ -32,6 +35,9 @@ pub fn stop_reason_to_str(r: StopReason) -> Option<&'static str> {
         StopReason::StopSequence => Some("stop_sequence"),
         StopReason::ToolUse => Some("tool_use"),
         StopReason::Refusal => Some("refusal"),
+        StopReason::PauseTurn => Some("pause_turn"),
+        StopReason::Compaction => Some("compaction"),
+        StopReason::ModelContextWindowExceeded => Some("model_context_window_exceeded"),
         StopReason::Unknown => None,
     }
 }
@@ -81,6 +87,27 @@ pub(crate) fn encode_usage(u: &Usage) -> Value {
 }
 
 pub fn decode_response(body: Value) -> Result<ChatResponse> {
+    decode_response_with(body, false)
+}
+
+/// The portable projection cannot describe every native response block. Keep
+/// the entire original envelope for Messages egress, without interpreting or
+/// discarding compaction, server tools, citations, fallback or future blocks.
+pub(crate) fn decode_native_response(body: Value) -> Result<ChatResponse> {
+    decode_response_with(body, true)
+}
+
+fn decode_response_with(body: Value, native: bool) -> Result<ChatResponse> {
+    if !native
+        && matches!(
+            body.get("stop_reason").and_then(Value::as_str),
+            Some("compaction" | "pause_turn")
+        )
+    {
+        return Err(crate::protocol::unsupported_upstream_content(
+            "native Anthropic stop reason",
+        ));
+    }
     if let Some(error) = Error::session_binding_payload(
         body.get("model")
             .and_then(Value::as_str)
@@ -98,6 +125,7 @@ pub fn decode_response(body: Value) -> Result<ChatResponse> {
         return Err(Error::BadUpstreamPayload(msg.to_string()));
     }
     let content = match body.get("content") {
+        Some(Value::Array(_)) if native => super::request_in::project_content(body.get("content"))?,
         Some(Value::Array(blocks)) => {
             let mut out = Vec::new();
             for b in blocks {
@@ -153,11 +181,7 @@ pub fn encode_response(resp: &ChatResponse) -> Value {
         // Preserve safeguard results and extension members on tool blocks as
         // supplied by the upstream. In particular, never generate approvals or
         // rewrite the tool IDs that its review results refer to.
-        let mut body = native.clone();
-        if body.get("safeguard_results").is_none() {
-            body["model"] = json!(resp.model);
-        }
-        return body;
+        return native.clone();
     }
     json!({
         "id": resp.id,

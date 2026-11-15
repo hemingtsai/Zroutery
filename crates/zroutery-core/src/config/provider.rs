@@ -373,6 +373,9 @@ pub const PASSTHROUGH_DENIED: &[&str] = &[
     "host",
     "cookie",
     "proxy-authorization",
+    "anthropic-api-key",
+    "anthropic-auth-token",
+    "anthropic-set-cookie",
 ];
 
 /// Whether `name` may never be forwarded from an inbound request.
@@ -393,6 +396,12 @@ pub fn passthrough_denied(name: &str) -> bool {
 /// excluded both by the allowlist and by [`PASSTHROUGH_DENIED`].
 #[derive(Debug, Clone)]
 pub struct ClientIdentity {
+    /// Native Messages ingress and egress may retain opaque blocks and errors.
+    /// Cross-protocol callers use the strict portable decoder instead.
+    pub native_anthropic: bool,
+    /// Request-local recovery after an upstream explicitly rejects server review.
+    /// Header construction removes only that beta pair, never other capabilities.
+    pub(crate) omit_server_review: bool,
     /// The profile that won: detected when `Auto`, otherwise the configured one.
     pub profile: ProviderClientProfile,
     /// Real inbound header values, in allowlist order, already denied-checked.
@@ -451,12 +460,14 @@ pub fn resolve_client_identity(
         // Only a value the client really sent is forwarded. With no real value
         // the fabricator keeps the field; inventing one here would be a second
         // place where the fingerprint is made up.
-        if let Some(value) = headers.get(&name) {
+        for value in headers.get_all(&name) {
             passthrough.push((name.clone(), value.clone()));
         }
     }
 
     ClientIdentity {
+        native_anthropic: false,
+        omit_server_review: false,
         profile,
         passthrough,
         session: None,

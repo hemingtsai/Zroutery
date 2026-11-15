@@ -181,7 +181,7 @@ pub fn encode_response(resp: &ChatResponse) -> Value {
         "candidates": [{
             "content": {"role": "model", "parts": parts},
             "finishReason": match resp.stop_reason {
-                StopReason::MaxTokens => "MAX_TOKENS",
+                StopReason::MaxTokens | StopReason::ModelContextWindowExceeded => "MAX_TOKENS",
                 StopReason::Refusal => "SAFETY",
                 _ => "STOP",
             },

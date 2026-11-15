@@ -20,6 +20,10 @@ pub struct AnthropicStreamParser {
     /// Whether the upstream really ended the message (`stop_reason` or
     /// `message_stop`). A body that just stops arriving is truncated.
     normal_terminal: bool,
+    /// Native egress forwards every frame; canonical events are inspection
+    /// metadata only and must not reject opaque native blocks.
+    native: bool,
+    native_stop: Option<(StopReason, Option<String>)>,
 }
 
 impl AnthropicStreamParser {
@@ -31,6 +35,15 @@ impl AnthropicStreamParser {
             open: Vec::new(),
             stopped: false,
             normal_terminal: false,
+            native: false,
+            native_stop: None,
+        }
+    }
+
+    pub(crate) fn native(model: &str) -> Self {
+        Self {
+            native: true,
+            ..Self::new(model)
         }
     }
 }
@@ -138,6 +151,7 @@ impl StreamParser for AnthropicStreamParser {
                             }]
                         }
                     }
+                    Some(_) if self.native => Vec::new(),
                     Some(_) => {
                         return Err(unsupported_upstream_content("Anthropic stream block"));
                     }
@@ -183,6 +197,7 @@ impl StreamParser for AnthropicStreamParser {
                             .unwrap_or_default()
                             .to_string(),
                     }],
+                    Some(_) if self.native => Vec::new(),
                     Some(_) => {
                         return Err(unsupported_upstream_content("Anthropic stream delta"));
                     }
@@ -234,14 +249,21 @@ impl StreamParser for AnthropicStreamParser {
                     .and_then(Value::as_str)
                 {
                     Some(reason) => {
+                        let stop_sequence = delta
+                            .and_then(|d| d.get("stop_sequence"))
+                            .and_then(Value::as_str)
+                            .map(str::to_string);
+                        if self.native {
+                            // A stop_reason delta is not the end of the native
+                            // stream: further usage/review fields can follow it.
+                            self.native_stop = Some((stop_reason_from_str(reason), stop_sequence));
+                            return Ok(Vec::new());
+                        }
                         self.normal_terminal = true;
                         self.stopped = true;
                         vec![StreamEvent::Stop {
                             stop_reason: stop_reason_from_str(reason),
-                            stop_sequence: delta
-                                .and_then(|d| d.get("stop_sequence"))
-                                .and_then(Value::as_str)
-                                .map(str::to_string),
+                            stop_sequence,
                             usage: self.usage,
                         }]
                     }
@@ -253,12 +275,26 @@ impl StreamParser for AnthropicStreamParser {
             }
             "message_stop" => {
                 self.normal_terminal = true;
-                Vec::new()
+                if self.native && !self.stopped {
+                    self.stopped = true;
+                    let (stop_reason, stop_sequence) = self
+                        .native_stop
+                        .take()
+                        .unwrap_or((StopReason::Unknown, None));
+                    vec![StreamEvent::Stop {
+                        stop_reason,
+                        stop_sequence,
+                        usage: self.usage,
+                    }]
+                } else {
+                    Vec::new()
+                }
             }
             "ping" => vec![StreamEvent::Ping],
             "error" => {
                 return Err(Error::stream_payload(&self.model, &v));
             }
+            _ if self.native => Vec::new(),
             _ => {
                 return Err(unsupported_upstream_content("Anthropic stream event"));
             }

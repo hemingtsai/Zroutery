@@ -18,7 +18,14 @@ use crate::store;
 impl Desktop {
     pub fn new(config_dir: PathBuf, config: AppConfig, secrets: Arc<KeychainSecrets>) -> Self {
         let plugins = Arc::new(crate::plugins::PluginState::new(&config_dir));
-        Self::verify_plugin_sandbox(&config_dir);
+        if let Some(worker) = Self::discover_plugin_worker() {
+            *plugins
+                .worker_path
+                .lock()
+                .unwrap_or_else(|e| e.into_inner()) = Some(worker.clone());
+            let probe_root = config_dir.join("plugins").join("probe");
+            let _ = zroutery_plugin_host::supervisor::verify_sandbox(&worker, &probe_root);
+        }
         let config = Self::with_ml_state_dir(config_dir.clone(), config);
         let core = Arc::new(AppState::new(config, secrets.clone() as Arc<_>));
         #[cfg(feature = "plugin")]
@@ -209,6 +216,28 @@ impl Desktop {
         lock(&self.warning).clone()
     }
 
+    fn discover_plugin_worker() -> Option<PathBuf> {
+        std::env::var_os("ZROUTERY_PLUGIN_WORKER")
+            .map(PathBuf::from)
+            .or_else(|| {
+                std::env::current_exe().ok().and_then(|exe| {
+                    exe.parent()
+                        .map(|dir| dir.join("zroutery-plugin-worker.exe"))
+                })
+            })
+            .or_else(|| {
+                std::env::current_exe().ok().and_then(|exe| {
+                    exe.parent().map(|dir| {
+                        dir.join("..")
+                            .join("zroutery-plugin-worker")
+                            .join("zroutery-plugin-worker.exe")
+                    })
+                })
+            })
+            .filter(|path| path.is_file())
+    }
+
+    #[allow(dead_code)]
     fn verify_plugin_sandbox(config_dir: &std::path::Path) {
         use zroutery_plugin_host::supervisor::{sandbox_status, verify_sandbox, SandboxStatus};
         if sandbox_status() == SandboxStatus::Verified {
