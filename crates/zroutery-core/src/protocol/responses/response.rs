@@ -109,6 +109,12 @@ pub fn decode_response(body: Value) -> Result<ChatResponse> {
     }
 
     let mut passthrough = Map::new();
+    // The reviewer needs actual wire completion evidence, not EndTurn inferred
+    // from a text item in an in-progress/queued or otherwise unknown response.
+    passthrough.insert(
+        "zroutery.internal.responses_status".into(),
+        body.get("status").cloned().unwrap_or(Value::Null),
+    );
     if let Some(prev_id) = body.get("previous_response_id").and_then(Value::as_str) {
         passthrough.insert("previous_response_id".to_string(), json!(prev_id));
     }
@@ -213,7 +219,10 @@ pub fn encode_response(resp: &ChatResponse) -> Value {
         }
     }
     let text = resp.text();
-    let status = if resp.stop_reason == StopReason::MaxTokens {
+    let status = if matches!(
+        resp.stop_reason,
+        StopReason::MaxTokens | StopReason::ModelContextWindowExceeded
+    ) {
         "incomplete"
     } else {
         "completed"

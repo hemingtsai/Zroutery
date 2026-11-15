@@ -226,6 +226,24 @@ export function AutoModeDrawer({
         checked={classifier.failover}
         onChange={(failover) => patch({ failover })}
       />
+      <Toggle
+        label={t("routing.server_review")}
+        ariaLabel="Claude Code server-side auto review"
+        hint={t("routing.server_review_hint")}
+        checked={classifier.server_review ?? true}
+        onChange={(server_review) => patch({ server_review })}
+      />
+      <div className="controls">
+        <NumberField
+          label={t("routing.server_review_timeout")}
+          ariaLabel="Total review timeout (seconds)"
+          min={1}
+          max={120}
+          integer
+          value={classifier.server_review_timeout_secs ?? 30}
+          onCommit={(server_review_timeout_secs) => patch({ server_review_timeout_secs: server_review_timeout_secs ?? 30 })}
+        />
+      </div>
 
       <Section title={t("routing.pool")} hint={t("routing.pool_hint")}>
         {classifier.candidates.length === 0 ? (
@@ -346,6 +364,7 @@ export function AutoModeDrawer({
               </span>,
             ],
             [t("routing.no_verdict"), t("routing.fails_closed")],
+            [t("routing.server_review"), t("routing.server_review_contract")],
           ]}
         />
         <p className="field-hint">{t("routing.fail_closed_note")}</p>

@@ -86,6 +86,8 @@ export interface Pricing {
   output_per_mtok: number;
   cache_read_per_mtok: number | null;
   cache_write_per_mtok: number | null;
+  cache_write_5m_per_mtok?: number | null;
+  cache_write_1h_per_mtok?: number | null;
   per_request?: number | null;
 }
 
@@ -456,6 +458,10 @@ export function moveCandidatePriority(
 /** Routing policy for Auto Mode classifier side queries. */
 export interface ClassifierConfig {
   enabled: boolean;
+  /** Uses this pool for embedded Claude Code checks; default true under enabled. */
+  server_review?: boolean;
+  /** Total review deadline, not a per-attempt retry window; defaults to 30. */
+  server_review_timeout_secs?: number;
   strategy: RoutingStrategy;
   failover: boolean;
   max_attempts: number;
@@ -746,10 +752,25 @@ export interface UpstreamModelDeclaration {
 
 export type UsageEvidence = "absent" | "partial" | "measured" | "invalid" | "conflicting";
 
+/** Server-side sub-inference metadata; never includes response content or signatures. */
+export interface UsageIteration {
+  kind: string;
+  model: string | null;
+  usage: Usage;
+  cache_write_5m_tokens: number | null;
+  cache_write_1h_tokens: number | null;
+  billed: boolean | null;
+  cost?: Cost | null;
+  cost_complete: boolean;
+  rate_quote?: RateQuote | null;
+}
+
 /** Immutable per-send facts; provider configuration is never used to rebuild old identities. */
 export interface UsageAttempt {
   id: string;
   request_id: string | null;
+  /** Generating request linked to this gateway-owned safety review, when present. */
+  parent_request_id?: string | null;
   execution: {
     provider_id: string;
     provider_name: string;
@@ -762,6 +783,8 @@ export interface UsageAttempt {
     inference_key_id: string | null;
     binding_version: string | null;
     pricing: Pricing | null;
+    iteration_pricing?: Record<string, Pricing>;
+    iteration_quotes?: Record<string, RateQuote>;
   };
   declared?: UpstreamModelDeclaration | null;
   started_at: string;
@@ -771,6 +794,8 @@ export interface UsageAttempt {
   usage: Usage | null;
   /** The stored wire evidence; missing on legacy attempts. */
   usage_evidence?: UsageEvidence | null;
+  usage_iterations?: UsageIteration[] | null;
+  unknown_cost_parts?: number;
   cost: Cost | null;
 }
 
@@ -1256,6 +1281,17 @@ export interface EffectiveRate {
   expires_at: number | null;
   evidence: string;
   pricing: Pricing;
+}
+
+export interface RateQuote {
+  schema_version: number;
+  rate_id: string | null;
+  source: EffectiveRate["source"];
+  estimated: boolean;
+  binding_version: string | null;
+  group: string | null;
+  pricing: Pricing;
+  missing: string[];
 }
 
 export interface RemoteIdentity {
@@ -2123,6 +2159,7 @@ export const api = {
   updatePlugin: (installation_id: string, stage_id: string, package_digest: string) =>
     invoke<PluginInstallation>("update_plugin", { installationId: installation_id, stageId: stage_id, packageDigest: package_digest }),
   rollbackPlugin: (installation_id: string) => invoke<PluginInstallation>("rollback_plugin", { installationId: installation_id }),
+  resetPluginOptions: (installation_id: string) => invoke<void>("reset_plugin_options", { installationId: installation_id }),
   pluginThemes: () => invoke<PluginTheme[]>("get_plugin_themes"),
   renderPluginUi: (installation_id: string, contribution_id: string) =>
     invoke<PluginUiView>("render_plugin_ui", { installationId: installation_id, contributionId: contribution_id }),

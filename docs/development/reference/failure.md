@@ -1,6 +1,6 @@
 # Failure Reference
 
-> Authority: reference · Owner: backend · Last verified: 2026-11-14 · Verified by: `cargo test --workspace --all-features --locked`
+> Authority: reference · Owner: backend · Last verified: 2026-11-15 · Verified by: `cargo test --workspace --all-features --locked`
 
 This page describes how an error becomes a classification, a retry decision and
 a terminal state. It does not describe accounting; a failed attempt's known cost
@@ -51,14 +51,25 @@ against the same provider.
 
 ## Wire versus log
 
-- The client-facing message is `safe_message`: provider name and status, never
-  the upstream body
+- Ordinary client-facing messages use `safe_message`: provider name and status,
+  without the upstream body
   (`crates/zroutery-core/src/error.rs::safe_message`).
 - An internal error is flattened to "internal error"; a malformed payload to
   "upstream returned malformed data".
 - An explicit SSE error envelope retains bounded `code`/`type`/`message` for
-  classification; the body is still not echoed to the client
-  (`crates/zroutery-core/src/error.rs::stream_payload`).
+  classification. Native Messages egress preserves the original in-band error
+  only after native content output has started; a pre-output error takes the
+  canonical recovery/failure path instead
+  (`crates/zroutery-core/src/error.rs::stream_payload`,
+  `crates/zroutery-core/src/upstream/stream.rs::Upstream::stream_with_identity_policy`,
+  `crates/zroutery-core/tests/upstream_stream_error_test.rs::native_review_does_not_forward_an_unnamed_error_as_an_extension`).
+- Native Messages HTTP error JSON can be returned through request-local reply
+  metadata so the client recognizes capability-rejection wording; it is not
+  persisted (`crates/zroutery-core/src/ir/headers.rs::ReplyHeaders`,
+  `crates/zroutery-core/src/server/pipeline/mod.rs::handle_chat`).
+- A failed gateway-owned safety review does not replay generation; its per-tool
+  result is unavailable and its own failed attempt retains known spend
+  (`crates/zroutery-core/src/server/pipeline/safeguards/reviewer.rs::ReviewContext::send_review`).
 
 ## Terminal states
 

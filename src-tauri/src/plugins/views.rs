@@ -1,5 +1,8 @@
 use serde::Serialize;
-use zroutery_plugin_api::{manifest::PluginManifestV1, theme::ThemeV1, PermissionRequest};
+use std::collections::BTreeMap;
+use zroutery_plugin_api::{
+    manifest::PluginManifestV1, theme::ThemeV1, ui::UiNode, PermissionRequest,
+};
 use zroutery_plugin_host::{
     install::Package,
     lifecycle::{Installation, Manager},
@@ -71,4 +74,13 @@ pub struct PluginTheme {
     pub theme_id: String,
     pub package_digest: String,
     pub theme: ThemeV1,
+}
+
+#[derive(Serialize)]
+pub struct PluginUiView {
+    pub installation_id: String,
+    pub contribution_id: String,
+    pub revision: String,
+    pub node: UiNode,
+    pub actions: BTreeMap<String, String>,
 }

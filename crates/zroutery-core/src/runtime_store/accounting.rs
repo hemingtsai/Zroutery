@@ -220,7 +220,8 @@ fn write_attempt(
     tx.execute("INSERT INTO attempt_facts VALUES (?1, ?2, ?3, ?4)
                 ON CONFLICT(id) DO UPDATE SET completed = excluded.completed, record = excluded.record",
         params![attempt.id, attempt.request_id, attempt.state != AttemptState::InFlight, json]).map_err(|e| e.to_string())?;
-    if let Some(cost) = &attempt.cost {
+    let costs = attempt.known_costs();
+    if !costs.is_empty() {
         let inserted = tx
             .execute(
                 "INSERT OR IGNORE INTO attempt_charges VALUES (?1, ?2)",
@@ -228,13 +229,15 @@ fn write_attempt(
             )
             .map_err(|e| e.to_string())?;
         if inserted != 0 {
-            ledger.charge_windows(
-                &attempt.budget_day,
-                &attempt.budget_month,
-                &attempt.execution.provider_id,
-                attempt.execution.tier,
-                cost,
-            );
+            for cost in &costs {
+                ledger.charge_windows(
+                    &attempt.budget_day,
+                    &attempt.budget_month,
+                    &attempt.execution.provider_id,
+                    attempt.execution.tier,
+                    cost,
+                );
+            }
         }
     }
     Ok(())

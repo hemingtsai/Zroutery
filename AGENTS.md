@@ -1,6 +1,6 @@
 # Repository guidance
 
-> Authority: normative · Owner: docs · Last verified: 2026-11-14 · Verified by: `scripts/docs_check.py`
+> Authority: normative · Owner: docs · Last verified: 2026-11-15 · Verified by: `scripts/docs_check.py`
 
 Read [state.json](docs/development/state.json) first: it is the recorded truth,
 validated by `state.schema.json`; each gate says whether it is `recorded` by a

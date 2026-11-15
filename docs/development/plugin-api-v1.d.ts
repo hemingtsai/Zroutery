@@ -140,6 +140,67 @@ export interface PluginManifestV1 {
   readonly limits?: Partial<ResourceLimits>;
 }
 
+/**
+ * The host-authoritative options contract: declarative, bounded, no execution.
+ * The plugin's validate_options hook only adds errors to what this schema
+ * accepts; it can never relax it. No regex, `$ref`, conditionals or defaults.
+ */
+export interface OptionsSchemaV1 {
+  readonly schema_version: number;
+  readonly fields: Readonly<Record<string, FieldRuleV1>>;
+}
+
+export type FieldRuleV1 =
+  | StringRuleV1
+  | IntegerRuleV1
+  | NumberRuleV1
+  | BooleanRuleV1
+  | ArrayRuleV1
+  | ObjectRuleV1;
+
+export type ScalarRuleV1 = StringRuleV1 | IntegerRuleV1 | NumberRuleV1 | BooleanRuleV1;
+
+export interface StringRuleV1 {
+  readonly type: "string";
+  readonly required?: boolean;
+  /** Bytes, matching the host's strict text quotas. */
+  readonly min_length?: number;
+  /** Capped at 16384; the host default is 4096. */
+  readonly max_length?: number;
+  readonly enum?: readonly string[];
+}
+export interface IntegerRuleV1 {
+  readonly type: "integer";
+  readonly required?: boolean;
+  readonly min?: number;
+  readonly max?: number;
+}
+export interface NumberRuleV1 {
+  readonly type: "number";
+  readonly required?: boolean;
+  readonly min?: number;
+  readonly max?: number;
+}
+export interface BooleanRuleV1 {
+  readonly type: "boolean";
+  readonly required?: boolean;
+}
+/** Depth is frozen at 2: items may be scalars or objects of scalars. */
+export interface ArrayRuleV1 {
+  readonly type: "array";
+  readonly required?: boolean;
+  readonly min_items?: number;
+  readonly max_items?: number;
+  readonly items: ItemRuleV1;
+}
+export interface ObjectRuleV1 {
+  readonly type: "object";
+  readonly required?: boolean;
+  readonly properties: Readonly<Record<string, ScalarRuleV1>>;
+}
+/** An array item may be an object of scalars; containers never nest deeper. */
+export type ItemRuleV1 = ScalarRuleV1 | ObjectRuleV1;
+
 /** A registered Rust host service, not a plugin module or a dynamic library. */
 export interface HostServiceRef {
   readonly id: string;

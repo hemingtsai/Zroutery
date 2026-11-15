@@ -16,6 +16,7 @@ const MAX_ALIASES: usize = 4096;
 const MAX_IDLE: Duration = Duration::from_secs(24 * 60 * 60);
 const SESSION_HEADERS: [&str; 3] = ["session_id", "x-session-id", "x-opencode-session"];
 const CLAUDE_SESSION_HEADER: &str = "x-claude-code-session-id";
+const THREAD_IDLE: Duration = Duration::from_secs(5 * 60);
 
 #[derive(Clone, Debug, Hash, PartialEq, Eq)]
 struct Scope {
@@ -26,6 +27,7 @@ struct Scope {
     account: Option<String>,
     key: Option<String>,
     profile: String,
+    binding_version: Option<String>,
 }
 
 impl Scope {
@@ -41,6 +43,15 @@ impl Scope {
                 .map(|key| key.account_id.clone()),
             key: candidate.credential.as_ref().map(|key| key.key_id.clone()),
             profile: client.profile.as_str().to_string(),
+            binding_version: candidate.credential.as_ref().and_then(|credential| {
+                candidate
+                    .provider
+                    .accounts
+                    .iter()
+                    .find(|account| account.account_id == credential.account_id)
+                    .and_then(|account| account.binding.as_ref())
+                    .map(|binding| binding.version())
+            }),
         }
     }
 }
@@ -53,6 +64,7 @@ struct Binding {
 struct Inner {
     aliases: HashMap<(Scope, String), Arc<Mutex<Binding>>>,
     pruned: Instant,
+    threads: HashMap<String, ThreadBinding>,
 }
 
 impl Default for Inner {
@@ -60,6 +72,7 @@ impl Default for Inner {
         Self {
             aliases: HashMap::new(),
             pruned: Instant::now(),
+            threads: HashMap::new(),
         }
     }
 }
@@ -74,7 +87,151 @@ pub(super) struct BindingAttempt {
     refreshed: bool,
 }
 
+#[derive(Clone)]
+struct ThreadBinding {
+    scope: Scope,
+    seen: Instant,
+    conflicted: bool,
+}
+
 impl UpstreamSessions {
+    pub(super) fn thread_registry(
+        &self,
+        req: &ChatRequest,
+        registry: &crate::registry::Registry,
+    ) -> crate::error::Result<Arc<crate::registry::Registry>> {
+        let Some(binding) = self.thread_binding(req)? else {
+            return Ok(Arc::new(registry.clone()));
+        };
+        let mut config = (*registry.snapshot()).clone();
+        for model in &mut config.models {
+            if model.provider_id != binding.scope.provider
+                || model.upstream_model != binding.scope.model
+            {
+                model.enabled = false;
+            }
+        }
+        if let Some(provider) = config
+            .providers
+            .iter_mut()
+            .find(|provider| provider.id == binding.scope.provider)
+        {
+            if let (Some(account_id), Some(key_id)) = (&binding.scope.account, &binding.scope.key) {
+                for account in &mut provider.accounts {
+                    if &account.account_id != account_id {
+                        account.enabled = false;
+                    }
+                    for key in &mut account.inference_keys {
+                        if &key.id != key_id {
+                            key.enabled = false;
+                        }
+                    }
+                }
+            }
+        }
+        Ok(Arc::new(crate::registry::Registry::new(Arc::new(config))))
+    }
+
+    fn thread_binding(&self, req: &ChatRequest) -> crate::error::Result<Option<ThreadBinding>> {
+        let Some(thread) = req
+            .anthropic_body
+            .as_ref()
+            .and_then(|body| body.get("thread"))
+            .filter(|value| !value.is_null())
+        else {
+            return Ok(None);
+        };
+        let kind = thread.get("type").and_then(Value::as_str);
+        if kind != Some("continue") {
+            return Ok(None);
+        }
+        let previous = thread
+            .get("previous_message_id")
+            .and_then(Value::as_str)
+            .filter(|id| !id.is_empty() && id.len() <= 256)
+            .ok_or_else(|| {
+                crate::error::Error::invalid(
+                    "thread.previous_message_id is required for continuation",
+                )
+            })?;
+        crate::sync::lock(&self.0).threads.get(previous).cloned()
+            .filter(|binding| binding.seen.elapsed() < THREAD_IDLE && !binding.conflicted)
+            .map(Some)
+            .ok_or_else(|| crate::error::Error::UnknownModel("message thread expired or unbound; replay the full history with thread.type=create".into()))
+    }
+
+    pub(super) fn thread_plan(
+        &self,
+        req: &ChatRequest,
+        plan: Vec<Candidate>,
+    ) -> crate::error::Result<Vec<Candidate>> {
+        let Some(binding) = self.thread_binding(req)? else {
+            return Ok(plan);
+        };
+        let plan: Vec<_> = plan
+            .into_iter()
+            .filter(|candidate| {
+                Scope::of(
+                    candidate,
+                    &super::client::client_for(req, &candidate.provider),
+                ) == binding.scope
+            })
+            .collect();
+        if plan.is_empty() {
+            return Err(crate::error::Error::UnknownModel("message thread binding changed or is unavailable; replay the full history with thread.type=create".into()));
+        }
+        Ok(plan)
+    }
+
+    pub(super) fn validate_thread_send(
+        &self,
+        req: &ChatRequest,
+        candidate: &Candidate,
+    ) -> crate::error::Result<()> {
+        self.thread_plan(req, vec![candidate.clone()]).map(|_| ())
+    }
+
+    pub(super) fn remember_thread(&self, id: &str, candidate: &Candidate, client: &ClientIdentity) {
+        if id.is_empty() || id.len() > 256 || id.chars().any(char::is_control) {
+            return;
+        }
+        let mut inner = crate::sync::lock(&self.0);
+        inner
+            .threads
+            .retain(|_, binding| binding.seen.elapsed() < THREAD_IDLE);
+        if inner.threads.len() >= MAX_ALIASES {
+            if let Some(oldest) = inner
+                .threads
+                .iter()
+                .min_by_key(|(_, binding)| binding.seen)
+                .map(|(id, _)| id.clone())
+            {
+                inner.threads.remove(&oldest);
+            }
+        }
+        // Namespace IDs by the actual execution, never overwrite another
+        // credential's thread when a relay reuses a message identifier.
+        let scope = Scope::of(candidate, client);
+        if let Some(binding) = inner.threads.get_mut(id) {
+            if binding.conflicted || binding.scope != scope {
+                // Keep a bounded, expiring tombstone. Removing the binding
+                // would let the next colliding create resurrect it on a sibling
+                // credential and misroute an older client's continuation.
+                binding.conflicted = true;
+                binding.seen = Instant::now();
+                return;
+            }
+        }
+        inner.threads.insert(
+            id.into(),
+            ThreadBinding {
+                scope,
+                seen: Instant::now(),
+                conflicted: false,
+            },
+        );
+    }
+
     pub(super) fn resolve(
         &self,
         candidate: &Candidate,
@@ -87,7 +244,8 @@ impl UpstreamSessions {
             .clone()
             .or_else(|| body_signal(body))
             .and_then(|signal| valid_signal(&signal).map(str::to_string));
-        let active = signal.as_ref().and_then(|signal| {
+        let threaded = body.get("thread").is_some_and(|value| !value.is_null());
+        let active = signal.as_ref().filter(|_| !threaded).and_then(|signal| {
             let mut inner = crate::sync::lock(&self.0);
             prune(&mut inner);
             inner
@@ -177,7 +335,7 @@ impl BindingAttempt {
         body: &mut Value,
         client: &mut ClientIdentity,
     ) -> bool {
-        if self.refreshed {
+        if self.refreshed || body.get("thread").is_some_and(|value| !value.is_null()) {
             return false;
         }
         self.refreshed = true;

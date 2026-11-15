@@ -2,6 +2,7 @@
 
 use std::collections::VecDeque;
 use std::sync::Arc;
+use std::time::Duration;
 
 use serde_json::Value;
 use tokio::sync::watch;
@@ -50,6 +51,8 @@ pub(super) struct SseState {
     kind: RequestKind,
     classifier_severity: bool,
     finished: bool,
+    review: Option<super::safeguards::ReviewFrames>,
+    review_future: Option<futures_util::future::BoxFuture<'static, Value>>,
     /// Whether any answer byte has been produced for this client yet. A client
     /// that disappears after that truncated the answer it was reading.
     emitted: bool,
@@ -257,6 +260,8 @@ pub(super) struct StreamContext {
     pub(super) previous_response_id: Option<String>,
     /// Handed to the stream state, which holds it until the stream is over.
     pub(super) admission: AdmissionGuard,
+    pub(super) server_review: Option<Arc<super::safeguards::ReviewContext>>,
+    pub(super) require_streamed_arguments: bool,
 }
 
 /// Pipe canonical events through the egress encoder into an SSE byte stream.
@@ -292,6 +297,10 @@ pub(super) fn sse_body(
         #[cfg(feature = "ml")]
         verify_accumulator,
         finished: false,
+        review: context.server_review.map(|review| {
+            super::safeguards::ReviewFrames::new(review, context.require_streamed_arguments)
+        }),
+        review_future: None,
         emitted: false,
         response_id: context.response_id,
         cancel_rx: context.cancel_rx,
@@ -320,6 +329,28 @@ pub(super) fn sse_body(
                 let _ = st.finalize(StreamTerminal::Completed);
                 return None;
             }
+            if let Some(future) = st.review_future.as_mut() {
+                // Keep this future in the stream state: returning a keepalive
+                // cannot cancel/restart a paid classifier request.
+                let result = tokio::select! {
+                    result = future => Some(result),
+                    _ = tokio::time::sleep(Duration::from_secs(5)) => None,
+                };
+                if let Some(results) = result {
+                    st.review_future = None;
+                    if let Some(review) = &mut st.review {
+                        st.pending.extend(review.release(Some(results)));
+                    }
+                    st.finished = true;
+                    continue;
+                }
+                return Some((
+                    Ok(bytes::Bytes::from_static(
+                        b"event: ping\ndata: {\"type\":\"ping\"}\n\n",
+                    )),
+                    st,
+                ));
+            }
             // Race upstream events against cancellation signal for immediate abort.
             let next_event = if let Some(ref mut rx) = st.cancel_rx {
                 tokio::select! {
@@ -343,6 +374,13 @@ pub(super) fn sse_body(
                         }
                         // Spurious wakeup or channel closed — continue
                         st.events.next().await
+                    }
+                }
+            } else if st.review.is_some() {
+                tokio::select! {
+                    event = st.events.next() => event,
+                    _ = tokio::time::sleep(Duration::from_secs(5)) => {
+                        return Some((Ok(bytes::Bytes::from_static(b"event: ping\ndata: {\"type\":\"ping\"}\n\n")), st));
                     }
                 }
             } else {
@@ -436,7 +474,23 @@ pub(super) fn sse_body(
                     // From here the client holds part of the answer, so a
                     // disconnect that happens later truncates it.
                     st.emitted |= !frames.is_empty();
-                    st.pending.extend(frames);
+                    if let Some(review) = &mut st.review {
+                        match review.observe(frames) {
+                            Ok(frames) => st.pending.extend(frames),
+                            Err(error) => {
+                                st.review = None;
+                                st.finished = true;
+                                st.pending.extend([SseFrame {
+                                    event: Some("error".into()),
+                                    data: error.to_wire(crate::ir::Dialect::Anthropic).to_string(),
+                                }]);
+                                let _ = st.finalize(StreamTerminal::UpstreamError(error));
+                                continue;
+                            }
+                        }
+                    } else {
+                        st.pending.extend(frames);
+                    }
                     // Stop is the parser's explicit protocol terminal, not TCP
                     // EOF. Responses clients stop reading on response.completed;
                     // waiting for another poll/EOF mislabels that normal close
@@ -446,10 +500,32 @@ pub(super) fn sse_body(
                         || matches!(&event, StreamEvent::Native { dialect: crate::ir::Dialect::Anthropic, event, data, .. }
                             if event.as_deref().or_else(|| data.get("type").and_then(Value::as_str)) == Some("message_stop"))
                     {
-                        st.finished = true;
+                        if st.review.as_ref().is_some_and(|review| review.complete()) {
+                            if st
+                                .review
+                                .as_ref()
+                                .is_some_and(|review| review.answered_upstream())
+                            {
+                                if let Some(review) = &mut st.review {
+                                    st.pending.extend(review.release(None));
+                                }
+                                st.finished = true;
+                            } else {
+                                let parent = st.lifecycle.id().to_string();
+                                let pending = st.lifecycle.pending_accounting();
+                                if let Some(review) = &mut st.review {
+                                    st.review_future =
+                                        Some(review.evaluate(st.state.clone(), parent, pending));
+                                }
+                            }
+                        } else {
+                            st.finished = true;
+                        }
                     }
                 }
                 Some(Err(err)) => {
+                    st.review = None;
+                    st.review_future = None;
                     st.finished = true;
                     // The upstream may have ended a truncated body after
                     // reporting usage: keep that accounting even though the
@@ -467,6 +543,17 @@ pub(super) fn sse_body(
                     }
                 }
                 None => {
+                    if st.review.is_some() {
+                        st.review = None;
+                        st.finished = true;
+                        let error = Error::InterruptedStream { usage: st.usage };
+                        st.pending.extend([SseFrame {
+                            event: Some("error".into()),
+                            data: error.to_wire(crate::ir::Dialect::Anthropic).to_string(),
+                        }]);
+                        let _ = st.finalize(StreamTerminal::UpstreamError(error));
+                        continue;
+                    }
                     st.finished = true;
                     let frames = st.encoder.finish();
                     st.emitted |= !frames.is_empty();

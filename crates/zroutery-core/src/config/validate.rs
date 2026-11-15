@@ -484,6 +484,16 @@ impl AppConfig {
         // and an error here once turned one stale entry into a lockout of every
         // save in the panel.
         if self.classifier.enabled {
+            if self.classifier.server_review
+                && !(1..=120).contains(&self.classifier.server_review_timeout_secs)
+            {
+                issues.push(ConfigIssue {
+                    severity: IssueSeverity::Error,
+                    code: "classifier.server_review_timeout_out_of_range".into(),
+                    message: "Server review timeout must be between 1 and 120 seconds".into(),
+                    subject: None,
+                });
+            }
             if !(0.0..=1.0).contains(&self.classifier.detection.minimum_confidence) {
                 issues.push(ConfigIssue {
                     severity: IssueSeverity::Warning,

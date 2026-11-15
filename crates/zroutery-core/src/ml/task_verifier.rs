@@ -399,6 +399,7 @@ mod tests {
             responses_tools: None,
             responses_body: None,
             anthropic_body: None,
+            anthropic_native_only: false,
             responses_native_only: false,
             unsupported_content_policy: Default::default(),
             required_capabilities: Vec::new(),

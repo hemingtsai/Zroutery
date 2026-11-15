@@ -56,6 +56,8 @@ pub(super) fn client_for(req: &ChatRequest, provider: &ProviderConfig) -> Client
         &req.client_headers,
     );
     identity.reply_headers = req.reply_headers.clone();
+    identity.native_anthropic = req.source_dialect == crate::ir::Dialect::Anthropic
+        && provider.dialect() == crate::ir::Dialect::Anthropic;
     if identity.profile != crate::config::ProviderClientProfile::OpenCodeCli {
         identity.session = super::session_binding::session_signal(req);
     }
@@ -76,18 +78,29 @@ pub(super) fn client_for(req: &ChatRequest, provider: &ProviderConfig) -> Client
     if req.source_dialect == crate::ir::Dialect::Anthropic
         && provider.dialect() == req.source_dialect
     {
-        for (name, value) in &req.client_headers {
+        for name in req.client_headers.keys() {
             if (name.as_str().starts_with("anthropic-")
                 || name.as_str().starts_with("x-claude-code-"))
                 && !crate::config::passthrough_denied(name.as_str())
-                && !identity
-                    .passthrough
-                    .iter()
-                    .any(|(existing, _)| existing == name)
             {
-                identity.passthrough.push((name.clone(), value.clone()));
+                identity
+                    .passthrough
+                    .retain(|(existing, _)| existing != name);
+                for value in req.client_headers.get_all(name) {
+                    identity.passthrough.push((name.clone(), value.clone()));
+                }
             }
         }
+    }
+    if req.source_dialect == crate::ir::Dialect::Anthropic
+        && provider.dialect() != req.source_dialect
+    {
+        // A schema bridge cannot ask OpenAI/Gemini to perform Anthropic server
+        // review. Keep both halves off that upstream; return no invented result,
+        // allowing Claude Code's documented independent-classifier fallback.
+        identity
+            .passthrough
+            .retain(|(name, _)| !name.as_str().starts_with("anthropic-"));
     }
     // The OpenCode gateway needs a canonical session. Resolve it once here, from
     // the client's own header when it already carries one, else from the

@@ -1,6 +1,6 @@
 # Implementation Contracts Reference
 
-> Authority: reference · Owner: backend · Last verified: 2026-11-14 · Verified by: `cargo test --workspace --all-features --locked`
+> Authority: reference · Owner: backend · Last verified: 2026-11-15 · Verified by: `cargo test --workspace --all-features --locked`
 
 These are the boundaries a change must preserve. `AGENTS.md` routes here; it does
 not restate them.
@@ -45,6 +45,12 @@ not restate them.
 - A local persistence failure is terminal; it must not replay an upstream or tool
   action that already executed
   (`crates/zroutery-core/src/server/pipeline/lifecycle.rs::RequestLifecycle`).
+- Gateway auto review must use the exact pending tool input and retain client
+  deny/ask and hard-policy boundaries. A missing/uncertain/truncated verdict is
+  never an approval, and review spend has a separate attempt identity
+  (`crates/zroutery-core/src/server/pipeline/safeguards/context.rs::REVIEW_POLICY`,
+  `crates/zroutery-core/src/server/pipeline/safeguards/reviewer.rs::parse_response`,
+  `crates/zroutery-core/src/accounting.rs::AttemptFact`).
 
 ## Plugin boundary
 

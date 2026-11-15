@@ -1,6 +1,6 @@
 # Accounting Reference
 
-> Authority: reference · Owner: backend · Last verified: 2026-11-14 · Verified by: `cargo test --workspace --all-features --locked`
+> Authority: reference · Owner: backend · Last verified: 2026-11-15 · Verified by: `cargo test --workspace --all-features --locked`
 
 This page describes usage, cost, settlement and budgets. It is the reference for
 the invariants in [architecture.md](../architecture.md); it does not repeat the
@@ -37,6 +37,23 @@ per-request tariff (`crates/zroutery-core/src/billing.rs::Pricing`):
 - `per_request` replaces the token arithmetic for the whole call
   (`crates/zroutery-core/src/billing.rs::Pricing::cost_of`).
 
+Messages multi-inference `usage.iterations` is strictly parsed and replaces,
+not adds to, the overlapping top-level tuple; the replacement itself happens
+in the attempt's observation capture, and a later shorter or weaker iteration
+set degrades the reading to conflicting evidence rather than rescuing the
+total; cache TTL parts remain subsets of input
+(`crates/zroutery-core/src/protocol/anthropic/usage.rs::decode_iterations`,
+`crates/zroutery-core/src/ir/anthropic_usage.rs::UsageIteration`,
+`crates/zroutery-core/src/ir/observation.rs::AttemptObservation::observe_iterations`,
+`crates/zroutery-core/src/upstream/observation.rs::capture`). Per-model
+quotes are frozen before sending, with optional 5-minute/1-hour cache-write
+tariffs. Unknown model rates and uncertain refusal billing stay unknown;
+known currency subtotals remain distinct even when the legacy single cost is
+absent (`crates/zroutery-core/src/accounting.rs::AttemptFact::bind_iteration_pricing`,
+`crates/zroutery-core/src/accounting.rs::AttemptFact::observe_response`,
+`crates/zroutery-core/src/accounting.rs::AttemptFact::known_costs`,
+`crates/zroutery-core/src/billing.rs::Pricing::cost_of_iteration`).
+
 Costs are never converted between currencies. `CostTotals` keeps one total per
 currency (`crates/zroutery-core/src/billing.rs::CostTotals`), which is why a
 budget in a currency no model bills in can never be reached.
@@ -69,6 +86,16 @@ A request reaches exactly one terminal state and is charged once
   contribution, digest, grant epoch, transport profile); it is durable and
   survives the `safe` projection, and plugin-served traffic settles on the same
   path (`crates/zroutery-core/src/accounting.rs::ExecutionSnapshot`).
+
+Gateway server review is a separate `auto_mode` request lifecycle. Every real
+classifier send has its own attempt and parent request ID; its measured usage
+and price never overwrite generation usage or native rate-limit headers
+(`crates/zroutery-core/src/server/pipeline/safeguards/reviewer.rs::ReviewContext::send_review`,
+`crates/zroutery-core/src/accounting.rs::AttemptFact`). Multi-currency iteration
+costs enter SQLite and memory ledgers atomically under one attempt ID, so local
+settlement retries do not charge them twice
+(`crates/zroutery-core/src/runtime_store/accounting.rs::write_attempt`,
+`crates/zroutery-core/src/server/accounting.rs::AppState::persist_attempt`).
 
 ## Budgets
 
@@ -104,6 +131,12 @@ The classifier pool is the one scope exception: a tier budget neither rejects no
 degrades a side request, because the pool is chosen by classifier configuration
 rather than tier policy. Global and provider limits still apply
 (`crates/zroutery-core/src/server/ledger.rs::classifier_budget_verdict`).
+
+Embedded review acquires the union of generator and reviewer scopes once in
+canonical order, avoiding recursive acquisition of the same budget permit. Its
+budget check includes the generator's pending known cost without charging that
+cost twice (`crates/zroutery-core/src/server/pipeline/budget.rs::apply_budgets_with_scopes`,
+`crates/zroutery-core/src/server/pipeline/safeguards/reviewer.rs::ReviewContext::budget_allows`).
 
 ## Failure modes
 

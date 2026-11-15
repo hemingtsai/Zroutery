@@ -1,6 +1,6 @@
 # Development Workflow
 
-> Authority: normative · Owner: docs · Last verified: 2026-11-14 · Verified by: `scripts/commit_contract_test.py --self-test`
+> Authority: normative · Owner: docs · Last verified: 2026-11-15 · Verified by: `scripts/commit_contract_test.py --self-test`
 
 This document defines how a commit and its evidence are formed. The toolchain and
 every gate live in [verification.md](verification.md); current status lives in

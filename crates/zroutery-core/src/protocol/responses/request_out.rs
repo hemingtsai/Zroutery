@@ -57,6 +57,7 @@ pub fn encode_request_with(
     upstream_model: &str,
     portable_history: bool,
 ) -> Result<Value> {
+    crate::protocol::anthropic::validate_bridge(req, crate::ir::Dialect::OpenAIResponses)?;
     if let Some(original) = &req.responses_body {
         let mut body = original.clone();
         body["model"] = json!(upstream_model);
@@ -291,12 +292,16 @@ pub fn encode_request_with(
                 req.tools
                     .iter()
                     .map(|t| {
-                        json!({
+                        let mut tool = json!({
                             "type": "function",
                             "name": t.name,
                             "description": t.description.clone().unwrap_or_default(),
                             "parameters": t.input_schema,
-                        })
+                        });
+                        if let Some(strict) = req.tool_strict.get(&t.name) {
+                            tool["strict"] = json!(strict);
+                        }
+                        tool
                     })
                     .collect(),
             ),
@@ -324,6 +329,21 @@ pub fn encode_request_with(
     }
     if let Some(user) = &req.metadata_user {
         body.insert("metadata".into(), json!({"user": user}));
+    }
+    if req.source_dialect == crate::ir::Dialect::Anthropic {
+        if let Some(metadata) = req
+            .anthropic_body
+            .as_ref()
+            .and_then(|body| body.get("metadata"))
+            .and_then(Value::as_object)
+        {
+            let mut mapped = metadata.clone();
+            mapped.remove("user_id");
+            if let Some(user) = &req.metadata_user {
+                mapped.insert("user".into(), json!(user));
+            }
+            body.insert("metadata".into(), Value::Object(mapped));
+        }
     }
     if let Some(structured) = &req.structured_output {
         body.insert(

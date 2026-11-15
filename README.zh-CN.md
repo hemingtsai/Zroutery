@@ -86,6 +86,12 @@ export ANTHROPIC_AUTH_TOKEN=<粘贴 token>
 export ANTHROPIC_MODEL=standard-class
 ```
 
+使用服务端 auto 模式时，开启 **自动审查** 和 **Claude Code 服务端 auto 审核**，
+并向模型池加入可信的审核模型。原生审核结果原样保留；其他上游由本池审核，逐工具结果
+随流式终态返回。审核模型会看到会话及工具输入，实际用量单独记账。这是客户端协议兼容，
+不代表官方私有分类器或官方免费审核资格。
+详见 [Auto 审核](docs/development/reference/request-purpose.md#embedded-claude-code-auto-review)。
+
 OpenAI 系客户端：
 
 ```sh
@@ -150,10 +156,11 @@ MIT（见 `Cargo.toml` 的 `license`）。
 - 默认监听地址、端口与请求体上限：`crates/zroutery-core/src/config/server.rs::ServerConfig`。
 - HTTP 路由：`crates/zroutery-core/src/server/handlers.rs::build_app`。
 - 上游协议类型与 API 端面：`crates/zroutery-core/src/config/provider.rs::ProviderKind`、`crates/zroutery-core/src/config/provider.rs::ApiSurface`、`crates/zroutery-core/src/config/provider.rs::ProviderKind::is_decision`、`crates/zroutery-core/src/config/registry.rs::ProviderConfig::dialect`。
-- 主题与插件端面：`crates/zroutery-plugin-api/src/capability.rs::Capability`、`crates/zroutery-plugin-api/src/manifest.rs::PluginManifestV1`、`crates/zroutery-core/src/config/plugin.rs::PluginInstanceConfig`、`ui/src/themes/registry.ts`、`scripts/plugin_theme_test.py`、`scripts/theme_sources/manifest.json`。
+- 主题与插件端面：`crates/zroutery-plugin-api/src/capability.rs::Capability`、`crates/zroutery-plugin-api/src/manifest.rs::PluginManifestV1`、`crates/zroutery-plugin-api/src/options.rs::OptionsSchemaV1`、`crates/zroutery-core/src/config/plugin.rs::PluginInstanceConfig`、`ui/src/themes/registry.ts`、`scripts/plugin_theme_test.py`、`scripts/theme_sources/manifest.json`。
 - 打包目标：`src-tauri/tauri.conf.json::bundle`。
 - 配置文件与网关 token：`src-tauri/src/store.rs::FILE_NAME`、`src-tauri/src/store.rs::generate_token`。
 - Linux 凭据依赖：`src-tauri/Cargo.toml::keyring`。
 - 数据位置：`src-tauri/src/platform.rs::default_config_dir`、`crates/zroutery-core/src/runtime_store.rs::RuntimeStore`。
+- 服务端 auto 审核：`crates/zroutery-core/src/server/pipeline/safeguards/mod.rs::ReviewContext`、`ui/src/pages/routing/AutoModeDrawer.tsx::AutoModeDrawer`。
 
 每个重复事实的权威归属：[config.md](docs/development/reference/config.md) 负责监听地址/端口，[protocol.md](docs/development/reference/protocol.md) 负责协议，[routing-data.md](docs/development/reference/routing-data.md) 负责数据位置。本指南只是指针；冲突时以 reference 为准。

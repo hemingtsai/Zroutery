@@ -1,6 +1,6 @@
 # UI Design System Reference
 
-> Authority: reference · Owner: frontend · Last verified: 2026-11-14 · Verified by: `pnpm --dir ui build && pnpm --dir ui test`
+> Authority: reference · Owner: frontend · Last verified: 2026-11-15 · Verified by: `pnpm --dir ui build && pnpm --dir ui test`
 
 This page covers the tokens, skins, primitives and gates of the dashboard. It is
 a reference, not a pixel specification; the shipped values are in the stylesheet.
@@ -41,6 +41,14 @@ a reference, not a pixel specification; the shipped values are in the stylesheet
 
 ## Language
 
+The Auto review drawer uses the shared Toggle/NumberField controls for embedded
+review and its total timeout, with localized labels, explicit data-sharing/cost
+text and stable accessible names. Layout coverage requires both number inputs;
+interaction coverage saves both settings without changing the model pool
+(`ui/src/pages/routing/AutoModeDrawer.tsx::AutoModeDrawer`,
+`scripts/ui_layout_test.py::SURFACES`,
+`scripts/ui_interaction_test.py::case_ui2_candidate_priority`).
+
 - English, Simplified Chinese and Traditional Chinese dictionaries are separate
   modules (`ui/src/i18n/en.ts::en`, `ui/src/i18n/zh.ts::zh`,
   `ui/src/i18n.zhTW.ts::zhTW`).
@@ -48,6 +56,14 @@ a reference, not a pixel specification; the shipped values are in the stylesheet
   (`ui/src/i18n.tsx::I18nProvider`). A key added to one dictionary must be added
   to the other two; a missing key renders English, which is a silent regression
   for a Chinese reader.
+- Plugin-contributed UI follows the system language, not the webview's: the
+  worker locale maps the OS UI language to en, zh-CN or zh-TW and stays English
+  for anything else until the composition layer passes an explicit per-view
+  locale (`src-tauri/src/plugins/commands.rs::default_locale`).
+- A plugin options proposal is validated by the host schema before storage; a
+  refused save returns bounded field error codes to the plugin's own UI, which
+  renders them — the host never displays raw option values
+  (`src-tauri/src/plugins/commands.rs::invoke_plugin_ui_action`).
 
 ## Gates
 

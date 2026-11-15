@@ -123,6 +123,13 @@ impl Upstream {
                 body: truncate(&text, 2000),
                 retry_after,
             };
+            if client.native_anthropic {
+                if let Ok(value) = serde_json::from_str::<Value>(&text) {
+                    client
+                        .reply_headers
+                        .capture_native_error(status.as_u16(), &value);
+                }
+            }
             if let Some(delay) = super::retry_advice(&err, retries, can_fail_over, 2) {
                 tracing::warn!(
                     provider = %provider.name,
@@ -152,10 +159,18 @@ impl Upstream {
             .is_some_and(|value| value.to_ascii_lowercase().starts_with("text/event-stream")))
         .then(Vec::new);
         let retry_after = super::retry_after(response.headers());
+        let native_anthropic =
+            provider.dialect() == crate::ir::Dialect::Anthropic && client.native_anthropic;
         let state = StreamState {
             body: Box::pin(response.bytes_stream()),
             decoder: SseDecoder::new(),
-            parser: protocol::stream_parser(provider.dialect(), upstream_model),
+            parser: if native_anthropic {
+                Box::new(protocol::anthropic::AnthropicStreamParser::native(
+                    upstream_model,
+                ))
+            } else {
+                protocol::stream_parser(provider.dialect(), upstream_model)
+            },
             pending: VecDeque::new(),
             provider: provider.name.clone(),
             retry_after,
@@ -163,10 +178,11 @@ impl Upstream {
             done: false,
             terminal_error: None,
             error_body,
-            native_review: provider.dialect() == crate::ir::Dialect::Anthropic
-                && body.get("safeguards").is_some_and(|value| !value.is_null()),
+            native_review: native_anthropic,
             native_stopped: false,
+            native_output_started: false,
             observation: client.observation.clone(),
+            reply_headers: client.reply_headers.clone(),
             dialect: provider.dialect(),
         };
 
@@ -222,7 +238,15 @@ impl Upstream {
                                 state.parser.saw_normal_terminal()
                             };
                             let usage = state.parser.reported_usage();
-                            state.pending.extend(state.parser.finish());
+                            state
+                                .pending
+                                .extend(state.parser.finish().into_iter().filter(|event| {
+                                    // A decoder's EOF cleanup is not a successful
+                                    // terminal. In particular, never let an auto
+                                    // reviewer approve tools from a truncated body
+                                    // before the interruption below reaches it.
+                                    normal || !matches!(event, StreamEvent::Stop { .. })
+                                }));
                             if !normal {
                                 state.terminal_error = Some(Error::InterruptedStream { usage });
                             }
@@ -290,6 +314,11 @@ impl Upstream {
                                             | "error"
                                     );
                                 let native_stop = kind == "message_stop";
+                                if state.native_review
+                                    && matches!(kind, "content_block_start" | "content_block_delta")
+                                {
+                                    state.native_output_started = true;
+                                }
                                 let parsed = if extension {
                                     Ok(Vec::new())
                                 } else {
@@ -297,6 +326,12 @@ impl Upstream {
                                 };
                                 match parsed {
                                     Ok(events) => {
+                                        if state.native_review && !native_stop {
+                                            state.observation.observe_parsed_usage(
+                                                &Default::default(),
+                                                state.parser.reported_usage(),
+                                            );
+                                        }
                                         for event in &events {
                                             super::observation::capture_event(
                                                 &state.observation,
@@ -316,6 +351,23 @@ impl Upstream {
                                         }
                                     }
                                     Err(mut err) => {
+                                        if state.native_review
+                                            && state.native_output_started
+                                            && kind == "error"
+                                        {
+                                            if let Some(data) = value {
+                                                state.reply_headers.capture_native_error(
+                                                    err.status().as_u16(),
+                                                    &data,
+                                                );
+                                                state.pending.push_back(StreamEvent::Native {
+                                                    dialect: crate::ir::Dialect::Anthropic,
+                                                    event: frame.event,
+                                                    data,
+                                                    canonical: Vec::new(),
+                                                });
+                                            }
+                                        }
                                         let class = err.classified().class;
                                         if let Error::Upstream {
                                             provider,
@@ -429,7 +481,9 @@ struct StreamState {
     error_body: Option<Vec<u8>>,
     native_review: bool,
     native_stopped: bool,
+    native_output_started: bool,
     observation: crate::ir::AttemptObservation,
+    reply_headers: crate::ir::ReplyHeaders,
     dialect: crate::ir::Dialect,
 }
 

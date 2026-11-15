@@ -559,7 +559,10 @@ impl StreamEncoder for ResponsesStreamEncoder {
             StreamEvent::Stop {
                 stop_reason, usage, ..
             } => {
-                self.truncated = *stop_reason == StopReason::MaxTokens;
+                self.truncated = matches!(
+                    stop_reason,
+                    StopReason::MaxTokens | StopReason::ModelContextWindowExceeded
+                );
                 out.extend(self.close_output_item());
                 // Flush incomplete tool calls with full terminal events.
                 let incomplete_tools: Vec<_> = self.tool_states.drain().map(|(_, v)| v).collect();

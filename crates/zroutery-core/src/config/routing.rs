@@ -212,6 +212,13 @@ pub struct ClassifierConfig {
     /// Master switch: off means every request is routed as a main request.
     #[serde(default)]
     pub enabled: bool,
+    /// Answer Claude Code's embedded `dangerous_tool_use` checks through this
+    /// pool when the upstream supplies no results. Inert while `enabled` is off.
+    #[serde(default = "default_true")]
+    pub server_review: bool,
+    /// Total deadline for one server-side review, including fallback attempts.
+    #[serde(default = "ClassifierConfig::default_review_timeout")]
+    pub server_review_timeout_secs: u64,
     #[serde(default)]
     pub strategy: RoutingStrategy,
     #[serde(default = "default_true")]
@@ -231,12 +238,18 @@ impl ClassifierConfig {
     fn default_attempts() -> u32 {
         2
     }
+
+    fn default_review_timeout() -> u64 {
+        30
+    }
 }
 
 impl Default for ClassifierConfig {
     fn default() -> Self {
         ClassifierConfig {
             enabled: false,
+            server_review: true,
+            server_review_timeout_secs: Self::default_review_timeout(),
             strategy: RoutingStrategy::Priority,
             failover: true,
             max_attempts: Self::default_attempts(),

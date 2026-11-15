@@ -133,7 +133,7 @@ impl StreamEncoder for GeminiStreamEncoder {
                 let mut out = self.flush_tools();
                 self.done = true;
                 let finish_reason = match stop_reason {
-                    StopReason::MaxTokens => "MAX_TOKENS",
+                    StopReason::MaxTokens | StopReason::ModelContextWindowExceeded => "MAX_TOKENS",
                     StopReason::Refusal => "SAFETY",
                     _ => "STOP",
                 };

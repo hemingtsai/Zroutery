@@ -445,6 +445,8 @@ mod tests {
         use crate::config::{ClientIdentity, ProviderClientProfile, ProviderConfig, ProviderKind};
         let provider = ProviderConfig::new("oc", "OpenCode", ProviderKind::OpenAICompatible);
         let identity = ClientIdentity {
+            native_anthropic: false,
+            omit_server_review: false,
             profile: ProviderClientProfile::OpenCodeCli,
             passthrough: Vec::new(),
             session: Some("ses_0123456789abcdefghijklmnop".into()),
@@ -780,6 +782,8 @@ mod gateway_tests {
         assert!(body.get("tool_choice").is_none());
 
         let identity = ClientIdentity {
+            native_anthropic: false,
+            omit_server_review: false,
             profile: ProviderClientProfile::OpenCodeCli,
             passthrough: Vec::new(),
             session: Some("ses_0123456789abcdefghijklmnop".into()),
@@ -871,6 +875,8 @@ mod gateway_tests {
         )
         .expect("encodes");
         let identity = ClientIdentity {
+            native_anthropic: false,
+            omit_server_review: false,
             profile: ProviderClientProfile::OpenCodeCli,
             passthrough: Vec::new(),
             session: Some(session_id()),

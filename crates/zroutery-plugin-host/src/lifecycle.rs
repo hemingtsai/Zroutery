@@ -256,12 +256,12 @@ impl Manager {
     }
     /// Updates publish disabled with an empty grant. Same ID/version/publisher
     /// never transfers authority to new bytes; explicit approval follows preview.
+    /// The options schema may evolve with the package: the persisted envelope's
+    /// version governs migration at the next activation, and a package whose
+    /// schema document is invalid was already refused at construction.
     pub fn update(&self, installation_id: &str, package: Package) -> Result<Installation> {
         let old_package = self.package(installation_id)?;
         if old_package.manifest.id != package.manifest.id || old_package.digest == package.digest {
-            return Err(PluginError::InvalidManifest);
-        }
-        if old_package.manifest.options_schema != package.manifest.options_schema {
             return Err(PluginError::InvalidManifest);
         }
         self.disable(installation_id)?;

@@ -1934,6 +1934,25 @@ def case_ui2_candidate_priority(devtools: DevTools) -> list[str]:
     if after[:2] != ["anthropic-mystery", "deepseek-deepseek-chat"]:
         failures.append("the drawer still lists %r after the move" % after)
 
+    # Embedded review is an explicit, saved switch and a bounded total timeout.
+    # Real clicks/typing prove both edits retain the reordered pool.
+    devtools.click_selector(".drawer input[type='checkbox'][aria-label='Claude Code server-side auto review']")
+    devtools.wait_for(
+        "window.__zrStub.last('save_config')?.args.config.classifier.server_review === false",
+        "the server review switch to be saved",
+    )
+    timeout_selector = ".drawer input[aria-label='Total review timeout (seconds)']"
+    devtools.replace_text(timeout_selector, "17")
+    devtools.press_key("Enter")
+    devtools.wait_for(
+        "window.__zrStub.last('save_config')?.args.config.classifier.server_review_timeout_secs === 17",
+        "the review timeout to be saved",
+    )
+    saved = devtools.evaluate("window.__zrStub.last('save_config').args.config.classifier")
+    if saved["server_review"] is not False or saved["server_review_timeout_secs"] != 17:
+        failures.append("server review settings did not survive both edits")
+    if saved["candidates"] != candidates:
+        failures.append("editing server review settings changed the candidate pool")
     devtools.evaluate("window.__zrStub.reset()")
     return failures
 

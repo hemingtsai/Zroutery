@@ -1027,6 +1027,11 @@ export const en = {
     "Permission checks go to the pool below instead of the conversation's model, covers Claude Code Auto Mode and Codex Guardian",
   "routing.review_failover": "Fail over inside the pool",
   "routing.review_failover_hint": "Try the next candidate when one errors",
+  "routing.server_review": "Claude Code server-side auto review",
+  "routing.server_review_hint":
+    "While permission routing is on, use this pool when the upstream supplies no safeguard results. The reviewer sees the conversation and tool inputs; its actual usage is billed separately. Native results stay unchanged.",
+  "routing.server_review_timeout": "Total review timeout (seconds)",
+  "routing.server_review_contract": "Per-tool results before the final stream event; no approval on an unusable verdict",
   "routing.pool": "Pool",
   "routing.pool_hint":
     "Models come from the Models page, provider, key and price settings are reused",
@@ -1045,7 +1050,7 @@ export const en = {
   "routing.verdict_parsing": "Verdict parsing",
   "routing.verdict_only": "<block>yes|no</block> only",
   "routing.verdict_only_hint":
-    "Claude Code wants <block>yes|no</block> and Codex Guardian wants an `outcome` field in JSON, a decision model only gives a probability, and the provider's threshold turns it into a verdict",
+    "Standalone Claude checks use <block> or <severity>; server review uses per-tool JSON. Codex Guardian uses outcome. Decision models return a probability, mapped with the provider's threshold.",
   "routing.no_verdict": "When no verdict",
   "routing.fails_closed": "fails closed; the client asks the user",
   "routing.fail_closed_note":

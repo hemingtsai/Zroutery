@@ -67,7 +67,7 @@ surface they cover; the "CI" column says whether the pipeline runs them.
 | Gate | Command | When | CI |
 |---|---|---|---|
 | overflow | `python3 -B scripts/ui_overflow_test.py` | UI structure or styles (`scripts/ui_overflow_test.py::main`) | blocking (reachability) |
-| layout | `python3 -B scripts/ui_layout_test.py` | UI controls or form structure (`scripts/ui_layout_test.py::main`) | local only |
+| layout | `python3 -B scripts/ui_layout_test.py` | UI controls, form structure and settings persistence through real edits (`scripts/ui_layout_test.py::main`) | local only |
 | interaction | `python3 -B scripts/ui_interaction_test.py` | keyboard, drawers, dialogs, mock IPC | local only |
 | theme baselines | `python3 -B scripts/plugin_theme_test.py` | theme, token or stylesheet changes (`scripts/plugin_theme_test.py::main`) | local only |
 | budget | `python3 -B scripts/ui_budget_test.py` | shipped bundle (`scripts/ui_budget_test.py::main`) | blocking (reachability) |

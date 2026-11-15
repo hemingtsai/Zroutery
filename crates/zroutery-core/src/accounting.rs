@@ -63,6 +63,12 @@ pub struct ExecutionSnapshot {
     pub tier: Option<ModelTier>,
     pub pricing: Option<Pricing>,
     pub rate_quote: Option<crate::billing::RateQuote>,
+    /// Tariffs for server-side sub-inferences on this same provider/account/key,
+    /// frozen before the call. Unknown models never inherit the main tariff.
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub iteration_pricing: std::collections::BTreeMap<String, Pricing>,
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub iteration_quotes: std::collections::BTreeMap<String, crate::billing::RateQuote>,
 }
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct PluginExecutionOrigin {
@@ -125,6 +131,8 @@ impl ExecutionSnapshot {
             tier: candidate.entry.tier,
             pricing: candidate.settled_pricing().cloned(),
             rate_quote: candidate.rate_quote.clone(),
+            iteration_pricing: Default::default(),
+            iteration_quotes: Default::default(),
         }
     }
 }
@@ -144,6 +152,10 @@ pub struct AttemptFact {
     pub id: String,
     /// Auxiliary calls can be correlated without inventing a client request.
     pub request_id: Option<String>,
+    /// The generating request whose server-side safety review made this send.
+    /// An opaque gateway request ID, never a tool input or conversation body.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub parent_request_id: Option<String>,
     pub execution: ExecutionSnapshot,
     pub started_at: DateTime<Utc>,
     pub finished_at: Option<DateTime<Utc>>,
@@ -156,6 +168,12 @@ pub struct AttemptFact {
     /// remain evidence but cannot become complete accounting or a known charge.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub usage_evidence: Option<UsageEvidence>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub usage_iterations: Option<Vec<crate::ir::UsageIteration>>,
+    /// Unknown model rates/refusal billing must not turn a known subtotal into
+    /// a claim that every upstream sub-inference has been fully priced.
+    #[serde(default)]
+    pub unknown_cost_parts: u32,
     pub cost: Option<Cost>,
     /// What the upstream's structured response declared it ran, when the
     /// attempt produced a response to read. `None` means the attempt predates
@@ -178,6 +196,7 @@ impl AttemptFact {
         Self {
             id,
             request_id,
+            parent_request_id: None,
             execution: ExecutionSnapshot::from_candidate(candidate),
             started_at: now.with_timezone(&Utc),
             finished_at: None,
@@ -186,6 +205,8 @@ impl AttemptFact {
             rectified: false,
             usage: None,
             usage_evidence: None,
+            usage_iterations: None,
+            unknown_cost_parts: 0,
             cost: None,
             declared: None,
             failure_class: None,
@@ -217,21 +238,152 @@ impl AttemptFact {
         }
     }
 
+    pub(crate) fn bind_iteration_pricing(
+        &mut self,
+        config: &crate::config::AppConfig,
+        candidate: &Candidate,
+    ) {
+        if candidate.provider.dialect() != Dialect::Anthropic {
+            return;
+        }
+        let account = candidate.credential.as_ref().and_then(|credential| {
+            candidate
+                .provider
+                .accounts
+                .iter()
+                .find(|account| account.account_id == credential.account_id)
+        });
+        let key = candidate
+            .credential
+            .as_ref()
+            .map(|credential| credential.key_id.as_str());
+        for model in config
+            .models
+            .iter()
+            .filter(|model| model.provider_id == candidate.provider.id)
+        {
+            if let Some(quote) = crate::billing::resolve_rate(
+                &candidate.provider,
+                model,
+                account,
+                key,
+                chrono::Utc::now().timestamp(),
+            ) {
+                self.execution
+                    .iteration_pricing
+                    .insert(model.upstream_model.clone(), quote.pricing.clone());
+                self.execution
+                    .iteration_quotes
+                    .insert(model.upstream_model.clone(), quote);
+            }
+        }
+        if let Some(price) = &self.execution.pricing {
+            self.execution
+                .iteration_pricing
+                .insert(self.execution.upstream_model.clone(), price.clone());
+        }
+        if let Some(quote) = &self.execution.rate_quote {
+            self.execution
+                .iteration_quotes
+                .insert(self.execution.upstream_model.clone(), quote.clone());
+        }
+    }
+
     pub fn observe_response(&mut self, observed: &ObservedResponse) {
         if self.state != AttemptState::InFlight || !self.sent {
             return;
         }
         self.usage_evidence = Some(observed.usage_evidence);
         self.usage = observed.usage;
+        self.usage_iterations = observed.usage_iterations.clone();
         self.cost = observed.accounting_usage().and_then(|usage| {
             self.execution
                 .pricing
                 .as_ref()
                 .map(|price| price.cost_of(&usage))
         });
+        if let Some(iterations) = &mut self.usage_iterations {
+            self.cost = None;
+            self.unknown_cost_parts = 0;
+            let mut totals = CostTotals::default();
+            if observed.accounting_usage().is_some() {
+                for iteration in iterations {
+                    iteration.cost = None;
+                    iteration.cost_complete = false;
+                    iteration.rate_quote = None;
+                    if iteration.billed == Some(false) {
+                        iteration.cost_complete = true;
+                        continue;
+                    }
+                    let model = iteration
+                        .model
+                        .as_deref()
+                        .unwrap_or(&self.execution.upstream_model);
+                    let price = self.execution.iteration_pricing.get(model).or_else(|| {
+                        (model == self.execution.upstream_model)
+                            .then_some(self.execution.pricing.as_ref())
+                            .flatten()
+                    });
+                    iteration.rate_quote = self.execution.iteration_quotes.get(model).cloned();
+                    if iteration.billed == Some(true) {
+                        if let Some(price) = price.filter(|price| price.per_request.is_none()) {
+                            let cost = price.cost_of_iteration(iteration);
+                            totals.add(&cost);
+                            iteration.cost = Some(cost);
+                            iteration.cost_complete = true;
+                            continue;
+                        }
+                    }
+                    self.unknown_cost_parts += 1;
+                }
+                if totals.0.len() == 1 {
+                    let (currency, amount) = totals.0.into_iter().next().expect("one currency");
+                    self.cost = Some(Cost { currency, amount });
+                } else if totals.is_empty() && self.unknown_cost_parts == 0 {
+                    if let Some(price) = &self.execution.pricing {
+                        self.cost = Some(Cost {
+                            currency: price.currency.clone(),
+                            amount: 0.0,
+                        });
+                    }
+                }
+            } else {
+                self.unknown_cost_parts = 1;
+            }
+        }
         self.declared
             .get_or_insert_with(Default::default)
             .merge(&observed.declaration);
+    }
+
+    /// Every known currency is retained independently. `cost` is the legacy
+    /// single-currency view and must not lose a multi-model/currency subtotal.
+    pub(crate) fn known_costs(&self) -> Vec<Cost> {
+        if self
+            .execution
+            .pricing
+            .as_ref()
+            .is_some_and(|price| price.per_request.is_some())
+        {
+            return self.cost.iter().cloned().collect();
+        }
+        if let Some(iterations) = &self.usage_iterations {
+            let mut totals = CostTotals::default();
+            for cost in iterations
+                .iter()
+                .filter_map(|iteration| iteration.cost.as_ref())
+            {
+                totals.add(cost);
+            }
+            if !totals.is_empty() {
+                return totals
+                    .0
+                    .into_iter()
+                    .map(|(currency, amount)| Cost { currency, amount })
+                    .collect();
+            }
+        }
+        self.cost.iter().cloned().collect()
     }
 
     pub(crate) fn accounted_usage(&self) -> Option<Usage> {
@@ -255,6 +407,7 @@ impl AttemptFact {
                 .filter(|price| price.per_request.is_some())
             {
                 self.cost = Some(price.cost_of(&Usage::default()));
+                self.unknown_cost_parts = 0;
             }
         }
         self.state = state;
@@ -266,6 +419,11 @@ impl AttemptFact {
     pub fn validate(&self) -> Result<(), String> {
         if self.id.is_empty() || self.id.len() > 256 || self.execution.provider_id.is_empty() {
             return Err("the accounting attempt has no stable identity".into());
+        }
+        if self.parent_request_id.as_ref().is_some_and(|id| {
+            !id.starts_with("req_") || id.len() > 256 || id.chars().any(char::is_control)
+        }) {
+            return Err("the accounting review has an invalid parent request ID".into());
         }
         if self.state == AttemptState::InFlight
             && (self.finished_at.is_some() || self.cost.is_some())
@@ -284,6 +442,16 @@ impl AttemptFact {
                 return Err("the accounting attempt has an invalid charge".into());
             }
         }
+        if self.usage_iterations.as_ref().is_some_and(|iterations| {
+            iterations
+                .iter()
+                .filter_map(|iteration| iteration.cost.as_ref())
+                .any(|cost| {
+                    cost.currency.trim().is_empty() || !cost.amount.is_finite() || cost.amount < 0.0
+                })
+        }) {
+            return Err("the accounting iteration has an invalid charge".into());
+        }
         if chrono::NaiveDate::parse_from_str(&self.budget_day, "%Y-%m-%d").is_err()
             || self.budget_day.get(..7) != Some(self.budget_month.as_str())
         {
@@ -296,6 +464,7 @@ impl AttemptFact {
     pub(crate) fn same_execution(&self, other: &Self) -> bool {
         self.id == other.id
             && self.request_id == other.request_id
+            && self.parent_request_id == other.parent_request_id
             && self.execution == other.execution
             && self.started_at == other.started_at
             && self.sent == other.sent
@@ -362,7 +531,8 @@ impl RequestAccounting {
             unknown_usage_attempts: 0,
         };
         for attempt in attempts.iter().filter(|attempt| attempt.sent) {
-            if let Some(cost) = &attempt.cost {
+            let costs = attempt.known_costs();
+            for cost in &costs {
                 result.known_cost.add(cost);
             }
             let usage = attempt.accounted_usage();
@@ -374,7 +544,8 @@ impl RequestAccounting {
             let partial = attempt.usage_evidence == Some(UsageEvidence::Partial);
             result.unknown_usage_attempts += u32::from(usage.is_none() || partial);
             result.unknown_cost_attempts += u32::from(
-                attempt.cost.is_none()
+                costs.is_empty()
+                    || attempt.unknown_cost_parts > 0
                     || (partial
                         && attempt
                             .execution

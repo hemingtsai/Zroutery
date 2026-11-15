@@ -661,6 +661,8 @@ fn classifier_config_round_trips_and_stays_off_by_default() {
     let mut cfg = sample();
     cfg.normalize();
     assert!(!cfg.classifier.enabled);
+    assert!(cfg.classifier.server_review);
+    assert_eq!(cfg.classifier.server_review_timeout_secs, 30);
     assert!(cfg.classifier.candidates.is_empty());
     let json = serde_json::to_string(&cfg).unwrap();
     let mut back: AppConfig = serde_json::from_str(&json).unwrap();
@@ -671,6 +673,14 @@ fn classifier_config_round_trips_and_stays_off_by_default() {
     let legacy: AppConfig =
         serde_json::from_str(r#"{"server":{"auth_token":"zr-x"},"models":[]}"#).unwrap();
     assert!(!legacy.classifier.enabled);
+    assert!(legacy.classifier.server_review);
+    let mut enabled = legacy;
+    enabled.classifier.enabled = true;
+    enabled.classifier.server_review_timeout_secs = 0;
+    assert!(enabled
+        .validate()
+        .iter()
+        .any(|issue| issue.code == "classifier.server_review_timeout_out_of_range"));
 }
 
 #[test]

@@ -1,6 +1,6 @@
 # IPC Reference
 
-> Authority: reference · Owner: frontend · Last verified: 2026-11-14 · Verified by: `scripts/command_surface_test.py`
+> Authority: reference · Owner: frontend · Last verified: 2026-11-15 · Verified by: `scripts/command_surface_test.py`
 
 The webview talks to Rust through Tauri commands. This page describes that
 boundary; it does not list every command signature, because the contract is the
@@ -72,6 +72,14 @@ pair of files below and the command-surface gate.
 | Migration and takeover | `migration_previews`, `migration_apply`, `takeover_adopt` | file-writing; preview and fingerprint required |
 | Plugins | `list_plugins`, `inspect_plugin_package`, `install_plugin_package`, `activate_plugin`, `disable_plugin`, `remove_plugin`, `update_plugin`, `rollback_plugin`, `get_plugin_themes`, `render_plugin_ui`, `invoke_plugin_ui_action`, `enter_safe_appearance`, `instantiate_plugin_provider`, `store_plugin_credential`, `clear_plugin_credential`, `get_plugin_credential_status` | registered and granted unconditionally; lifecycle commands work without the `plugin` feature; the instance and credential commands in `credentials.rs` answer `unsupported_host_service` in that build (`src-tauri/src/plugins/credentials.rs`) |
 | Tray panel | `get_tray_snapshot`, `tray_set_gateway_running` | second capability file, minimal surface |
+
+Auto server review adds no command or window capability: configuration uses
+the existing typed save path with `server_review` and the total review timeout,
+and usage attempts expose optional parent IDs and per-iteration quotes
+(`ui/src/api.ts::ClassifierConfig`, `ui/src/api.ts::UsageAttempt`,
+`ui/src/api.ts::UsageIteration`, `ui/src/api.ts::RateQuote`). The browser mock
+declares the server-review defaults without inventing measured review usage
+(`ui/mock-bridge.ts::appConfig`, `ui/mock-bridge.ts::handlers`).
 
 ## Failure modes
 

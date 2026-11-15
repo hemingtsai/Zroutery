@@ -11,6 +11,52 @@ use crate::billing::{Balance, BalanceProbe};
 use crate::config::ProviderConfig;
 use crate::error::{Error, Result};
 impl Upstream {
+    pub(crate) async fn count_messages_tokens(
+        &self,
+        provider: &ProviderConfig,
+        key: Option<&str>,
+        url: &str,
+        body: &Value,
+        client: &crate::config::ClientIdentity,
+    ) -> Result<Value> {
+        let request = self
+            .request_for(provider, url, reqwest::Method::POST, key, client)
+            .await?
+            .json(body);
+        let response = tokio::time::timeout(
+            Duration::from_secs(provider.timeout_secs),
+            self.execute_request(provider, url, request),
+        )
+        .await
+        .map_err(|_| Error::Timeout(provider.timeout_secs))??;
+        let status = response.status();
+        client.reply_headers.capture(response.headers());
+        let retry_after = super::retry_after(response.headers());
+        let text =
+            tokio::time::timeout(Duration::from_secs(provider.timeout_secs), response.text())
+                .await
+                .map_err(|_| Error::Timeout(provider.timeout_secs))?
+                .map_err(|source| Error::Transport {
+                    provider: provider.name.clone(),
+                    source,
+                })?;
+        if !status.is_success() {
+            return Err(Error::Upstream {
+                provider: provider.name.clone(),
+                status: status.as_u16(),
+                body: truncate(&text, 2000),
+                retry_after,
+            });
+        }
+        let json: Value = serde_json::from_str(&text)
+            .map_err(|_| Error::BadUpstreamPayload("token-counting response is not JSON".into()))?;
+        if json.get("input_tokens").and_then(Value::as_u64).is_none() {
+            return Err(Error::BadUpstreamPayload(
+                "token-counting response has no token measurement".into(),
+            ));
+        }
+        Ok(json)
+    }
     /// Ask the provider which models it offers, for the "fetch models" button.
     ///
     /// Some catalogues (OpenRouter style) publish per-token prices; those are

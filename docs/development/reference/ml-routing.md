@@ -1,6 +1,6 @@
 # ML Routing Reference
 
-> Authority: reference · Owner: backend · Last verified: 2026-11-14 · Verified by: `cargo test --workspace --all-features --locked`
+> Authority: reference · Owner: backend · Last verified: 2026-11-15 · Verified by: `cargo test --workspace --all-features --locked`
 
 This page describes how a learned model can change a route. It is a mechanism
 reference, not a claim that a model has earned promotion; current status is in
