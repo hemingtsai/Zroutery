@@ -1,7 +1,7 @@
 # ADR-0010: native messages and gateway owned auto review
 
 Status: accepted
-Date: 2026-11-14
+Date: 2026-11-15
 Supersedes: none
 
 ## Context
