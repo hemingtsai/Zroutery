@@ -381,15 +381,13 @@ impl StreamParser for OpenAiStreamParser {
                             i
                         }
                     };
-                    if let Some(args) = call
-                        .get("function")
-                        .and_then(|f| f.get("arguments"))
-                        .and_then(Value::as_str)
-                        .filter(|s| !s.is_empty())
+                    if let Some(args_value) = call.get("function").and_then(|f| f.get("arguments"))
                     {
                         out.push(StreamEvent::ToolUseDelta {
                             index,
-                            partial_json: args.to_string(),
+                            // A non-string fragment cannot disappear and leave
+                            // the bridge's start `{}` looking like valid input.
+                            partial_json: args_value.as_str().unwrap_or("\u{0000}").to_string(),
                         });
                     }
                 }

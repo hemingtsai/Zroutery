@@ -1,6 +1,6 @@
 # Routing and Policy Reference
 
-> Authority: reference · Owner: backend · Last verified: 2026-11-14 · Verified by: `cargo test --workspace --all-features --locked`
+> Authority: reference · Owner: backend · Last verified: 2026-11-15 · Verified by: `cargo test --workspace --all-features --locked`
 
 This page describes how a requested model becomes an ordered candidate plan:
 resolution, policy, eligibility, the strategy and the circuit breaker. It does
@@ -94,6 +94,19 @@ A breaker is runtime state: it starts closed on restart. The spend ledger is the
 exception; it is durable.
 
 ## Failover
+
+Messages-native requirements filter the request-local registry before scoring;
+direct IDs cannot escape the protocol bridge gate. Server-only contexts keep
+their native route instead of acquiring a lossy fallback
+(`crates/zroutery-core/src/server/pipeline/anthropic_native.rs::validate_scope`,
+`crates/zroutery-core/src/server/pipeline/anthropic_native.rs::registry_for`).
+Thread continuation narrows to the original model/key before attempt capping,
+so a priority change cannot hide its valid credential or switch its server
+context (`crates/zroutery-core/src/server/pipeline/session_binding.rs::UpstreamSessions::thread_registry`,
+`crates/zroutery-core/src/server/pipeline/session_binding.rs::UpstreamSessions::thread_plan`).
+Embedded auto review uses the configured purpose pool and a separate
+lifecycle, never the generator's tier selection or an invented permission
+(`crates/zroutery-core/src/server/pipeline/safeguards/reviewer.rs::ReviewContext::classify`).
 
 The plan is the failover order. An attempt fails, the failure is classified, and
 the loop decides whether to retry the same candidate or move to the next one;

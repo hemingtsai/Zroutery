@@ -1,6 +1,6 @@
 # Security Reference
 
-> Authority: reference · Owner: backend · Last verified: 2026-11-14 · Verified by: `cargo test --workspace --all-features --locked`
+> Authority: reference · Owner: backend · Last verified: 2026-11-15 · Verified by: `cargo test --workspace --all-features --locked`
 
 This page describes the local trust boundary: who may call the gateway, where
 secrets live, what the desktop exposes to the webview, and what is deliberately
@@ -74,22 +74,61 @@ That is the model; hiding the token from the same user is not a goal.
 - Plugin-contributed UI is rendered only through host components, and the tray
   exposes safe appearance as a containment path
   (`crates/zroutery-plugin-api/src/ui.rs`, `src-tauri/src/tray.rs`).
+- A plugin worker call is bounded by its declared wall clock: the worker job is
+  terminated when the budget lapses and the call reports a timeout instead of
+  hanging a broker thread
+  (`src-tauri/src/plugins/commands.rs::run_worker_call`,
+  `src-tauri/src/plugins/mod.rs::Watchdog`).
+- A rendered action button is a single-use, short-lived, table-bounded intent
+  that a revoke drops immediately, and invoking it also requires the active
+  grant to authorize `host.action.request` for that manifest action
+  (`src-tauri/src/plugins/mod.rs::prune_action_intents`,
+  `src-tauri/src/plugins/commands.rs::invoke_plugin_ui_action`).
+- Plugin options never become native configuration: the host schema is the
+  sole authority and the plugin hook only adds errors, a refused or failing
+  save keeps the previous envelope, and the stored document carries its schema
+  version so a package update migrates once at activation while a rollback
+  reads as absent (`crates/zroutery-plugin-api/src/options.rs::OptionsSchemaV1`,
+  `src-tauri/src/plugins/options.rs::load`,
+  `src-tauri/src/plugins/commands.rs::invoke_plugin_ui_action`).
 
 ## Upstream and error boundary
 
 - Redirects are disabled and both proxy policies stay HTTP/1.1, so a redirect
   cannot carry the provider key to another host
   (`crates/zroutery-core/src/upstream/http.rs::configure`).
-- An upstream error body is bounded at construction for the log and never echoed
-  to the client (`crates/zroutery-core/src/upstream/errors.rs::truncate`); the
-  wire error names the provider and status
-  (`crates/zroutery-core/src/error.rs::safe_message`).
+- Ordinary upstream errors expose the safe provider/status message. Native
+  Messages error JSON and in-band error events may be relayed request-locally
+  for capability recovery; history retains only accounting metadata
+  (`crates/zroutery-core/src/error.rs::safe_message`,
+  `crates/zroutery-core/src/ir/headers.rs::ReplyHeaders::capture_native_error`,
+  `crates/zroutery-core/src/server/pipeline/mod.rs::handle_chat`,
+  `crates/zroutery-core/src/upstream/stream.rs::Upstream::stream_with_identity_policy`).
 - Request and response bodies are not persisted; records carry metadata and
   traces carry features and outcomes.
 - Plugin traffic has its own egress path: https-only, no query or userinfo,
   public-IP-only SSRF filter, DNS pinned per operation and retry, no proxy and no
   redirects; a declared TLS transport profile is refused
   (`crates/zroutery-core/src/upstream/transport.rs::request_for`).
+
+Gateway-owned auto review sends the transient conversation and exact pending
+tool inputs to an explicitly configured classifier provider. Authentication and
+session carriers are isolated: the review send receives no gateway credential,
+renews no main-session binding and carries no main-session response headers,
+and it cannot execute tools or hold its own response-header/accounting
+handles. This isolates the *transport identity*, not the transcript content:
+the shared conversation may still contain identifiers the client itself put
+there, and the review is not a redaction step
+(`crates/zroutery-core/src/server/pipeline/safeguards/mod.rs::ReviewContext::for_request`,
+`crates/zroutery-core/src/server/pipeline/safeguards/reviewer.rs::ReviewContext::send_review`).
+Prompt policy separates user intent from untrusted tool/file/web content and
+requires hard deny/ask constraints before soft exceptions; malformed or missing
+verdicts remain unavailable, never allowed
+(`crates/zroutery-core/src/server/pipeline/safeguards/context.rs::REVIEW_POLICY`,
+`crates/zroutery-core/src/server/pipeline/safeguards/reviewer.rs::parse_response`).
+This model-based policy is not a sandbox or a proof of safety; client-side
+permissions and filesystem/network containment remain separate boundaries
+(`crates/zroutery-core/src/server/pipeline/safeguards/context.rs::REVIEW_POLICY`).
 
 ## Failure modes
 

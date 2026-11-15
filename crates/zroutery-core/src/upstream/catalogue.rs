@@ -163,6 +163,8 @@ pub(super) fn pricing_from_catalogue(entry: &Value) -> Option<Pricing> {
         output_per_mtok: scale(output),
         cache_read_per_mtok: cache_read.map(scale),
         cache_write_per_mtok: cache_write.map(scale),
+        cache_write_5m_per_mtok: None,
+        cache_write_1h_per_mtok: None,
     })
 }
 

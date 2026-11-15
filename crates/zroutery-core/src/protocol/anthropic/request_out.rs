@@ -4,8 +4,8 @@ use serde_json::{json, Map, Value};
 
 use crate::error::{Error, Result};
 use crate::ir::{
-    ChatRequest, ContentBlock, Dialect, MediaSource, Message, Role, ToolChoice, ToolResultPart,
-    UnsupportedContentPolicy,
+    ChatRequest, ContentBlock, Dialect, MediaSource, Message, Role, StructuredOutput, ToolChoice,
+    ToolResultPart, UnsupportedContentPolicy,
 };
 use crate::protocol::{apply_content_policy, explicit_placeholder};
 
@@ -31,13 +31,7 @@ pub fn encode_request_for(
         if req.stream || body.get("stream").is_some() {
             body["stream"] = json!(req.stream);
         }
-        if version == AnthropicApiVersion::V2026_10_21 {
-            if let Some(object) = body.as_object_mut() {
-                object.remove("temperature");
-                object.remove("top_p");
-                object.remove("top_k");
-            }
-        }
+        apply_version(&mut body, version)?;
         return Ok(body);
     }
     let mut body = Map::new();
@@ -96,24 +90,16 @@ pub fn encode_request_for(
     if req.stream {
         body.insert("stream".into(), json!(true));
     }
-    if req.tool_strict.values().any(|strict| *strict) {
-        // Anthropic tool definitions carry no strict-schema flag, so
-        // forwarding the call would silently drop the client's requirement
-        // that the model obey the schema exactly.
-        return Err(Error::invalid(
-            "strict tool schemas are not representable in the anthropic dialect",
-        ));
-    }
-    if req.structured_output.is_some() {
-        // Anthropic Messages has no structured-output constraint: neither a
-        // JSON schema nor a plain json-object mode can be stated on the wire.
-        // The `StructuredOutput` requirement also keeps candidates that cannot
-        // honour the constraint out of the eligible set; this is the explicit
-        // refusal for any path that reaches the encoder anyway, so the caller
-        // never receives unconstrained prose as if the schema had been applied.
-        return Err(Error::invalid(
-            "structured output is not representable in the anthropic dialect",
-        ));
+    let mut output_config = Map::new();
+    if let Some(structured) = &req.structured_output {
+        let schema = match structured {
+            StructuredOutput::JsonSchema { schema, .. } => schema.clone(),
+            StructuredOutput::JsonObject => json!({"type":"object", "additionalProperties":true}),
+        };
+        output_config.insert(
+            "format".into(),
+            json!({"type":"json_schema", "schema":schema}),
+        );
     }
     if !req.tools.is_empty() {
         body.insert(
@@ -128,6 +114,9 @@ pub fn encode_request_for(
                             m.insert("description".into(), json!(d));
                         }
                         m.insert("input_schema".into(), t.input_schema.clone());
+                        if let Some(strict) = req.tool_strict.get(&t.name) {
+                            m.insert("strict".into(), json!(strict));
+                        }
                         with_cache(Value::Object(m), &t.cache_control)
                     })
                     .collect(),
@@ -165,7 +154,7 @@ pub fn encode_request_for(
             Dialect::Anthropic,
             value,
         ) {
-            body.insert("output_config".into(), json!({"effort": value}));
+            output_config.insert("effort".into(), json!(value));
             body.insert("thinking".into(), json!({"type": "adaptive"}));
         } else {
             return Err(Error::invalid(
@@ -202,6 +191,9 @@ pub fn encode_request_for(
     if let Some(u) = &req.metadata_user {
         body.insert("metadata".into(), json!({"user_id": u}));
     }
+    if !output_config.is_empty() {
+        body.insert("output_config".into(), Value::Object(output_config));
+    }
 
     // Vendor extensions are only forwarded within the same dialect.
     if req.source_dialect == Dialect::Anthropic {
@@ -211,6 +203,48 @@ pub fn encode_request_for(
     }
 
     Ok(Value::Object(body))
+}
+
+/// A configured version migration may remove the retired sampling controls,
+/// but never rewrite a conversation prefix (which invalidates signed thinking).
+pub(crate) fn apply_version(body: &mut Value, version: AnthropicApiVersion) -> Result<()> {
+    if version != AnthropicApiVersion::V2026_10_21 {
+        return Ok(());
+    }
+    if let Some(object) = body.as_object_mut() {
+        object.remove("temperature");
+        object.remove("top_p");
+        object.remove("top_k");
+    }
+    if let Some(messages) = body.get("messages").and_then(Value::as_array) {
+        for message in messages {
+            let role = message.get("role").and_then(Value::as_str);
+            if let Some(blocks) = message.get("content").and_then(Value::as_array) {
+                if role == Some("assistant")
+                    && blocks.iter().any(|block| block["type"] == "document")
+                {
+                    return Err(Error::invalid("API version 2026-10-21 does not accept document blocks directly in assistant messages; move them to user messages"));
+                }
+                if role == Some("user") && blocks.iter().any(user_citations) {
+                    return Err(Error::invalid("API version 2026-10-21 does not accept non-empty citations on user text blocks"));
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+fn user_citations(block: &Value) -> bool {
+    (block["type"] == "text"
+        && block
+            .get("citations")
+            .and_then(Value::as_array)
+            .is_some_and(|items| !items.is_empty()))
+        || (block["type"] == "search_result"
+            && block
+                .get("content")
+                .and_then(Value::as_array)
+                .is_some_and(|parts| parts.iter().any(user_citations)))
 }
 
 fn encode_message(

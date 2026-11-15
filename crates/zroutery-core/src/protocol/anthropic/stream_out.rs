@@ -104,7 +104,7 @@ impl StreamEncoder for AnthropicStreamEncoder {
                 if kind == Some("message_start") {
                     self.started = true;
                 }
-                if kind == Some("message_stop") {
+                if matches!(kind, Some("message_stop" | "error")) {
                     self.finished = true;
                 }
                 return vec![SseFrame {
@@ -302,6 +302,10 @@ impl StreamEncoder for AnthropicStreamEncoder {
     }
 
     fn error(&mut self, err: &Error) -> Vec<SseFrame> {
+        if self.finished {
+            return Vec::new();
+        }
+        self.finished = true;
         vec![Self::frame("error", err.to_wire(Dialect::Anthropic))]
     }
 }

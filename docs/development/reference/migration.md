@@ -1,6 +1,6 @@
 # Migration Reference
 
-> Authority: reference · Owner: backend · Last verified: 2026-11-14 · Verified by: `cargo test --workspace --all-features --locked`
+> Authority: reference · Owner: backend · Last verified: 2026-11-15 · Verified by: `cargo test --workspace --all-features --locked`
 
 This page describes a client cutover: how a plan is previewed, executed and
 rolled back. It is not a claim that a particular client is compatible; detection

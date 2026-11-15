@@ -1,6 +1,6 @@
 # Request Purpose Reference
 
-> Authority: reference · Owner: backend · Last verified: 2026-11-14 · Verified by: `cargo test --workspace --all-features --locked`
+> Authority: reference · Owner: backend · Last verified: 2026-11-15 · Verified by: `cargo test --workspace --all-features --locked`
 
 A request has two independent dimensions: which model it asks for
 (`Resolution`) and why it exists (`RequestKind`). This page covers the second.
@@ -105,6 +105,80 @@ An unparseable answer is **not** an Allow. The gate is fail-closed.
 - `candidates` is the shared review pool; the strategy orders it;
 - `detection` is the `DetectionConfig` above.
 
+## Embedded Claude Code auto review
+
+The preservation and gateway-owned review boundary is recorded in
+[ADR-0010](../decisions/0010-native-messages-and-gateway-owned-auto-review.md).
+
+When classifier routing is enabled, `server_review` defaults to true and its
+total deadline defaults to 30 seconds; the generator remains `Main`
+(`crates/zroutery-core/src/config/routing.rs::ClassifierConfig::default`,
+`crates/zroutery-core/src/classifier.rs::detect`). The Auto review drawer exposes
+both controls and warns that the configured reviewer receives the conversation
+and tool inputs (`ui/src/pages/routing/AutoModeDrawer.tsx::AutoModeDrawer`).
+
+A `dangerous_tool_use` safeguard with context version 1 and permission mode
+`auto` or `plan` is reviewed when the upstream supplies no result; native
+results, including an explicit unsupported status, are retained rather than
+overridden (`crates/zroutery-core/src/server/pipeline/safeguards/mod.rs::ReviewContext::for_request`,
+`crates/zroutery-core/src/server/pipeline/safeguards/mod.rs::ReviewContext::stamp_response`).
+The transient transcript retains all user turns, system context, tool
+definitions, prior calls/results and client policy; thinking signatures and
+opaque base64 media are omitted with no inferred authorization
+(`crates/zroutery-core/src/server/pipeline/safeguards/context.rs::review_payload`).
+
+A chat reviewer returns exact-ID, typed per-tool JSON; duplicated/unknown IDs,
+prose, malformed JSON and unconfirmed or truncated output cannot approve.
+SystemOne judges one pending action per probability, rejects an answer with an
+explicit non-binary type, and its uncertain band produces unavailable, not a
+shared batch approval
+(`crates/zroutery-core/src/server/pipeline/safeguards/reviewer.rs::parse_response`,
+`crates/zroutery-core/src/server/pipeline/safeguards/reviewer.rs::UniqueVerdicts`,
+`crates/zroutery-core/src/server/pipeline/safeguards/reviewer.rs::ReviewContext::classify`,
+`crates/zroutery-core/src/upstream/decision.rs::parse_answer`). A Responses
+reviewer additionally requires the wire status to be `completed`; an absent,
+in-progress or unknown status cannot approve
+(`crates/zroutery-core/src/protocol/responses/response.rs::decode_response`,
+`crates/zroutery-core/tests/gateway_safeguards_test.rs::responses_reviewer_requires_a_completed_wire_status`).
+Chat-bridged tool calls keep missing, empty or non-string arguments invalid so
+a bridge cannot invent the `{}` the upstream never sent
+(`crates/zroutery-core/tests/gateway_safeguards_test.rs::chat_bridge_never_approves_missing_empty_or_null_arguments`).
+
+Buffered results are top-level `safeguard_results`; streamed results are inside
+the final `message_delta.delta`. Text flows before review, pings keep the
+connection alive, and the original terminal tail is held until a genuine
+`message_stop` has arrived and review finishes
+(`crates/zroutery-core/src/server/pipeline/safeguards/stream.rs::ReviewFrames`,
+`crates/zroutery-core/src/server/pipeline/sse.rs::sse_body`). Timeout, refusal,
+unknown termination, missing verdicts and invalid/truncated arguments produce
+per-tool unavailable. *Unsupported* is reserved for a review that cannot be
+planned at all: no enabled or plannable candidate, or every candidate refused
+before a send by its budget. Rate-limited or otherwise failed sends are
+*unavailable*, never unsupported, so the client can distinguish "nothing to
+ask" from "the review ran and could not answer"
+(`crates/zroutery-core/src/server/pipeline/safeguards/reviewer.rs::ReviewOutcome`,
+`crates/zroutery-core/src/server/pipeline/safeguards/reviewer.rs::ReviewContext::classify`,
+`crates/zroutery-core/src/server/pipeline/safeguards/mod.rs::Unavailable`).
+
+Each real review send gets a separate `auto_mode` lifecycle and its attempt
+links to the generating request through `parent_request_id`; no approval
+explanation or tool body is stored
+(`crates/zroutery-core/src/server/pipeline/safeguards/reviewer.rs::ReviewContext::send_review`,
+`crates/zroutery-core/src/accounting.rs::AttemptFact`). Review scopes join the
+generator's admission set once and pending known generation spend participates
+in the review budget check
+(`crates/zroutery-core/src/server/pipeline/budget.rs::apply_budgets_with_scopes`,
+`crates/zroutery-core/src/server/pipeline/safeguards/reviewer.rs::ReviewContext::budget_allows`).
+
+This is compatible gateway review, not Anthropic's proprietary safety model,
+policy calibration or billing eligibility. No-tool turns require no classifier
+call; unknown context versions and upstream-only thread continuations without
+local history cannot acquire invented approval
+(`crates/zroutery-core/src/server/pipeline/safeguards/mod.rs::ReviewContext::evaluate`).
+The opt-in installed-client test exercises allow, deny and continued conversation
+without a standalone fallback against loopback fixtures
+(`crates/zroutery-core/tests/gateway_safeguards_test.rs::installed_claude_consumes_server_verdicts_without_local_classifier_fallback`).
+
 The classifier pool is shared by Auto Mode, Guardian and the risk scorer: they are the same
 question ("may this action run without asking?") in different protocols. The
 verdict parser is told which question was asked, so a `<block>` tag in a
@@ -143,3 +217,7 @@ Guardian answer is not a verdict.
 - `crates/zroutery-core/src/classifier.rs::decision_text_for_request`
 - `crates/zroutery-core/src/classifier.rs::verdict_from_decision`
 - `crates/zroutery-core/src/config/routing.rs::ClassifierConfig`
+- `crates/zroutery-core/src/server/pipeline/safeguards/mod.rs::ReviewContext`
+- `crates/zroutery-core/src/server/pipeline/safeguards/context.rs::REVIEW_POLICY`
+- `crates/zroutery-core/src/server/pipeline/safeguards/reviewer.rs::ReviewContext::send_review`
+- `crates/zroutery-core/src/server/pipeline/safeguards/stream.rs::ReviewFrames`

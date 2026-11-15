@@ -67,8 +67,7 @@ pub fn encode_for_mode(
     // shape: 2026-10-21 strips the sampling trio and confines documents, and
     // the same value rides the anthropic-version header so the upstream knows
     // which contract this request claims to honour.
-    let anthropic_version =
-        crate::protocol::anthropic::AnthropicApiVersion::of(provider.anthropic_version.as_deref());
+    let anthropic_version = anthropic_version_for(provider, &req);
     let mut body = protocol::encode_request(
         provider.dialect(),
         &req,
@@ -81,6 +80,7 @@ pub fn encode_for_mode(
     // to pass Anthropic subscription/OAuth plan checks.
     if provider.client_profile_for(req.client_identity.as_deref())
         == ProviderClientProfile::ClaudeCode
+        && provider.dialect() == crate::ir::Dialect::Anthropic
         && !(req.source_dialect == crate::ir::Dialect::Anthropic && req.anthropic_body.is_some())
     {
         prepend_claude_code_system_prompt(&mut body);
@@ -92,11 +92,35 @@ pub fn encode_for_mode(
     #[cfg(feature = "opencode")]
     if provider.client_profile_for(req.client_identity.as_deref())
         == ProviderClientProfile::OpenCodeCli
+        && !(req.source_dialect == crate::ir::Dialect::Anthropic
+            && provider.dialect() == crate::ir::Dialect::Anthropic
+            && req.anthropic_body.is_some())
     {
         crate::opencode::shape_v2_body(&mut body);
     }
 
     Ok(body)
+}
+
+pub(crate) fn anthropic_version_for(
+    provider: &ProviderConfig,
+    req: &ChatRequest,
+) -> crate::protocol::anthropic::AnthropicApiVersion {
+    let inbound = (req.source_dialect == crate::ir::Dialect::Anthropic)
+        .then(|| {
+            req.client_headers
+                .get("anthropic-version")
+                .and_then(|value| value.to_str().ok())
+        })
+        .flatten();
+    let configured = provider
+        .extra_headers
+        .iter()
+        .rev()
+        .find(|(key, _)| key.eq_ignore_ascii_case("anthropic-version"))
+        .map(|(_, value)| value.as_str())
+        .or(provider.anthropic_version.as_deref());
+    crate::protocol::anthropic::AnthropicApiVersion::of(inbound.or(configured))
 }
 
 /// Insert the Claude Code identity as the first line of the `system` field in

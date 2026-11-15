@@ -4,8 +4,8 @@ use serde_json::{json, Value};
 
 use crate::error::{Error, Result};
 use crate::ir::{
-    ChatRequest, ContentBlock, Dialect, MediaSource, Message, Role, SystemPart, ThinkingConfig,
-    ToolChoice, ToolDef, ToolResultPart,
+    ChatRequest, ContentBlock, Dialect, MediaSource, Message, Role, StructuredOutput, SystemPart,
+    ThinkingConfig, ToolChoice, ToolDef, ToolResultPart,
 };
 use crate::protocol::unsupported_content;
 
@@ -25,32 +25,45 @@ pub fn decode_request(body: Value) -> Result<ChatRequest> {
 
     let mut req = ChatRequest::new(model, Dialect::Anthropic);
     req.anthropic_body = Some(body.clone());
+    req.anthropic_native_only = super::native::native_only_reason(&body).is_some();
+    for field in ["thinking", "tool_choice", "output_config", "metadata"] {
+        if obj
+            .get(field)
+            .is_some_and(|value| !value.is_null() && !value.is_object())
+        {
+            return Err(Error::invalid(format!("`{field}` must be an object")));
+        }
+    }
+    if body
+        .pointer("/output_config/effort")
+        .is_some_and(|value| !value.is_null() && !value.is_string())
+    {
+        return Err(Error::invalid("output_config.effort must be a string"));
+    }
 
     req.system = match obj.get("system") {
         None | Some(Value::Null) => Vec::new(),
         Some(Value::String(s)) => vec![SystemPart::new(s.clone())],
-        Some(Value::Array(items)) => items
-            .iter()
-            .map(|block| {
+        Some(Value::Array(items)) => {
+            let mut parts = Vec::new();
+            for block in items {
                 let kind = block
                     .get("type")
                     .and_then(Value::as_str)
                     .ok_or_else(|| Error::invalid("system content block is missing `type`"))?;
-                if kind != "text" {
-                    return Err(unsupported_content("system", Some(kind)));
+                if kind == "text" {
+                    let text = block
+                        .get("text")
+                        .and_then(Value::as_str)
+                        .ok_or_else(|| Error::invalid("system text block is missing `text`"))?;
+                    parts.push(SystemPart {
+                        text: text.to_string(),
+                        cache_control: block.get("cache_control").cloned(),
+                    });
                 }
-                let text = block
-                    .get("text")
-                    .and_then(Value::as_str)
-                    .ok_or_else(|| Error::invalid("system text block is missing `text`"))?;
-                // A breakpoint on a system block is the caller's decision about
-                // money, so it travels with the text.
-                Ok(SystemPart {
-                    text: text.to_string(),
-                    cache_control: block.get("cache_control").cloned(),
-                })
-            })
-            .collect::<Result<Vec<_>>>()?,
+            }
+            parts
+        }
         Some(_) => return Err(Error::invalid("`system` must be a string or an array")),
     };
 
@@ -65,36 +78,9 @@ pub fn decode_request(body: Value) -> Result<ChatRequest> {
             m.get("role").and_then(Value::as_str),
             Some("system") | Some("developer")
         ) {
-            let parts = match m.get("content") {
-                Some(Value::String(text)) => vec![SystemPart::new(text)],
-                Some(Value::Array(blocks)) => blocks
-                    .iter()
-                    .map(|block| {
-                        if block.get("type").and_then(Value::as_str) != Some("text") {
-                            return Err(Error::invalid("system messages only support text blocks"));
-                        }
-                        let text = block
-                            .get("text")
-                            .and_then(Value::as_str)
-                            .ok_or_else(|| Error::invalid("system text is missing"))?;
-                        Ok(SystemPart {
-                            text: text.into(),
-                            cache_control: block.get("cache_control").cloned(),
-                        })
-                    })
-                    .collect::<Result<Vec<_>>>()?,
-                None | Some(Value::Null) => Vec::new(),
-                _ => return Err(Error::invalid("system message content must be text")),
-            };
             req.messages.push(Message {
                 role: Role::System,
-                content: parts
-                    .into_iter()
-                    .map(|part| ContentBlock::Text {
-                        text: part.text,
-                        cache_control: part.cache_control,
-                    })
-                    .collect(),
+                content: decode_system_message_content(m.get("content"))?,
             });
             continue;
         }
@@ -134,10 +120,21 @@ pub fn decode_request(body: Value) -> Result<ChatRequest> {
         None | Some(Value::Null) => {}
         Some(Value::Array(tools)) => {
             for t in tools {
-                let name = t
-                    .get("name")
-                    .and_then(Value::as_str)
-                    .ok_or_else(|| Error::invalid("tool definition is missing `name`"))?;
+                let name = match t.get("name").and_then(Value::as_str) {
+                    Some(name) => name,
+                    None if t.get("type").and_then(Value::as_str).is_some() => {
+                        req.anthropic_native_only = true;
+                        continue;
+                    }
+                    None => return Err(Error::invalid("tool definition is missing `name`")),
+                };
+                match t.get("strict") {
+                    None | Some(Value::Null) => {}
+                    Some(Value::Bool(strict)) => {
+                        req.tool_strict.insert(name.into(), *strict);
+                    }
+                    Some(_) => return Err(Error::invalid("tool `strict` must be a boolean")),
+                }
                 req.tools.push(ToolDef {
                     name: name.to_string(),
                     description: t
@@ -185,21 +182,27 @@ pub fn decode_request(body: Value) -> Result<ChatRequest> {
                         name: name.to_string(),
                     })
                 }
-                other => return Err(unsupported_content("tool_choice", Some(other))),
+                _ => {
+                    req.anthropic_native_only = true;
+                    None
+                }
             }
         }
     };
     req.parallel_tool_use = parallel_tool_use;
 
-    if let Some(th) = obj.get("thinking") {
+    if let Some(th) = obj.get("thinking").filter(|value| !value.is_null()) {
         let kind = th
             .get("type")
             .and_then(Value::as_str)
             .ok_or_else(|| Error::invalid("thinking is missing `type`"))?;
         let enabled = match kind {
-            "enabled" | "adaptive" => true,
+            "enabled" | "adaptive" | "between_tools" => true,
             "disabled" => false,
-            other => return Err(unsupported_content("thinking", Some(other))),
+            _ => {
+                req.anthropic_native_only = true;
+                true
+            }
         };
         req.thinking = Some(ThinkingConfig {
             enabled,
@@ -230,6 +233,50 @@ pub fn decode_request(body: Value) -> Result<ChatRequest> {
         req.thinking = Some(reasoning.legacy());
         req.reasoning = Some(reasoning);
     }
+    // Per-message effort applies to later turns without changing the cached
+    // top-level value. Candidate eligibility must inspect the effective level,
+    // while native encoding keeps every original system entry in place.
+    for message in messages
+        .iter()
+        .filter(|message| message.get("role").and_then(Value::as_str) == Some("system"))
+    {
+        if let Some(effort) = message
+            .pointer("/output_config/effort")
+            .and_then(Value::as_str)
+        {
+            let reasoning = crate::ir::ReasoningRequest::native(effort).map_err(Error::invalid)?;
+            req.thinking = Some(reasoning.legacy());
+            req.reasoning = Some(reasoning);
+        }
+    }
+    let format = body
+        .pointer("/output_config/format")
+        .filter(|value| !value.is_null());
+    let legacy_format = body.get("output_format").filter(|value| !value.is_null());
+    if format.is_some() && legacy_format.is_some() {
+        return Err(Error::invalid(
+            "send output_config.format or output_format, not both",
+        ));
+    }
+    if let Some(format) = format.or(legacy_format) {
+        let kind = format
+            .get("type")
+            .and_then(Value::as_str)
+            .ok_or_else(|| Error::invalid("output format is missing `type`"))?;
+        if kind == "json_schema" {
+            let schema = format
+                .get("schema")
+                .filter(|value| value.is_object())
+                .ok_or_else(|| Error::invalid("output format is missing a JSON schema object"))?;
+            req.structured_output = Some(StructuredOutput::JsonSchema {
+                name: None,
+                schema: schema.clone(),
+                strict: true,
+            });
+        } else {
+            req.anthropic_native_only = true;
+        }
+    }
 
     for (k, v) in obj {
         if !KNOWN_KEYS.contains(&k.as_str()) {
@@ -248,11 +295,60 @@ fn decode_message(m: &Value) -> Result<Message> {
         Some(other) => return Err(unsupported_content("message role", Some(other))),
         None => return Err(Error::invalid("message is missing `role`")),
     };
-    let content = match m.get("content") {
+    let content = project_content(m.get("content"))?;
+    Ok(Message { role, content })
+}
+
+/// A portable inspection projection of an open Messages content array. Unknown
+/// native blocks stay in the original envelope; the native-only gate makes it
+/// impossible to send this incomplete projection to another dialect.
+pub(crate) fn project_content(value: Option<&Value>) -> Result<Vec<ContentBlock>> {
+    Ok(match value {
         Some(Value::String(s)) => vec![ContentBlock::text(s.clone())],
         Some(Value::Array(blocks)) => {
             let mut out = Vec::with_capacity(blocks.len());
             for b in blocks {
+                let kind = b
+                    .get("type")
+                    .and_then(Value::as_str)
+                    .ok_or_else(|| Error::invalid("content block is missing `type`"))?;
+                // Unknown native data remains in anthropic_body. Known but
+                // structurally opaque nested blocks have the same restriction.
+                if !matches!(
+                    kind,
+                    "text"
+                        | "thinking"
+                        | "redacted_thinking"
+                        | "image"
+                        | "document"
+                        | "tool_use"
+                        | "tool_result"
+                ) || (matches!(kind, "image" | "document")
+                    && !matches!(
+                        b.pointer("/source/type").and_then(Value::as_str),
+                        Some("base64" | "url")
+                    ))
+                {
+                    continue;
+                }
+                if kind == "tool_result"
+                    && b.get("content")
+                        .and_then(Value::as_array)
+                        .is_some_and(|parts| {
+                            parts.iter().any(|part| {
+                                !matches!(
+                                    part.get("type").and_then(Value::as_str),
+                                    Some("text" | "image")
+                                ) || (part["type"] == "image"
+                                    && !matches!(
+                                        part.pointer("/source/type").and_then(Value::as_str),
+                                        Some("base64" | "url")
+                                    ))
+                            })
+                        })
+                {
+                    continue;
+                }
                 if let Some(block) = decode_block(b)? {
                     out.push(block);
                 }
@@ -261,8 +357,45 @@ fn decode_message(m: &Value) -> Result<Message> {
         }
         Some(Value::Null) | None => Vec::new(),
         Some(_) => return Err(Error::invalid("`content` must be a string or an array")),
-    };
-    Ok(Message { role, content })
+    })
+}
+
+/// Textual system reminders stay strict. Native tool catalogue updates are
+/// control blocks, not executable tool calls, and remain in the original body.
+fn decode_system_message_content(value: Option<&Value>) -> Result<Vec<ContentBlock>> {
+    match value {
+        Some(Value::String(s)) => Ok(vec![ContentBlock::text(s.clone())]),
+        Some(Value::Array(blocks)) => {
+            let mut out = Vec::with_capacity(blocks.len());
+            for b in blocks {
+                let kind = b
+                    .get("type")
+                    .and_then(Value::as_str)
+                    .ok_or_else(|| Error::invalid("system content block is missing `type`"))?;
+                if kind != "text" {
+                    if matches!(kind, "tool_addition" | "tool_removal") {
+                        // These have no portable content projection. The native
+                        // gate prevents discarding them across another dialect.
+                        continue;
+                    }
+                    return Err(Error::invalid(
+                        "system message content must contain only text",
+                    ));
+                }
+                let text = b
+                    .get("text")
+                    .and_then(Value::as_str)
+                    .ok_or_else(|| Error::invalid("system text block is missing `text`"))?;
+                out.push(ContentBlock::Text {
+                    text: text.to_string(),
+                    cache_control: b.get("cache_control").cloned(),
+                });
+            }
+            Ok(out)
+        }
+        Some(Value::Null) | None => Ok(Vec::new()),
+        Some(_) => Err(Error::invalid("`content` must be a string or an array")),
+    }
 }
 
 pub(super) fn decode_block(b: &Value) -> Result<Option<ContentBlock>> {

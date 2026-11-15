@@ -252,7 +252,7 @@ fn the_version_header_selects_from_the_configured_string() {
 }
 
 #[test]
-fn strict_tool_schema_is_rejected_instead_of_dropped() {
+fn strict_tool_schema_is_encoded_without_dropping_the_constraint() {
     let req = crate::protocol::openai::decode_request(json!({
         "model": "m",
         "messages": [{"role": "user", "content": "q"}],
@@ -260,11 +260,11 @@ fn strict_tool_schema_is_rejected_instead_of_dropped() {
                    "parameters": {"type": "object"}}}]
     }))
     .unwrap();
-    let err = encode_request(&req, "claude").unwrap_err();
-    assert!(
-        err.to_string().contains("strict"),
-        "the strict requirement must not be dropped silently: {err}"
-    );
+    let body = encode_request(&req, "claude").unwrap();
+    assert_eq!(body["tools"][0]["strict"], true);
+    assert!(req
+        .required_capabilities
+        .contains(&crate::ir::Capability::StructuredOutput));
 
     // An explicitly non-strict tool is ordinary and still encodes.
     let relaxed = crate::protocol::openai::decode_request(json!({

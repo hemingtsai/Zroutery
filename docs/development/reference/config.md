@@ -1,6 +1,6 @@
 # Configuration Reference
 
-> Authority: reference · Owner: backend · Last verified: 2026-11-14 · Verified by: `cargo test --workspace --all-features --locked`
+> Authority: reference · Owner: backend · Last verified: 2026-11-15 · Verified by: `cargo test --workspace --all-features --locked`
 
 This page describes the configuration document: defaults, validation,
 normalisation, persistence and the secret boundary. It is not a settings guide;
@@ -45,6 +45,18 @@ carries pricing, tier, capabilities and aliases
 `crates/zroutery-core/src/config/server.rs::ServerConfig::cors_is_wide_open`).
 
 ## Validation
+
+Classifier routing remains off by default. Its `server_review` switch defaults
+to true under that master switch, with a 30-second total deadline. The
+deadline check runs only while both `classifier.enabled` and `server_review`
+are on: with either switch off the setting is inert, and deadlines outside
+1-120 seconds are validation errors. The candidate pool does not own a second
+credential location: it references configured models by exposed id or alias
+and reuses each one's provider, key reference and pricing
+(`crates/zroutery-core/src/config/routing.rs::ClassifierConfig::default`,
+`crates/zroutery-core/src/config/validate.rs::AppConfig::validate`). The settings
+and their data-sharing boundary are editable in the Auto review drawer
+(`ui/src/pages/routing/AutoModeDrawer.tsx::AutoModeDrawer`).
 
 The document's `validate` method returns `ConfigIssue`s with a severity
 (`crates/zroutery-core/src/config/validate.rs::AppConfig::validate`,

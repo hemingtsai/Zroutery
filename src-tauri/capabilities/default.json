@@ -15,6 +15,7 @@
     "allow-remove-plugin",
     "allow-update-plugin",
     "allow-rollback-plugin",
+    "allow-reset-plugin-options",
     "allow-get-plugin-themes",
     "allow-render-plugin-ui",
     "allow-invoke-plugin-ui-action",

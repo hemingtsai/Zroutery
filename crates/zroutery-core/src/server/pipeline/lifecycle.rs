@@ -208,6 +208,7 @@ pub(super) struct RequestLifecycle {
     /// One entry per send the pipeline observed, in order.
     attempts: Vec<OutcomeAttempt>,
     accounting_attempts: Vec<AttemptFact>,
+    parent_request_id: Option<String>,
     /// The candidate whose response was actually delivered, if any.
     served: Option<CandidateIdentity>,
     /// Response store id, for the Responses API lifecycle.
@@ -344,6 +345,7 @@ impl RequestLifecycle {
             planned: None,
             attempts: Vec::new(),
             accounting_attempts: Vec::new(),
+            parent_request_id: None,
             served: None,
             response_id: None,
             attempt_failure_accounted: false,
@@ -381,6 +383,17 @@ impl RequestLifecycle {
     #[cfg_attr(not(feature = "ml"), allow(dead_code))]
     pub(super) fn id(&self) -> &str {
         self.record.id()
+    }
+
+    pub(super) fn link_parent(&mut self, id: &str) {
+        self.parent_request_id = Some(id.to_string());
+    }
+
+    /// Complete observed metadata, not a terminal transition. A review's budget
+    /// check includes the generator's known pending spend before it is charged.
+    pub(super) fn pending_accounting(&mut self) -> Option<AttemptFact> {
+        self.capture_transport();
+        self.accounting_attempts.last().cloned()
     }
 
     /// Whether this request already reached its terminal transition.
@@ -1001,6 +1014,8 @@ impl RequestLifecycle {
         let now = chrono::Utc::now().timestamp();
         let id = format!("att_{}", uuid::Uuid::new_v4().simple());
         let mut fact = AttemptFact::new(id.clone(), Some(self.id().to_string()), candidate, sent);
+        fact.parent_request_id = self.parent_request_id.clone();
+        fact.bind_iteration_pricing(&self.state.config(), candidate);
         fact.rectified = rectified;
         self.state.persist_attempt(&fact)?;
         self.record.execution(&fact.execution);

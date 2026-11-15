@@ -187,7 +187,16 @@ pub fn parse_answer(answer: &Value) -> Option<Decision> {
         Some(answers) => answers,
         None => answer,
     };
-    let noul = answers.get(QUESTION_KEY)?.get("noul")?.as_f64()?;
+    let decision = answers.get(QUESTION_KEY)?;
+    // Omitted type is the legacy flat fixture contract; an explicit unknown
+    // primitive is never a binary answer even if it carries a low probability.
+    if decision
+        .get("type")
+        .is_some_and(|kind| kind.as_str() != Some("noul"))
+    {
+        return None;
+    }
+    let noul = decision.get("noul")?.as_f64()?;
     if !noul.is_finite() || !(0.0..=1.0).contains(&noul) {
         return None;
     }
@@ -212,13 +221,14 @@ pub fn question_of(req: &ChatRequest) -> (String, String) {
         .filter(|text| !text.is_empty())
         .collect::<Vec<_>>()
         .join("\n\n");
-    let state = if req.messages.iter().any(|message| {
-        message.role != Role::User
-            || message
-                .content
-                .iter()
-                .any(|block| !matches!(block, ContentBlock::Text { .. }))
-    }) {
+    let state = if req.anthropic_native_only
+        || req.messages.iter().any(|message| {
+            message.role != Role::User
+                || message
+                    .content
+                    .iter()
+                    .any(|block| !matches!(block, ContentBlock::Text { .. }))
+        }) {
         // Keep assistant/system turns and tool evidence rather than judging
         // only the last user message. This JSON is transient request content,
         // never persisted in records or diagnostics.

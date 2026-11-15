@@ -56,6 +56,7 @@ pub fn encode_request_with(
     upstream_model: &str,
     quirks: &ProviderQuirks,
 ) -> Result<Value> {
+    crate::protocol::anthropic::validate_bridge(req, Dialect::OpenAI)?;
     let mut body = Map::new();
     body.insert("model".into(), json!(upstream_model));
 
@@ -158,6 +159,23 @@ pub fn encode_request_with(
     }
     if let Some(u) = &req.metadata_user {
         body.insert("user".into(), json!(u));
+    }
+    if req.source_dialect == Dialect::Anthropic {
+        if let Some(metadata) = req
+            .anthropic_body
+            .as_ref()
+            .and_then(|body| body.get("metadata"))
+            .and_then(Value::as_object)
+        {
+            let metadata: Map<String, Value> = metadata
+                .iter()
+                .filter(|(key, _)| key.as_str() != "user_id")
+                .map(|(key, value)| (key.clone(), value.clone()))
+                .collect();
+            if !metadata.is_empty() {
+                body.insert("metadata".into(), Value::Object(metadata));
+            }
+        }
     }
 
     // Emit the structured-output constraint from the IR. This is what makes an

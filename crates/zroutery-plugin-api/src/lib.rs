@@ -6,6 +6,7 @@
 pub mod capability;
 pub mod ipc;
 pub mod manifest;
+pub mod options;
 pub mod provider;
 pub mod strict;
 pub mod theme;

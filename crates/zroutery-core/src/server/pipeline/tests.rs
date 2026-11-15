@@ -582,6 +582,8 @@ async fn a_disconnected_stream_is_billed_once_and_leaves_health_alone() {
         input_items: Vec::new(),
         previous_response_id: None,
         admission: state.admit(&[]).await,
+        server_review: None,
+        require_streamed_arguments: false,
     };
     let mut body = Box::pin(sse_body(
         Arc::clone(&state),
@@ -722,6 +724,8 @@ async fn a_client_closing_after_the_terminal_frame_is_not_a_disconnect() {
             input_items: Vec::new(),
             previous_response_id: None,
             admission: state.admit(&[]).await,
+            server_review: None,
+            require_streamed_arguments: false,
         },
     );
     let mut body = Box::pin(body);

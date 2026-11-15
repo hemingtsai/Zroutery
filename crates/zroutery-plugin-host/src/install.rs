@@ -3,6 +3,7 @@ use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
 use std::io::{Cursor, Read};
 use zroutery_plugin_api::manifest::PluginManifestV1;
+use zroutery_plugin_api::options::OptionsSchemaV1;
 use zroutery_plugin_api::{strict, PluginError, Result};
 
 pub const MAX_ARCHIVE_BYTES: usize = 8 * 1024 * 1024;
@@ -13,6 +14,9 @@ pub const MAX_FILES: usize = 128;
 #[derive(Debug, Clone)]
 pub struct Package {
     pub manifest: PluginManifestV1,
+    /// Decoded once at construction; schema validity is a package property,
+    /// not a per-save surprise. `None` when the manifest declares no schema.
+    pub schema: Option<OptionsSchemaV1>,
     pub digest: String,
     pub files: BTreeMap<String, Vec<u8>>,
 }
@@ -150,6 +154,14 @@ impl Package {
                 strict::decode(&files[&profile.file], MAX_FILE_BYTES)?;
             profile.validate()?;
         }
+        let schema = match &manifest.options_schema {
+            Some(path) => {
+                let schema =
+                    OptionsSchemaV1::decode(files.get(path).ok_or(PluginError::InvalidManifest)?)?;
+                Some(schema)
+            }
+            None => None,
+        };
         if let Some(runtime) = &manifest.runtime {
             for entry in [&runtime.entries.control, &runtime.entries.ui]
                 .into_iter()
@@ -171,6 +183,7 @@ impl Package {
         }
         Ok(Self {
             manifest,
+            schema,
             digest: format!("{:x}", digest.finalize()),
             files,
         })

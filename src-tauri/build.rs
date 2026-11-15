@@ -47,6 +47,7 @@ const APP_COMMANDS: &[&str] = &[
     "remove_plugin",
     "update_plugin",
     "rollback_plugin",
+    "reset_plugin_options",
     "get_plugin_themes",
     "render_plugin_ui",
     "invoke_plugin_ui_action",

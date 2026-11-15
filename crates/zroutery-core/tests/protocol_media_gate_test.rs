@@ -26,13 +26,19 @@ fn audio_request() -> ChatRequest {
 }
 
 #[test]
-fn unknown_anthropic_content_is_rejected_instead_of_dropped() {
-    let error = anthropic::decode_request(json!({
+fn unknown_anthropic_content_stays_native_and_cannot_cross_a_lossy_bridge() {
+    let request = anthropic::decode_request(json!({
         "model": "m",
         "messages": [{"role": "user", "content": [{"type": "server_side_tool", "secret": "do-not-copy"}]}]
     }))
-    .unwrap_err();
-    assert!(error.to_string().contains("unsupported message content"));
+    .unwrap();
+    assert!(request.anthropic_native_only);
+    let body = anthropic::encode_request(&request, "m").unwrap();
+    assert_eq!(body["messages"][0]["content"][0]["secret"], "do-not-copy");
+    let error = openai::encode_request(&request, "m").unwrap_err();
+    assert!(error
+        .to_string()
+        .contains("require an Anthropic Messages upstream"));
     assert!(!error.to_string().contains("do-not-copy"));
 }
 

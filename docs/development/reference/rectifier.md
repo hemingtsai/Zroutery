@@ -1,6 +1,6 @@
 # Rectifier Reference
 
-> Authority: reference · Owner: backend · Last verified: 2026-11-14 · Verified by: `cargo test --workspace --all-features --locked`
+> Authority: reference · Owner: backend · Last verified: 2026-11-15 · Verified by: `cargo test --workspace --all-features --locked`
 
 A rectifier repairs a request the upstream refused, before the gateway gives up
 on that provider. It is not a retry of the same bytes: it changes the request
@@ -33,6 +33,15 @@ shape, then sends again.
   (`crates/zroutery-core/src/server/pipeline/repair.rs::try_rectify_buffered`).
 - A decision candidate (`provider.kind.is_decision()`) is not repaired here; it
   has its own path.
+- A native-only Messages request skips media/signature rewrites; its inspection
+  projection does not own the original signed conversation
+  (`crates/zroutery-core/src/server/pipeline/repair.rs::try_rectify_buffered`,
+  `crates/zroutery-core/src/server/pipeline/mod.rs::shape_for_candidate`).
+- An explicit pre-output `safeguards` rejection can recover once by removing
+  that review field and its beta pair, retaining system/tools/history and all
+  other beta values; the gateway then supplies real review results
+  (`crates/zroutery-core/src/server/pipeline/safeguards/mod.rs::recover_rejected_review`,
+  `crates/zroutery-core/src/upstream/headers.rs::is_server_review_beta`).
 
 ## The repairs
 

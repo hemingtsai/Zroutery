@@ -157,6 +157,8 @@ SNAPSHOT = {
         },
         "classifier": {
             "enabled": False,
+            "server_review": True,
+            "server_review_timeout_secs": 30,
             "strategy": "priority",
             "failover": True,
             "max_attempts": 2,
@@ -936,7 +938,7 @@ SURFACES = (
     Surface(
         "routing-auto",
         "Routing auto-review drawer",
-        {"combobox": 2, "native": 1},
+        {"combobox": 2, "native": 2},
         nav="routing",
         anchor=".flow-row",
         scope=".drawer",

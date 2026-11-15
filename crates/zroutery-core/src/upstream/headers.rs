@@ -249,6 +249,7 @@ pub fn build_headers_for_identity(
         .filter(|(name, _)| is_auth_header(name.as_str()))
         .map(|(name, value)| (name.clone(), value.clone()))
         .collect();
+    let mut forwarded = std::collections::HashSet::new();
     for (name, value) in &client.passthrough {
         if crate::config::passthrough_denied(name.as_str()) {
             tracing::warn!(
@@ -258,13 +259,44 @@ pub fn build_headers_for_identity(
             );
             continue;
         }
-        headers.insert(name.clone(), value.clone());
+        if forwarded.insert(name.clone()) {
+            headers.remove(name);
+        }
+        headers.append(name.clone(), value.clone());
     }
     for (name, value) in &auth {
         headers.insert(name.clone(), value.clone());
     }
+    if client.omit_server_review {
+        let values: Vec<_> = headers
+            .get_all("anthropic-beta")
+            .iter()
+            .filter_map(|value| value.to_str().ok())
+            .map(|value| {
+                value
+                    .split(',')
+                    .filter(|flag| !is_server_review_beta(flag.trim()))
+                    .collect::<Vec<_>>()
+                    .join(",")
+            })
+            .filter(|value| !value.is_empty())
+            .collect();
+        headers.remove("anthropic-beta");
+        for value in values {
+            if let Ok(value) = HeaderValue::from_str(&value) {
+                headers.append("anthropic-beta", value);
+            }
+        }
+    }
 
     Ok(headers)
+}
+
+pub(crate) fn is_server_review_beta(flag: &str) -> bool {
+    let flag = flag.to_ascii_lowercase();
+    flag.starts_with("dangerous-tool-use-")
+        || flag.starts_with("auto-mode-classifier-")
+        || flag.starts_with("auto_mode_classifier-")
 }
 
 /// Whether a header decides who this request authenticates as.

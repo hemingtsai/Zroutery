@@ -51,6 +51,7 @@ use crate::registry::Resolution;
 use crate::router::Candidate;
 mod sse;
 
+mod anthropic_native;
 mod auxiliary;
 mod budget;
 mod client;
@@ -62,6 +63,7 @@ mod ml_rank;
 mod repair;
 mod response;
 mod responses_native;
+mod safeguards;
 pub(super) mod session_binding;
 
 #[cfg(test)]
@@ -77,6 +79,58 @@ use lifecycle::{RequestLifecycle, Settlement, TerminalKind};
 use ml_rank::apply_ml_ranking;
 use repair::{maybe_filter_stream, try_rectify_buffered, try_rectify_stream};
 use response::{inject_cost_header, inject_routing_headers, register_in_flight, stream_response};
+
+/// The native optional tokenizer endpoint does not perform inference or create
+/// an accounting attempt. Only a missing endpoint falls back to the estimate.
+pub(super) async fn native_count_tokens(
+    state: &AppState,
+    req: &ChatRequest,
+    original: &Value,
+) -> Result<Option<(Value, crate::ir::ReplyHeaders)>> {
+    let registry = state.registry();
+    let Ok(resolution) = registry.resolve(&req.model) else {
+        return Ok(None);
+    };
+    let mut native_req = req.clone();
+    native_req.anthropic_native_only = true;
+    let registry = anthropic_native::registry_for(&native_req, &registry);
+    let plan = match state.router.plan(&registry, &resolution, &[]) {
+        Ok(plan) => plan,
+        Err(_) => return Ok(None),
+    };
+    let plan = credentials::expand_inference_keys(state, plan, usize::MAX)?;
+    let Some(candidate) = plan
+        .into_iter()
+        .find(|candidate| candidate.provider.dialect() == Dialect::Anthropic)
+    else {
+        return Ok(None);
+    };
+    credentials::validate_execution(state, &candidate)?;
+    let mut client = client_for(req, &candidate.provider);
+    let key = state.api_key(&candidate.provider)?;
+    let key = console_key(state, &candidate, key, &mut client).await?;
+    let mut body = original.clone();
+    body["model"] = serde_json::json!(candidate.entry.upstream_model);
+    crate::protocol::anthropic::apply_version(
+        &mut body,
+        crate::upstream::anthropic_version_for(&candidate.provider, req),
+    )?;
+    let url = format!(
+        "{}/count_tokens",
+        candidate.provider.chat_url().trim_end_matches('/')
+    );
+    match state
+        .upstream
+        .count_messages_tokens(&candidate.provider, key.as_deref(), &url, &body, &client)
+        .await
+    {
+        Ok(body) => Ok(Some((body, req.reply_headers.clone()))),
+        Err(Error::Upstream {
+            status: 404 | 405, ..
+        }) => Ok(None),
+        Err(error) => Err(error),
+    }
+}
 pub(super) async fn handle_chat(
     state: Arc<AppState>,
     dialect: Dialect,
@@ -132,6 +186,13 @@ pub(super) async fn handle_chat(
     } else {
         RequestKind::Main
     };
+    // Capture the unshaped conversation once. Media/compatibility repairs must
+    // not erase the user's constraints from the security review's transcript.
+    let server_review = safeguards::ReviewContext::for_request(&req, &registry);
+    let review_scopes = server_review
+        .as_ref()
+        .map(|review| review.admission_scopes())
+        .unwrap_or_default();
 
     // The Responses API lifecycle fields. A continuation is either accepted —
     // the prior conversation is replayed into this request's messages — or the
@@ -192,11 +253,53 @@ pub(super) async fn handle_chat(
     let policy_config = &config.routing.policies;
     let matched_policy = resolve_policy(policy_config, &client_ctx, &task_profile);
 
+    let registry = match state.upstream_sessions.thread_registry(&req, &registry) {
+        Ok(registry) => registry,
+        Err(error) => {
+            reject(
+                Arc::clone(&state),
+                dialect,
+                req.stream,
+                kind,
+                &req.model,
+                &req.client_headers,
+                &error,
+            );
+            return error_response(dialect, &error);
+        }
+    };
     if kind.is_main() {
+        if let Ok(resolution) = registry.resolve(&req.model) {
+            if let Err(error) = anthropic_native::validate_resolution(&req, &registry, &resolution)
+            {
+                reject(
+                    Arc::clone(&state),
+                    dialect,
+                    req.stream,
+                    kind,
+                    &req.model,
+                    &req.client_headers,
+                    &error,
+                );
+                return error_response(dialect, &error);
+            }
+        }
         let fallback = matched_policy
             .as_ref()
             .map(|policy| &policy.fallback)
             .unwrap_or(&policy::PolicyFallback::Reject);
+        if let Err(error) = anthropic_native::validate_scope(&req, &registry, fallback) {
+            reject(
+                Arc::clone(&state),
+                dialect,
+                req.stream,
+                kind,
+                &req.model,
+                &req.client_headers,
+                &error,
+            );
+            return error_response(dialect, &error);
+        }
         if let Err(error) = effort::validate_scope(&req, &registry, fallback) {
             reject(
                 Arc::clone(&state),
@@ -212,6 +315,13 @@ pub(super) async fn handle_chat(
     }
     let registry = effort::registry_for(&req, &registry);
     let registry = responses_native::registry_for(&req, &registry);
+    // Independent permission requests may be translated into SystemOne state.
+    // Embedded server review remains main traffic and retains the native wire.
+    let registry = if kind.is_main() {
+        anthropic_native::registry_for(&req, &registry)
+    } else {
+        registry
+    };
     let config = registry.config();
 
     // Admission permits for every budgeted scope this request occupies. Taken
@@ -243,85 +353,84 @@ pub(super) async fn handle_chat(
             let result = match registry.resolve(&req.model) {
                 Ok(resolution) => {
                     match responses_native::validate_resolution(&req, &registry, &resolution) {
-                        Ok(()) => apply_budgets(&state, &registry, resolution).await.and_then(
-                            |(resolution, guard)| {
-                                // Resolution::Direct skips policy: the client named an exact
-                                // model, so policy filtering would be surprising.
-                                // Resolution::Tier uses policy-aware routing when a policy is
-                                // resolved (via client profile, matchers, or default).
-                                let planned = match &resolution {
-                                    Resolution::Direct(_) => state
+                        Ok(()) => budget::apply_budgets_with_scopes(
+                            &state,
+                            &registry,
+                            resolution,
+                            &review_scopes,
+                        )
+                        .await
+                        .and_then(|(resolution, guard)| {
+                            // Resolution::Direct skips policy: the client named an exact
+                            // model, so policy filtering would be surprising.
+                            // Resolution::Tier uses policy-aware routing when a policy is
+                            // resolved (via client profile, matchers, or default).
+                            let planned = match &resolution {
+                                Resolution::Direct(_) => state
+                                    .router
+                                    .plan(&registry, &resolution, &{
+                                        let entry = match &resolution {
+                                            Resolution::Direct(id) => registry.entry(id),
+                                            _ => unreachable!(),
+                                        };
+                                        entry
+                                            .and_then(|entry| registry.provider_of(entry))
+                                            .map(|provider| {
+                                                effort::direct_requirements(
+                                                    &req,
+                                                    provider.dialect(),
+                                                )
+                                            })
+                                            .unwrap_or_else(|_| req.required_capabilities.clone())
+                                    })
+                                    .map(|plan| (plan, None)),
+                                Resolution::Tier(_) => match &matched_policy {
+                                    Some(policy) => {
+                                        let explicit = matches!(policy, Cow::Borrowed(_));
+                                        tracing::debug!(
+                                            policy_id = %policy.id,
+                                            "using policy-aware routing"
+                                        );
+                                        let policy =
+                                            responses_native::policy(&req, &registry, policy);
+                                        responses_native::plan(
+                                            &state,
+                                            &registry,
+                                            &resolution,
+                                            &req,
+                                            &policy,
+                                            &task_profile,
+                                            explicit,
+                                        )
+                                        .map(
+                                            |(plan, mut decision)| {
+                                                decision.policy_id = policy.id.clone();
+                                                decision.policy_revision.policy_id =
+                                                    policy.id.clone();
+                                                decision.policy_revision.policy_enabled =
+                                                    policy.enabled;
+                                                (plan, Some(decision))
+                                            },
+                                        )
+                                    }
+                                    None if req.responses_native_only => {
+                                        responses_native::plan_without_policy(
+                                            &state,
+                                            &registry,
+                                            &resolution,
+                                            &req,
+                                            &task_profile,
+                                        )
+                                        .map(|(plan, decision)| (plan, Some(decision)))
+                                    }
+                                    None => state
                                         .router
-                                        .plan(&registry, &resolution, &{
-                                            let entry = match &resolution {
-                                                Resolution::Direct(id) => registry.entry(id),
-                                                _ => unreachable!(),
-                                            };
-                                            entry
-                                                .and_then(|entry| registry.provider_of(entry))
-                                                .map(|provider| {
-                                                    effort::direct_requirements(
-                                                        &req,
-                                                        provider.dialect(),
-                                                    )
-                                                })
-                                                .unwrap_or_else(|_| {
-                                                    req.required_capabilities.clone()
-                                                })
-                                        })
+                                        .plan(&registry, &resolution, &req.required_capabilities)
                                         .map(|plan| (plan, None)),
-                                    Resolution::Tier(_) => match &matched_policy {
-                                        Some(policy) => {
-                                            let explicit = matches!(policy, Cow::Borrowed(_));
-                                            tracing::debug!(
-                                                policy_id = %policy.id,
-                                                "using policy-aware routing"
-                                            );
-                                            let policy =
-                                                responses_native::policy(&req, &registry, policy);
-                                            responses_native::plan(
-                                                &state,
-                                                &registry,
-                                                &resolution,
-                                                &req,
-                                                &policy,
-                                                &task_profile,
-                                                explicit,
-                                            )
-                                            .map(
-                                                |(plan, mut decision)| {
-                                                    decision.policy_id = policy.id.clone();
-                                                    decision.policy_revision.policy_id =
-                                                        policy.id.clone();
-                                                    decision.policy_revision.policy_enabled =
-                                                        policy.enabled;
-                                                    (plan, Some(decision))
-                                                },
-                                            )
-                                        }
-                                        None if req.responses_native_only => {
-                                            responses_native::plan_without_policy(
-                                                &state,
-                                                &registry,
-                                                &resolution,
-                                                &req,
-                                                &task_profile,
-                                            )
-                                            .map(|(plan, decision)| (plan, Some(decision)))
-                                        }
-                                        None => state
-                                            .router
-                                            .plan(
-                                                &registry,
-                                                &resolution,
-                                                &req.required_capabilities,
-                                            )
-                                            .map(|plan| (plan, None)),
-                                    },
-                                };
-                                planned.map(|(plan, decision)| (plan, decision, guard))
-                            },
-                        ),
+                                },
+                            };
+                            planned.map(|(plan, decision)| (plan, decision, guard))
+                        }),
                         Err(error) => Err(error),
                     }
                 }
@@ -535,7 +644,31 @@ pub(super) async fn handle_chat(
     } else {
         1
     } as usize;
-    let plan = match credentials::expand_inference_keys(&state, plan, limit) {
+    // Thread ownership is checked before the attempt cap: a newly preferred
+    // sibling key must not hide the original thread's still-valid credential.
+    let threaded = req.anthropic_body.as_ref().is_some_and(|body| {
+        body.pointer("/thread/type").and_then(Value::as_str) == Some("continue")
+    });
+    let plan = match credentials::expand_inference_keys(
+        &state,
+        plan,
+        if threaded { usize::MAX } else { limit },
+    ) {
+        Ok(plan) => plan,
+        Err(error) => {
+            reject(
+                Arc::clone(&state),
+                dialect,
+                req.stream,
+                kind,
+                &req.model,
+                &req.client_headers,
+                &error,
+            );
+            return error_response(dialect, &error);
+        }
+    };
+    let plan = match state.upstream_sessions.thread_plan(&req, plan) {
         Ok(plan) => plan,
         Err(error) => {
             reject(
@@ -593,6 +726,7 @@ pub(super) async fn handle_chat(
             storage,
             routing_decision,
             admission,
+            server_review,
             #[cfg(feature = "ml")]
             shadow_input,
         )
@@ -609,11 +743,20 @@ pub(super) async fn handle_chat(
             storage,
             routing_decision,
             admission,
+            server_review,
             #[cfg(feature = "ml")]
             shadow_input,
         )
         .await
     };
+    if dialect == Dialect::Anthropic && !response.status().is_success() {
+        if let Some(body) = reply_headers.native_error(response.status().as_u16()) {
+            response
+                .headers_mut()
+                .remove(axum::http::header::CONTENT_LENGTH);
+            *response.body_mut() = axum::body::Body::from(body.to_string());
+        }
+    }
     reply_headers.apply(response.headers_mut());
     response
 }
@@ -763,9 +906,13 @@ async fn shape_for_candidate(
     req: &ChatRequest,
     kind: RequestKind,
 ) -> Result<ChatRequest> {
+    req.reply_headers.clear_upstream_response();
     // An unavailable main execution cannot justify a paid media preflight.
     state.accounting_ready()?;
     credentials::validate_execution(state, candidate)?;
+    state
+        .upstream_sessions
+        .validate_thread_send(req, candidate)?;
     credentials::validate_budget_price(state, candidate, kind.is_main())?;
     let mut shaped = req.clone();
     // The classifier's transcript is the decision state. Generative media or
@@ -794,6 +941,11 @@ async fn shape_for_candidate(
             );
             shaped.max_tokens = Some(cap);
         }
+    }
+    if shaped.anthropic_native_only {
+        // Inspection projections do not own the native conversation prefix.
+        // Do not start paid media preflights or mutate signed native history.
+        return Ok(shaped);
     }
     if config.vision.enabled && !candidate.entry.capabilities.vision {
         let needs_vision = crate::media::collect::collect(&shaped);
@@ -834,6 +986,7 @@ async fn shape_for_candidate(
     }
     if rectifier.enabled
         && rectifier.thinking_fallback
+        && !shaped.anthropic_native_only
         && shaped.reasoning.is_none()
         && !(rectifier.codex_auto && candidate.provider.dialect() == Dialect::OpenAIResponses)
         && !candidate.entry.capabilities.thinking
@@ -925,6 +1078,16 @@ fn prepare(
         mode,
     )?;
     let mut body = body;
+    if req.source_dialect == Dialect::Anthropic
+        && candidate.provider.dialect() != Dialect::Anthropic
+        && req
+            .anthropic_body
+            .as_ref()
+            .is_some_and(|body| body.get("safeguards").is_some_and(|value| !value.is_null()))
+    {
+        tracing::debug!(provider = %candidate.provider.id,
+            "Anthropic server review is unavailable on this bridge; no safeguard verdict is fabricated");
+    }
     if candidate.provider.dialect() == Dialect::OpenAI {
         // A cancelled or resumed tool round is the client's history, not a
         // reason to block the turn: close it with an explicit "not executed"
@@ -1301,7 +1464,9 @@ async fn buffered_upstream_once(
         return Ok(response);
     }
     #[cfg(feature = "opencode")]
-    if client.profile == crate::config::ProviderClientProfile::OpenCodeCli {
+    if client.profile == crate::config::ProviderClientProfile::OpenCodeCli
+        && !client.native_anthropic
+    {
         use futures_util::StreamExt as _;
         let mut stream = state
             .upstream
@@ -1359,6 +1524,18 @@ async fn buffered_upstream(
         match result {
             Ok(response) => return Ok(response),
             Err(error) => {
+                if retries < crate::upstream::MAX_TOTAL_RETRIES
+                    && started.elapsed() < deadline
+                    && safeguards::recover_rejected_review(state, &mut body, &mut client, &error)
+                {
+                    lifecycle.failed_attempt(attempt, &error);
+                    state.accounting_ready()?;
+                    client.reply_headers.clear_upstream_response();
+                    lifecycle.attempted(candidate);
+                    rectified = true;
+                    retries += 1;
+                    continue;
+                }
                 if lifecycle.routing().rectifier.enabled
                     && error.is_session_binding_invalidated()
                     && retries < crate::upstream::MAX_TOTAL_RETRIES
@@ -1470,6 +1647,18 @@ async fn stream_upstream(
         match result {
             Ok(events) => return Ok(events),
             Err(error) => {
+                if retries < crate::upstream::MAX_TOTAL_RETRIES
+                    && started.elapsed() < deadline
+                    && safeguards::recover_rejected_review(state, &mut body, &mut client, &error)
+                {
+                    lifecycle.failed_attempt(attempt, &error);
+                    state.accounting_ready()?;
+                    client.reply_headers.clear_upstream_response();
+                    lifecycle.attempted(candidate);
+                    rectified = true;
+                    retries += 1;
+                    continue;
+                }
                 if lifecycle.routing().rectifier.enabled
                     && error.is_session_binding_invalidated()
                     && retries < crate::upstream::MAX_TOTAL_RETRIES
@@ -1551,6 +1740,7 @@ async fn buffered_chat(
     // only after the terminal transition has charged the ledger: the drop is
     // the release, so no early return in here can leak a scope.
     _admission: AdmissionGuard,
+    server_review: Option<Arc<safeguards::ReviewContext>>,
     #[cfg(feature = "ml")] shadow_input: Option<ShadowInput>,
 ) -> Response {
     let mut lifecycle = RequestLifecycle::new(
@@ -1718,7 +1908,9 @@ async fn buffered_chat(
                 // A placeholder we injected only to satisfy the gate must not
                 // reach a client that never declared it.
                 #[cfg(feature = "opencode")]
-                if client.profile == crate::config::ProviderClientProfile::OpenCodeCli {
+                if client.profile == crate::config::ProviderClientProfile::OpenCodeCli
+                    && !client.native_anthropic
+                {
                     let declared: Vec<String> =
                         req.tools.iter().map(|tool| tool.name.clone()).collect();
                     crate::opencode::strip_injected_tool_calls(&mut resp, &declared);
@@ -1791,6 +1983,16 @@ async fn buffered_chat(
                 // honestly run. It must also precede `finalize`, which persists.
                 #[cfg(feature = "ml")]
                 lifecycle.note_task_evidence(&req, &resp, candidate);
+                let mut wire = protocol::encode_response(dialect, &resp);
+                if dialect == Dialect::Anthropic {
+                    if let Some(review) = &server_review {
+                        let parent = lifecycle.id().to_string();
+                        let pending = lifecycle.pending_accounting();
+                        review
+                            .stamp_response(state.clone(), &mut wire, &parent, pending)
+                            .await;
+                    }
+                }
                 // The terminal transition below owns the charge, the record and
                 // the outcome: booking here as well would spend twice.
                 let committed = lifecycle.finalize(
@@ -1823,7 +2025,35 @@ async fn buffered_chat(
                         )];
                     }
                 }
-                let mut wire = protocol::encode_response(dialect, &resp);
+                if dialect == Dialect::Anthropic
+                    && req.anthropic_body.as_ref().is_some_and(|body| {
+                        body.get("thread").is_some_and(|value| !value.is_null())
+                    })
+                    && resp.stop_reason != crate::ir::StopReason::Refusal
+                    && !resp
+                        .passthrough
+                        .get("zroutery.internal.native_anthropic_response")
+                        .and_then(|body| body.pointer("/usage/iterations"))
+                        .and_then(Value::as_array)
+                        .is_some_and(|iterations| {
+                            iterations
+                                .iter()
+                                .any(|iteration| iteration["type"] == "fallback_message")
+                        })
+                {
+                    state
+                        .upstream_sessions
+                        .remember_thread(&resp.id, candidate, &client);
+                }
+                if dialect != Dialect::Anthropic || server_review.is_none() {
+                    wire = protocol::encode_response(dialect, &resp);
+                } else if resp
+                    .passthrough
+                    .get("zroutery.internal.native_anthropic_response")
+                    .is_none()
+                {
+                    wire["model"] = serde_json::json!(resp.model);
+                }
                 if dialect == Dialect::OpenAIResponses {
                     session_binding::annotate_response(&mut wire, &req.reply_headers);
                 }
@@ -1901,6 +2131,16 @@ async fn buffered_chat(
                         }
                         lifecycle.served_attempt(repair_start);
                         lifecycle.note_response_id(&resp.id);
+                        let mut wire = protocol::encode_response(dialect, &resp);
+                        if dialect == Dialect::Anthropic {
+                            if let Some(review) = &server_review {
+                                let parent = lifecycle.id().to_string();
+                                let pending = lifecycle.pending_accounting();
+                                review
+                                    .stamp_response(state.clone(), &mut wire, &parent, pending)
+                                    .await;
+                            }
+                        }
                         // Before `finalize`, which is the terminal transition that
                         // persists the trace. See the buffered path for why.
                         let committed = lifecycle.finalize(
@@ -1916,7 +2156,15 @@ async fn buffered_chat(
                             return error_response(dialect, &error);
                         }
                         resp.model = candidate.exposed_id.clone();
-                        let mut wire = protocol::encode_response(dialect, &resp);
+                        if dialect != Dialect::Anthropic || server_review.is_none() {
+                            wire = protocol::encode_response(dialect, &resp);
+                        } else if resp
+                            .passthrough
+                            .get("zroutery.internal.native_anthropic_response")
+                            .is_none()
+                        {
+                            wire["model"] = serde_json::json!(resp.model);
+                        }
                         if dialect == Dialect::OpenAIResponses {
                             session_binding::annotate_response(&mut wire, &req.reply_headers);
                         }
@@ -2021,6 +2269,7 @@ async fn stream_chat(
     storage: protocol::responses::StoragePolicy,
     routing_decision: Option<RouteDecision>,
     admission: AdmissionGuard,
+    server_review: Option<Arc<safeguards::ReviewContext>>,
     #[cfg(feature = "ml")] shadow_input: Option<ShadowInput>,
 ) -> Response {
     let mut lifecycle = RequestLifecycle::new(
@@ -2157,6 +2406,59 @@ async fn stream_chat(
         .await
         {
             Ok(events) => {
+                let thread = req
+                    .anthropic_body
+                    .as_ref()
+                    .is_some_and(|body| body.get("thread").is_some_and(|value| !value.is_null()));
+                let events = if dialect == Dialect::Anthropic && thread {
+                    let candidate = candidate.clone();
+                    let client = client.clone();
+                    let state = state.clone();
+                    let mut id: Option<String> = None;
+                    let mut storable = true;
+                    use futures_util::StreamExt as _;
+                    Box::pin(events.map(move |event| {
+                        if let Ok(crate::ir::StreamEvent::Native {
+                            event: kind, data, ..
+                        }) = &event
+                        {
+                            let kind = kind
+                                .as_deref()
+                                .or_else(|| data.get("type").and_then(Value::as_str));
+                            if kind == Some("message_start") {
+                                id = data
+                                    .pointer("/message/id")
+                                    .and_then(Value::as_str)
+                                    .map(str::to_string);
+                            }
+                            if data.pointer("/delta/stop_reason").and_then(Value::as_str)
+                                == Some("refusal")
+                                || data.pointer("/content_block/type").and_then(Value::as_str)
+                                    == Some("fallback")
+                                || data
+                                    .pointer("/usage/iterations")
+                                    .and_then(Value::as_array)
+                                    .is_some_and(|iterations| {
+                                        iterations.iter().any(|iteration| {
+                                            iteration["type"] == "fallback_message"
+                                        })
+                                    })
+                            {
+                                storable = false;
+                            }
+                            if kind == Some("message_stop") && storable {
+                                if let Some(id) = &id {
+                                    state
+                                        .upstream_sessions
+                                        .remember_thread(id, &candidate, &client);
+                                }
+                            }
+                        }
+                        event
+                    })) as crate::upstream::EventStream
+                } else {
+                    events
+                };
                 // Health is reported once, here: the handshake is the part a
                 // routing decision can act on (responsiveness and reachability),
                 // while total stream duration mostly measures how long the answer
@@ -2194,6 +2496,7 @@ async fn stream_chat(
                     admission,
                     crate::classifier::uses_severity(&req),
                     &req.reply_headers,
+                    server_review.clone(),
                 );
             }
             Err(e) => {
@@ -2235,6 +2538,7 @@ async fn stream_chat(
                             admission,
                             crate::classifier::uses_severity(&req),
                             &req.reply_headers,
+                            server_review.clone(),
                         );
                     }
                     Ok(None) => {

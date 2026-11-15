@@ -107,6 +107,7 @@ pub fn run() {
             plugins::commands::remove_plugin,
             plugins::commands::update_plugin,
             plugins::commands::rollback_plugin,
+            plugins::commands::reset_plugin_options,
             plugins::commands::get_plugin_themes,
             plugins::commands::render_plugin_ui,
             plugins::commands::invoke_plugin_ui_action,

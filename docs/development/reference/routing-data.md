@@ -1,6 +1,6 @@
 # Routing Data Reference
 
-> Authority: reference · Owner: backend · Last verified: 2026-11-14 · Verified by: `cargo test --workspace --all-features --locked`
+> Authority: reference · Owner: backend · Last verified: 2026-11-15 · Verified by: `cargo test --workspace --all-features --locked`
 
 This page describes the data that routing learns from, where it lives, and what
 it deliberately does not contain. It is not a retention policy; the operator
@@ -10,7 +10,7 @@ clears the durable trace log explicitly.
 
 | Family | Lifetime | Contains | Owner |
 |---|---|---|---|
-| request log (recent ring) | process memory, bounded; durable usage facts live in the runtime store | metadata for the Activity page | `Stats`, runtime store |
+| request log (recent ring) | process memory, bounded; durable usage facts live in the runtime store, with a summary row folded forward in the same transaction as every write | metadata for the Activity page | `Stats`, runtime store |
 | spend ledger | durable (`spend.json` / runtime store) | settled cost per scope, period and currency | accounting |
 | routing traces | durable JSONL, operator-cleared | decision-time features, attempt outcomes, execution identity | ML |
 | imported history | durable SQLite facts | a source's accounting rows, normalised | history import |
@@ -82,4 +82,5 @@ imported day total is not a local request.
 - `crates/zroutery-core/src/history_import/mod.rs::ImportPreview`
 - `crates/zroutery-core/src/runtime_store/imports.rs::commit_import`
 - `crates/zroutery-core/src/stats.rs::Stats`
+- `crates/zroutery-core/src/runtime_store.rs::RuntimeStore::usage_snapshot`
 - `crates/zroutery-core/src/runtime_store/history.rs::query_usage`

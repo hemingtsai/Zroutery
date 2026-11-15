@@ -6,11 +6,14 @@
 //! keeps the number of conversions at `2 decoders + 2 encoders` instead of a
 //! full N x M matrix.
 
+mod anthropic_usage;
 mod headers;
 mod model_identity;
 mod observation;
 pub mod reasoning;
 pub mod response;
+pub(crate) use anthropic_usage::iteration_total;
+pub use anthropic_usage::UsageIteration;
 pub use headers::ReplyHeaders;
 pub use model_identity::{
     capture_declaration_in_passthrough, declaration_from_passthrough, declaration_from_wire,
@@ -502,6 +505,10 @@ pub struct ChatRequest {
     /// native effort and cache/extension fields without guessing a downgrade.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub anthropic_body: Option<Value>,
+    /// The native envelope contains semantics no other dialect can represent.
+    /// Its portable projection is for inspection only, never a lossy fallback.
+    #[serde(default)]
+    pub anthropic_native_only: bool,
     #[serde(default)]
     pub responses_native_only: bool,
     pub tool_choice: Option<ToolChoice>,
@@ -560,6 +567,7 @@ impl ChatRequest {
             responses_tools: None,
             responses_body: None,
             anthropic_body: None,
+            anthropic_native_only: false,
             responses_native_only: false,
             tool_choice: None,
             parallel_tool_use: None,
@@ -675,6 +683,9 @@ impl ChatRequest {
         if !self.tools.is_empty() || self.tool_choice.is_some() {
             required.insert(Capability::Tools);
         }
+        if let Some(body) = &self.anthropic_body {
+            required.extend(crate::protocol::anthropic::native_requirements(body));
+        }
         if self.responses_body.as_ref().is_some_and(|body| {
             body.get("tools")
                 .and_then(Value::as_array)
@@ -704,7 +715,7 @@ impl ChatRequest {
         // A structured-output constraint is a hard requirement: a candidate
         // that cannot honour it must be filtered out (or explicitly degraded)
         // rather than silently served unconstrained text.
-        if self.structured_output.is_some() {
+        if self.structured_output.is_some() || self.tool_strict.values().any(|strict| *strict) {
             required.insert(Capability::StructuredOutput);
         }
 
@@ -768,6 +779,9 @@ pub enum StopReason {
     StopSequence,
     ToolUse,
     Refusal,
+    PauseTurn,
+    Compaction,
+    ModelContextWindowExceeded,
     /// Upstream ended without telling us why.
     Unknown,
 }

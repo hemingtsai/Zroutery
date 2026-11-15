@@ -387,14 +387,11 @@ pub(super) fn decode_tool_call(call: &Value) -> Result<ContentBlock> {
         .get("id")
         .and_then(Value::as_str)
         .ok_or_else(|| Error::invalid("tool call is missing `id`"))?;
-    let arguments = function
-        .get("arguments")
-        .and_then(Value::as_str)
-        .unwrap_or("{}");
+    let arguments = function.get("arguments").and_then(Value::as_str);
     Ok(ContentBlock::ToolUse {
         id: id.to_string(),
         name: name.to_string(),
-        input: parse_arguments(Some(arguments)),
+        input: parse_arguments(arguments),
     })
 }
 
@@ -593,7 +590,11 @@ fn parse_arguments(args: Option<&str>) -> Value {
         Some(s) if !s.trim().is_empty() => {
             serde_json::from_str(s).unwrap_or(Value::String(s.to_string()))
         }
-        _ => json!({}),
+        // Missing/empty arguments are not evidence of an explicit empty
+        // object. Retain an invalid value so a security review cannot approve
+        // an action whose actual upstream input disappeared during bridging.
+        Some(s) => Value::String(s.to_string()),
+        None => Value::Null,
     }
 }
 

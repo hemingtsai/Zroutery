@@ -4,7 +4,7 @@ use std::sync::Arc;
 
 use axum::extract::rejection::JsonRejection;
 use axum::extract::{DefaultBodyLimit, Path, State};
-use axum::http::{header, Method, StatusCode, Uri};
+use axum::http::{header, HeaderMap, Method, StatusCode, Uri};
 use axum::middleware::{self, Next};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
@@ -590,15 +590,35 @@ async fn gemini_generate(
     handle_chat(state, Dialect::Gemini, headers, body).await
 }
 
-async fn count_tokens(State(state): State<Arc<AppState>>, body: JsonBody) -> Response {
+async fn count_tokens(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    body: JsonBody,
+) -> Response {
     let body = match unwrap_body(&state, body) {
         Ok(v) => v,
         Err(e) => return error_response(Dialect::Anthropic, &e),
     };
-    let req = match protocol::decode_request(Dialect::Anthropic, body) {
+    let mut req = match protocol::decode_request(Dialect::Anthropic, body.clone()) {
         Ok(req) => req,
         Err(e) => return error_response(Dialect::Anthropic, &e),
     };
+    req.client_headers = headers;
+    req.client_identity = req
+        .client_headers
+        .get("x-zroutery-client")
+        .or_else(|| req.client_headers.get(header::USER_AGENT))
+        .and_then(|value| value.to_str().ok())
+        .map(str::to_string);
+    match super::pipeline::native_count_tokens(&state, &req, &body).await {
+        Ok(Some((body, reply_headers))) => {
+            let mut response = Json(body).into_response();
+            reply_headers.apply(response.headers_mut());
+            return response;
+        }
+        Ok(None) => {}
+        Err(error) => return error_response(Dialect::Anthropic, &error),
+    }
 
     // Best effort: providers do not expose a shared tokenizer, so this is an
     // estimate, and the price beside it covers the prompt only.

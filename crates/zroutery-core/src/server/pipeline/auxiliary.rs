@@ -35,12 +35,13 @@ impl<'a> AuxiliaryAttempt<'a> {
         observation: AttemptObservation,
     ) -> Result<Self> {
         state.accounting_ready()?;
-        let fact = AttemptFact::new(
+        let mut fact = AttemptFact::new(
             format!("att_{}", uuid::Uuid::new_v4().simple()),
             None,
             candidate,
             true,
         );
+        fact.bind_iteration_pricing(&state.config(), candidate);
         state.persist_attempt(&fact)?;
         Ok(Self {
             state,
