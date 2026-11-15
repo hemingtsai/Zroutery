@@ -63,7 +63,7 @@ pair of files below and the command-surface gate.
 
 | Group | Examples | Notes |
 |---|---|---|
-| Snapshot and activity | `get_snapshot`, `get_activity` | dashboard polling |
+| Snapshot and activity | `get_snapshot`, `get_activity` | dashboard polling; the activity read runs on the blocking pool so the two-second poll never occupies the main thread (`src-tauri/src/commands.rs::get_activity`) |
 | Usage and imported history | `query_usage_history`, `query_imported_history`, `export_imported_history` | paginated; imported history is separate from local usage |
 | Credentials and configuration | `save_config`, `set_provider_key`, `clear_provider_key` | keys go to the credential store, not the document |
 | Learning stack | `get_ml_status`, `get_ml_shadow`, `run_ml_promotion_round` | feature `ml`; gated by `ml_available` |

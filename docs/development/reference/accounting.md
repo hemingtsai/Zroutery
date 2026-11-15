@@ -123,6 +123,11 @@ attempts and settlements commit there
 `crates/zroutery-core/src/runtime_store/accounting.rs::settle`), and the server
 publishes the committed ledger to the in-process one
 (`crates/zroutery-core/src/server/accounting.rs::publish_accounting_ledger`).
+The settlement transaction also folds the settled usage row into the runtime
+store's durable usage summary — replacing the contribution of any provisional
+row it superseded — so the aggregate a dashboard reads is updated by the same
+commit that made it
+(`crates/zroutery-core/src/runtime_store.rs::RuntimeStore::usage_snapshot`).
 The desktop writes the spend projection through `flush_ledger` and `save_ledger`
 (`src-tauri/src/state/budget.rs::flush_ledger`,
 `src-tauri/src/store.rs::save_ledger`).
@@ -169,6 +174,7 @@ cost twice (`crates/zroutery-core/src/server/pipeline/budget.rs::apply_budgets_w
 - `crates/zroutery-core/src/budget.rs::Ledger`
 - `crates/zroutery-core/src/runtime_store/accounting.rs::record_attempt`
 - `crates/zroutery-core/src/runtime_store/accounting.rs::settle`
+- `crates/zroutery-core/src/runtime_store.rs::RuntimeStore::usage_snapshot`
 - `crates/zroutery-core/src/server/accounting.rs::publish_accounting_ledger`
 - `crates/zroutery-core/src/server/pipeline/auxiliary.rs`
 - `crates/zroutery-core/src/server/state.rs::AdmissionGuard`

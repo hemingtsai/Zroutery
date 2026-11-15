@@ -164,5 +164,6 @@ MIT (see the `license` field in `Cargo.toml`).
 - Linux credential dependency: `src-tauri/Cargo.toml::keyring`.
 - Data locations: `src-tauri/src/platform.rs::default_config_dir`, `crates/zroutery-core/src/runtime_store.rs::RuntimeStore`.
 - Server auto review: `crates/zroutery-core/src/server/pipeline/safeguards/mod.rs::ReviewContext`, `ui/src/pages/routing/AutoModeDrawer.tsx::AutoModeDrawer`.
+- Data locations: `src-tauri/src/platform.rs::default_config_dir`, `crates/zroutery-core/src/runtime_store.rs::RuntimeStore`, `crates/zroutery-core/src/runtime_store.rs::RuntimeStore::usage_snapshot`.
 
 The canonical owner of each repeated fact is [config.md](docs/development/reference/config.md) for bind/port, [protocol.md](docs/development/reference/protocol.md) for dialects, and [routing-data.md](docs/development/reference/routing-data.md) for data locations. This guide is a pointer; the reference wins.

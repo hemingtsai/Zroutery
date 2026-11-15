@@ -16,6 +16,7 @@ from __future__ import annotations
 import argparse
 import fnmatch
 import json
+import os
 import subprocess
 import sys
 import tempfile
@@ -27,17 +28,33 @@ ROOT = Path(__file__).resolve().parents[1]
 MANIFEST = Path("docs/docs.manifest.json")
 
 
-def git(root: Path, *args: str) -> subprocess.CompletedProcess[str]:
-    return subprocess.run(["git", *args], cwd=root, capture_output=True, text=True, check=False)
+def isolated_git_env() -> dict[str, str]:
+    """Environment for a self-test's fixture repository.
+
+    A pre-commit hook inherits GIT_DIR, GIT_INDEX_FILE and GIT_WORK_TREE; a
+    self-test that shells out to git would otherwise commit its fixtures into
+    the caller's repository instead of its temporary one. The real range
+    checks keep the inherited environment - only the fixture does not.
+    """
+    return {key: value for key, value in os.environ.items() if not key.startswith("GIT_")}
+
+def git(root: Path, *args: str, env: dict[str, str] | None = None) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(["git", *args], cwd=root, capture_output=True, text=True, check=False, env=env)
 
 
-def changed_files(root: Path, base: str, head: str, include_staged: bool = False) -> list[str]:
-    result = git(root, "diff", "--name-only", f"{base}..{head}")
+def changed_files(
+    root: Path,
+    base: str,
+    head: str,
+    include_staged: bool = False,
+    env: dict[str, str] | None = None,
+) -> list[str]:
+    result = git(root, "diff", "--name-only", f"{base}..{head}", env=env)
     if result.returncode != 0:
         raise RuntimeError(result.stderr.strip() or "git diff failed")
     changed = [line for line in result.stdout.splitlines() if line.strip()]
     if include_staged:
-        staged = git(root, "diff", "--cached", "--name-only", base)
+        staged = git(root, "diff", "--cached", "--name-only", base, env=env)
         changed = [line for line in staged.stdout.splitlines() if line.strip()]
     return sorted(set(changed))
 
@@ -46,9 +63,15 @@ def load_manifest(root: Path) -> dict:
     return json.loads((root / MANIFEST).read_text(encoding="utf-8"))
 
 
-def evaluate(root: Path, base: str, head: str, include_staged: bool = False) -> dict:
+def evaluate(
+    root: Path,
+    base: str,
+    head: str,
+    include_staged: bool = False,
+    env: dict[str, str] | None = None,
+) -> dict:
     manifest = load_manifest(root)
-    changed = changed_files(root, base, head, include_staged)
+    changed = changed_files(root, base, head, include_staged, env)
     changed_set = set(changed)
     required: dict[str, str] = {}
     reverse = docs_sources.reverse_index(root)
@@ -78,9 +101,10 @@ def evaluate(root: Path, base: str, head: str, include_staged: bool = False) -> 
 def self_test() -> int:
     with tempfile.TemporaryDirectory(prefix="zr-docs-impact-") as temporary:
         root = Path(temporary)
-        git(root, "init", "-q")
-        git(root, "config", "user.email", "test@example.com")
-        git(root, "config", "user.name", "Test")
+        env = isolated_git_env()
+        git(root, "init", "-q", env=env)
+        git(root, "config", "user.email", "test@example.com", env=env)
+        git(root, "config", "user.name", "Test", env=env)
         (root / "src").mkdir()
         (root / "docs").mkdir()
         (root / "src" / "sample.rs").write_text("pub fn value() -> u8 { 1 }\n", encoding="utf-8")
@@ -91,24 +115,24 @@ def self_test() -> int:
         (root / "docs" / "rule.md").write_text(
             "> Authority: normative\n\nThe value is one (`src/sample.rs::value`).\n", encoding="utf-8"
         )
-        git(root, "add", ".")
-        git(root, "commit", "-qm", "base")
-        base = git(root, "rev-parse", "HEAD").stdout.strip()
+        git(root, "add", ".", env=env)
+        git(root, "commit", "-qm", "base", env=env)
+        base = git(root, "rev-parse", "HEAD", env=env).stdout.strip()
         (root / "src" / "sample.rs").write_text("pub fn value() -> u8 { 2 }\n", encoding="utf-8")
-        git(root, "add", ".")
-        git(root, "commit", "-qm", "code only")
-        head = git(root, "rev-parse", "HEAD").stdout.strip()
-        result = evaluate(root, base, head)
+        git(root, "add", ".", env=env)
+        git(root, "commit", "-qm", "code only", env=env)
+        head = git(root, "rev-parse", "HEAD", env=env).stdout.strip()
+        result = evaluate(root, base, head, env=env)
         if result["missing"] != ["docs/rule.md"]:
             print(f"docs-impact self-test: expected the cited document to be required, got {result}", file=sys.stderr)
             return 1
         (root / "docs" / "rule.md").write_text(
             "> Authority: normative\n\nThe value is two (`src/sample.rs::value`).\n", encoding="utf-8"
         )
-        git(root, "add", ".")
-        git(root, "commit", "-qm", "doc updated")
-        head = git(root, "rev-parse", "HEAD").stdout.strip()
-        result = evaluate(root, base, head)
+        git(root, "add", ".", env=env)
+        git(root, "commit", "-qm", "doc updated", env=env)
+        head = git(root, "rev-parse", "HEAD", env=env).stdout.strip()
+        result = evaluate(root, base, head, env=env)
         if result["missing"]:
             print(f"docs-impact self-test: updated document still reported missing: {result}", file=sys.stderr)
             return 1

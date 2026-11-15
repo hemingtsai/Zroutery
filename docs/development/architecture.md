@@ -119,9 +119,12 @@ test; the evidence table below marks the two that are source-only.
     request the provider already executed
     (`crates/zroutery-core/src/server/pipeline/lifecycle.rs::RequestLifecycle`).
 15. **Runtime health is process-local; spend is durable.** Health, latency rings
-    and breaker counters start empty on restart; the spend ledger is adopted from
-    disk (`crates/zroutery-core/src/budget.rs::Ledger`,
-    `crates/zroutery-core/src/runtime_store.rs::RuntimeStore`).
+    and breaker counters start empty on restart; the spend ledger is adopted
+    from disk, and the usage projection adopts the durable summary row rather
+    than re-reading the whole usage table
+    (`crates/zroutery-core/src/budget.rs::Ledger`,
+    `crates/zroutery-core/src/runtime_store.rs::RuntimeStore`,
+    `crates/zroutery-core/src/runtime_store.rs::RuntimeStore::usage_snapshot`).
 
 ### Invariant evidence
 

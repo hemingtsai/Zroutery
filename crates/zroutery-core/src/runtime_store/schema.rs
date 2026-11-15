@@ -2,7 +2,7 @@
 
 use rusqlite::{Connection, TransactionBehavior};
 
-pub const SCHEMA_VERSION: i64 = 8;
+pub const SCHEMA_VERSION: i64 = 9;
 
 pub(super) fn migrate(db: &mut Connection) -> Result<(), String> {
     migrate_to(db, SCHEMA_VERSION)
@@ -254,6 +254,23 @@ pub(super) fn migrate_to(db: &mut Connection, target: i64) -> Result<(), String>
         tx.execute_batch(
             "CREATE TABLE IF NOT EXISTS inference_publications (
                 id TEXT PRIMARY KEY, phase TEXT NOT NULL, record TEXT NOT NULL
+             );",
+        )
+        .map_err(|error| error.to_string())?;
+    }
+    if version < 9 && target >= 9 {
+        // The usage aggregate, kept in step with every usage write inside the
+        // same transaction and paired with the revision it describes. Without
+        // it, any read that noticed a revision change re-read and re-parsed the
+        // whole usage table, so a dashboard poll grew with the life of the
+        // process. A row describing an older revision (an older binary wrote
+        // usage without it) makes the next read rebuild the summary from the
+        // table, which is the only way to absorb rows this process never saw.
+        tx.execute_batch(
+            "CREATE TABLE IF NOT EXISTS usage_summary (
+                id INTEGER PRIMARY KEY CHECK(id = 1),
+                revision INTEGER NOT NULL,
+                summary TEXT NOT NULL
              );",
         )
         .map_err(|error| error.to_string())?;

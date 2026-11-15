@@ -2,9 +2,10 @@
 
 use rusqlite::{params, OptionalExtension, Transaction, TransactionBehavior};
 
-use super::RuntimeStore;
+use super::{read_usage_summary, write_usage_summary, RuntimeStore};
 use crate::accounting::{AttemptFact, AttemptState, SettlementFact, SETTLEMENT_SCHEMA_VERSION};
 use crate::budget::Ledger;
+use crate::stats::RequestRecord;
 
 pub struct SettlementCommit {
     pub ledger: Ledger,
@@ -93,6 +94,7 @@ impl RuntimeStore {
             .map_err(|e| e.to_string())?;
         let mut ledger = read_ledger(&tx)?.ok_or("durable accounting has not been initialized")?;
         let inserted = existing.is_none();
+        let mut previous_usage: Option<String> = None;
         if let Some(existing) = existing {
             if serde_json::from_str::<serde_json::Value>(&existing).map_err(|e| e.to_string())?
                 != serde_json::from_str::<serde_json::Value>(&json).map_err(|e| e.to_string())?
@@ -111,6 +113,17 @@ impl RuntimeStore {
                 params![safe.request.id, safe.request.at.to_rfc3339(), json],
             )
             .map_err(|e| e.to_string())?;
+            // The row this settlement replaces, when a completion already
+            // published a provisional copy of it. Its contribution must come
+            // out of the durable summary before the settled row goes in.
+            previous_usage = tx
+                .query_row(
+                    "SELECT record FROM usage WHERE id = ?1",
+                    [&safe.request.id],
+                    |row| row.get(0),
+                )
+                .optional()
+                .map_err(|e| e.to_string())?;
             let record = serde_json::to_string(&safe.request).map_err(|e| e.to_string())?;
             tx.execute(
                 "INSERT INTO usage(id, client, at, record) VALUES (?1, ?2, ?3, ?4)
@@ -120,6 +133,23 @@ impl RuntimeStore {
             save_ledger(&tx, &ledger)?;
         }
         let after = usage_revision(&tx)?;
+        if inserted {
+            // Fold the settled row into the durable summary inside the same
+            // transaction, so the summary always describes the revision it is
+            // stored with. A summary from an older state is left alone: the
+            // next read rebuilds it from the table and absorbs every row.
+            if let Some((revision, mut totals)) = read_usage_summary(&tx)? {
+                if revision == before {
+                    if let Some(previous) = &previous_usage {
+                        let old: RequestRecord =
+                            serde_json::from_str(previous).map_err(|e| e.to_string())?;
+                        totals.unobserve(&old);
+                    }
+                    totals.observe(&safe.request);
+                    write_usage_summary(&tx, after, &totals)?;
+                }
+            }
+        }
         tx.commit().map_err(|e| e.to_string())?;
         Ok(SettlementCommit {
             ledger,
