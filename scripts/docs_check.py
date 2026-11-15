@@ -448,7 +448,10 @@ def source_hash(root: Path, source: str) -> str | None:
     path = root / source
     if not path.is_file():
         return None
-    return "sha256:" + hashlib.sha256(path.read_bytes()).hexdigest()
+    # Normalize to the POSIX form git stores, so the hash matches on every
+    # host regardless of the checkout's line-ending conversion.
+    raw = path.read_bytes().replace(b"\r\n", b"\n")
+    return "sha256:" + hashlib.sha256(raw).hexdigest()
 
 
 def render_index(root: Path, manifest: dict) -> str:

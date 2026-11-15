@@ -256,6 +256,7 @@
       "scripts/command_surface_test.py": "sha256:bed993a2b3afd82970ddc90aff346f0738abdd6c1b3337631d6dd424bbc9442b",
       "scripts/coverage_check.py": "sha256:69cf4c642a4d12568e1ae3a4080691fce5b400a6d7c574213a87d8e38ff6b8ed",
       "scripts/docs_check.py": "sha256:14fd2d3a183aa87b570cb53a1ffcc3bb6d01735aa7e3cdc96cb707054fe1c6b0",
+      "scripts/docs_review.py": "sha256:e12a59631166f4d02a11ec8958df501376ae1ca256f24904be503693bb214b66",
       "scripts/docs_rules.py": "sha256:114b2aeb67fe815f19b274a2c5226f5c6959125cbea0e4b34054286198424cde",
       "scripts/docs_sources.py": "sha256:c8caf54ddebc9e79d279e5c45f99fc0e180d6bb788fca8d7324bf79e1f8830b7",
       "scripts/docs_verified.py": "sha256:7edcc7121b4e5a7358a638d1ef65477b2f9b356d5f62c9b838ea3aa35e70b53a",
@@ -288,7 +289,7 @@
       "is an ancestor of HEAD, and that `ran_at` is an ISO timestamp.",
       "(`scripts/docs_sources.py::reverse_index`)."
     ],
-    "reviewed_sha": "sha256:2847b4d4749aa445daeb61a981b43083585f573f5c48347e1d4412f290531255",
+    "reviewed_sha": "sha256:6746b83573651556ccbbaa858c68b63ee0091b5ed908f0130b4be8ed02accea9",
     "reviewed_note": "model=lightvela-auto; session=ses_e25b26f55ffeXFN449tWoeGvHw"
   },
   "docs/development/reference/providers.md": {
@@ -335,7 +336,7 @@
       "scripts/ui_interaction_test.py": "sha256:38d2cdfd1c15b432248496f68e1d5d4c81675760dab442eb22772e921dabe4c3",
       "scripts/ui_layout_test.py": "sha256:8ee3f96c375a6b3cf0d5c7edfcaeeac9848233b58ea7847b6760ca1a543e9c2d",
       "scripts/ui_overflow_test.py": "sha256:edfe7a4ebd310c8015c1a14dc9d78335aa8378d3a65d7176c7d7412db8e5fba3",
-      "src-tauri/src/plugins/commands.rs": "sha256:b68347743a044f42a87a85398451b66f5ad4daadf6ad1f3d03c9a7bb52300387",
+      "src-tauri/src/plugins/commands.rs": "sha256:f358699dd71c5c737bb16f628388e1e951ba04d87c5e3f1c155ac0e4645ec791",
       "ui/src/accent.ts": "sha256:a4d18a28be58bfe586a90d682934b94a66381587569301fe11ec8e4cb6608662",
       "ui/src/components/drawer.tsx": "sha256:b5a2526ed45ab2ff4bb8818b99f0a5a12b257e2b6590767f508a19435ef305c1",
       "ui/src/components/tabs.tsx": "sha256:076f7c93459c18b81269d04066fb4e0ecafc062a8c20f81f3081949ada346db7",
@@ -787,7 +788,7 @@
       "src-tauri/build.rs": "sha256:66d3e6fb7b9de8e1057e25ad718501426a2d274af3c22540649ebd5c0e400072",
       "src-tauri/capabilities/default.json": "sha256:f12182d774e87351ed10eef21e06582c6ae8539dd92ef8f49bfaa47904862544",
       "src-tauri/capabilities/tray-panel.json": "sha256:628aa6fd3246446c9cb242758a29850d8b814b66f86e67967dfc6e0b4d9330df",
-      "src-tauri/src/plugins/commands.rs": "sha256:b68347743a044f42a87a85398451b66f5ad4daadf6ad1f3d03c9a7bb52300387",
+      "src-tauri/src/plugins/commands.rs": "sha256:f358699dd71c5c737bb16f628388e1e951ba04d87c5e3f1c155ac0e4645ec791",
       "src-tauri/src/plugins/mod.rs": "sha256:c7e857fbef02b60ac9dff4906e2dc59bae13340006f12a7ed1db4f49eb9444a4",
       "src-tauri/src/plugins/options.rs": "sha256:a814589b8bc7241546f1653388a56e976fd0c0a5292a17c99d546e2866758c87",
       "src-tauri/src/plugins/scoped_secrets.rs": "sha256:b83ff843c60cfccb39d111942759bc3a6e8404c1bea69b5e7cb66d53f98f1012",

@@ -148,6 +148,11 @@ Consequences, stated rather than discovered:
   (`scripts/docs_sources.py::reverse_index`,
   `scripts/docs_verified.py::expected`, `scripts/docs_check.py::check_redirects`,
   `scripts/coverage_check.py::validate`).
+- The verified-ledger source hashes and the review content hashes hash the
+  checkout's bytes normalized to the POSIX form git stores, so a windows
+  checkout records the same values a linux run verifies
+  (`scripts/docs_verified.py::source_hash`,
+  `scripts/docs_review.py::document_sha`).
 - `markdown_check.py` enforces fenced-code closure and table structure without
   a third-party parser.
 - `docs_sources.py --check` resolves every `path::symbol` and `path#Lx` anchor in

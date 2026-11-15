@@ -1,6 +1,6 @@
 //! Typed management commands; paths come from a host file picker, never ESM.
-use super::views::{PluginInspection, PluginInstallation, PluginTheme, PluginUiView};
 use super::prune_action_intents;
+use super::views::{PluginInspection, PluginInstallation, PluginTheme, PluginUiView};
 #[cfg(target_os = "windows")]
 use super::Watchdog;
 use crate::state::Desktop;
@@ -19,11 +19,9 @@ use zroutery_plugin_api::{
     ui::{Projection, UiEffect, UiNode},
     Capability, PermissionRequest, Principal, ResourceLimits,
 };
-use zroutery_plugin_host::{
-    install::Package, lifecycle::Manager as PluginManager, supervisor,
-};
 #[cfg(target_os = "windows")]
 use zroutery_plugin_host::sandbox;
+use zroutery_plugin_host::{install::Package, lifecycle::Manager as PluginManager, supervisor};
 
 fn manager(desktop: &Desktop) -> Result<&PluginManager, String> {
     desktop
@@ -365,7 +363,7 @@ fn run_sandboxed_process(
     expected_generation: &str,
     wall_ms: u64,
 ) -> std::result::Result<WorkerReply, String> {
-    let result = (|| {
+    (|| {
         let mut process = sandbox::launch(worker, work, "").map_err(|e| e.to_string())?;
         // A wedged worker is terminated at the declared wall budget. The killed
         // job closes the private pipe, so the read below fails instead of
@@ -393,8 +391,7 @@ fn run_sandboxed_process(
             Err(error) if fired && error == "plugin_crashed" => Err("plugin_timeout".into()),
             outcome => outcome,
         }
-    })();
-    result
+    })()
 }
 
 /// Other hosts refuse the call with the same refusal the safe mode and the

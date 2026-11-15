@@ -23,8 +23,13 @@ BULLET_RE = re.compile(r"^(?:[-*+]|\d+[.)])\s+")
 
 
 def document_sha(root: Path, doc: str) -> str:
-    """The content a review covered, so an edit after it is visible."""
-    return "sha256:" + hashlib.sha256((root / doc).read_bytes()).hexdigest()
+    """The content a review covered, so an edit after it is visible.
+
+    Line endings are normalized to the POSIX form git stores, so a checkout
+    on any host hashes to the value any other host recorded.
+    """
+    raw = (root / doc).read_bytes().replace(b"\r\n", b"\n")
+    return "sha256:" + hashlib.sha256(raw).hexdigest()
 
 
 def sentences(root: Path, doc: str) -> list[str]:
