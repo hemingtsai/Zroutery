@@ -2,7 +2,7 @@
 
 # Current state
 
-as of `2026-11-15` · branch `deps/dependabot-2026-11-15` · verified code head `b032c76`
+as of `2026-11-15` · branch `dev` · verified code head `f1c58d9`
 
 ## Gates
 
@@ -15,14 +15,14 @@ as of `2026-11-15` · branch `deps/dependabot-2026-11-15` · verified code head 
 | frontend build | **pass** | asserted | `pnpm --dir ui build` |  |
 | frontend tests | **pass** | asserted | `pnpm --dir ui test` | 86 passed |
 | command surface | **pass** | asserted | `python3 -B scripts/command_surface_test.py` | 90 interface commands, 254 registered |
-| documentation sources | **pass** | recorded | `python3 -B scripts/docs_sources.py --check` | docs-sources: 930 anchor(s) resolved in 36 active document(s) (b032c76) |
-| markdown structure | **pass** | recorded | `python3 -B scripts/markdown_check.py` | markdown-check: fenced blocks and tables are well formed (b032c76) |
-| documentation check | **pass** | recorded | `python3 -B scripts/docs_check.py` | docs-check: 47 active document(s), 0 pending, 0 warning(s), all checks passed (b032c76) |
-| documentation parity | **pass** | recorded | `python3 -B scripts/docs_parity.py --check` | docs-parity: the three READMEs have matching headings, fences, images and source anchors (b032c76) |
-| module coverage | **pass** | recorded | `python3 -B scripts/coverage_check.py` | coverage-check: 38 top-level modules (36 owned, 1 covered elsewhere, 1 unowned) (b032c76) |
-| rendered state | **pass** | recorded | `python3 -B scripts/current_state.py --check` | current-state: clean (b032c76) |
-| invariant evidence | **pass** | recorded | `python3 -B scripts/invariant_check.py` | invariant-check: 15 invariants, 13 with test anchors, 2 explicitly untested (b032c76) |
-| state schema | **pass** | recorded | `python3 -B scripts/state_check.py` | state-check: 27 gates (13 recorded, 14 asserted), 4 blockers; schema and blockers valid (b032c76) |
+| documentation sources | **pass** | recorded | `python3 -B scripts/docs_sources.py --check` | docs-sources: 930 anchor(s) resolved in 36 active document(s) (f1c58d9) |
+| markdown structure | **pass** | recorded | `python3 -B scripts/markdown_check.py` | markdown-check: fenced blocks and tables are well formed (f1c58d9) |
+| documentation check | **pass** | recorded | `python3 -B scripts/docs_check.py` | docs-check: 47 active document(s), 0 pending, 0 warning(s), all checks passed (f1c58d9) |
+| documentation parity | **pass** | recorded | `python3 -B scripts/docs_parity.py --check` | docs-parity: the three READMEs have matching headings, fences, images and source anchors (f1c58d9) |
+| module coverage | **pass** | recorded | `python3 -B scripts/coverage_check.py` | coverage-check: 38 top-level modules (36 owned, 1 covered elsewhere, 1 unowned) (f1c58d9) |
+| rendered state | **pass** | recorded | `python3 -B scripts/current_state.py --check` | current-state: clean (f1c58d9) |
+| invariant evidence | **pass** | recorded | `python3 -B scripts/invariant_check.py` | invariant-check: 15 invariants, 13 with test anchors, 2 explicitly untested (f1c58d9) |
+| state schema | **pass** | recorded | `python3 -B scripts/state_check.py` | state-check: 27 gates (13 recorded, 14 asserted), 4 blockers; schema and blockers valid (f1c58d9) |
 | whitespace | **pass** | asserted | `git diff --check` | no trailing whitespace damage |
 | orchestration docs (legacy) | **retired** | asserted | `scripts/orch_docs_test.py (not run)` | legacy node and evidence records are archived; validation retired |
 | UI budget | **pass** | asserted | `python3 -B scripts/ui_budget_test.py` | 734,994 B JS of 742,000 |
@@ -31,10 +31,10 @@ as of `2026-11-15` · branch `deps/dependabot-2026-11-15` · verified code head 
 | UI interaction | **unrun** | asserted | `python3 -B scripts/ui_interaction_test.py` | timed out after 900s on Helium 0.21.2; not a pass and not a product failure (quarantined by frontend until 2026-11-21) |
 | Rust advisories | **fail** | asserted | `cargo audit --file Cargo.lock` | 5 vulnerabilities, 18 warnings |
 | frontend advisories | **pass** | asserted | `pnpm audit --prod` |  |
-| freshness | **pass** | recorded | `python3 -B scripts/freshness_report.py --check` | freshness: 32 documents; every post-review source change is covered by a same-change document edit (b032c76) |
-| rules registry | **pass** | recorded | `python3 -B scripts/docs_rules.py` | docs-rules: 17 rules; 16 machine, 13 executed gates covered (b032c76) |
-| verified ledger | **pass** | recorded | `python3 -B scripts/docs_verified.py --check` | docs-verified: ledger covers 32 document(s) (b032c76) |
-| review evidence | **pass** | recorded | `python3 -B scripts/docs_review.py --check` | docs-review: 32 document(s) have recorded review evidence (b032c76) |
+| freshness | **pass** | recorded | `python3 -B scripts/freshness_report.py --check` | freshness: 32 documents; every post-review source change is covered by a same-change document edit (f1c58d9) |
+| rules registry | **pass** | recorded | `python3 -B scripts/docs_rules.py` | docs-rules: 17 rules; 16 machine, 13 executed gates covered (f1c58d9) |
+| verified ledger | **pass** | recorded | `python3 -B scripts/docs_verified.py --check` | docs-verified: ledger covers 32 document(s) (f1c58d9) |
+| review evidence | **pass** | recorded | `python3 -B scripts/docs_review.py --check` | docs-review: 32 document(s) have recorded review evidence (f1c58d9) |
 
 ## Blockers
 
