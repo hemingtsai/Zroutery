@@ -198,23 +198,23 @@
   "CONTRIBUTING.md": {
     "verified_at": "2026-11-14",
     "sources": {
-      "Cargo.toml": "sha256:3f38c4bb1521d927f87e2961ff20da6c154b27f904c25e784e324ba9ab9afc47",
-      "package.json": "sha256:487c40e417797bce3c7d46b2715d3c3a664a905f87689972f683430f3001f83c"
+      "Cargo.toml": "sha256:0ebe0f2e483fec4ff43781b94fc250e38cf7a02ad95576c8559d55b744b206bd",
+      "package.json": "sha256:1f2d59af2e5e68dd61e864c62ac5bdcd0aa921fbf1cfd289c5b752daa9f5804e"
     },
     "commands": [
       "python3 -B scripts/commit_contract_test.py --self-test"
     ],
     "note": "Toolchain and pnpm pins are read from the manifests; the commit allowlists are owned by the validator and are not copied into prose.",
-    "reviewed_commit": "ad22f8d2894d81e601ec966d797e9fc87081365f",
+    "reviewed_commit": "d68281f",
     "reviewed_by": "verifier-agent",
-    "reviewed_at": "2026-11-14",
+    "reviewed_at": "2026-11-15",
     "sample": [
       "The validator is authoritative: `scripts/commit_contract_test.py`.",
-      "and the workspace also carries the plugin crates (`Cargo.toml::workspace`).",
-      "`python3 -B scripts/docs_impact.py --base <start> --head HEAD`."
+      "`python3 -B scripts/docs_impact.py --base <start> --head HEAD`.",
+      "The frontend is Node 22 with the pinned pnpm (`package.json::packageManager`),"
     ],
-    "reviewed_sha": "sha256:0d832dbe67ad7a79138696a2eaf68f49f9be444315cf36072002784c7c2a2e42",
-    "reviewed_note": "model=deepseek-flash; session=v-20261114-b"
+    "reviewed_sha": "sha256:e8aab9d5eec98553496e4165edbbf458dbd31b439fa0c5fce3209e50a0b8d83b",
+    "reviewed_note": "model=deepseek-flash; session=v-20261115-b"
   },
   "docs/DOCUMENTATION.md": {
     "verified_at": "2026-11-14",
@@ -241,8 +241,8 @@
     "sources": {
       ".github/workflows/ci.yml": "sha256:812511ed7e1aa1bd012176a09decec0681a94ea0cdbae5a8237478598407c73f",
       ".github/workflows/packaging.yml": "sha256:608c228f3dbe16fc9dc2ba1cc80679ff2984f42323a6ae392a65dd27a316e6d2",
-      "Cargo.toml": "sha256:3f38c4bb1521d927f87e2961ff20da6c154b27f904c25e784e324ba9ab9afc47",
-      "package.json": "sha256:487c40e417797bce3c7d46b2715d3c3a664a905f87689972f683430f3001f83c",
+      "Cargo.toml": "sha256:0ebe0f2e483fec4ff43781b94fc250e38cf7a02ad95576c8559d55b744b206bd",
+      "package.json": "sha256:1f2d59af2e5e68dd61e864c62ac5bdcd0aa921fbf1cfd289c5b752daa9f5804e",
       "scripts/command_surface_test.py": "sha256:bed993a2b3afd82970ddc90aff346f0738abdd6c1b3337631d6dd424bbc9442b",
       "scripts/plugin_theme_test.py": "sha256:6e6810a5acd918f7aaed890d8c253cd840d9ce668f31bef2a5dcded410b88137",
       "scripts/toolchain_gate.py": "sha256:69296c7d0c28caf3edd88e858ff384913fe2ea931041de4e3be459584d7c7e43",
@@ -265,16 +265,16 @@
       "pnpm audit --prod"
     ],
     "note": "Commands ran on the local toolchain (rustc 1.98.0). The CI-resolved toolchain was not available offline; this is recorded rather than claimed as a CI-toolchain verification.",
-    "reviewed_commit": "ad22f8d2894d81e601ec966d797e9fc87081365f",
+    "reviewed_commit": "d68281f",
     "reviewed_by": "verifier-agent",
-    "reviewed_at": "2026-11-14",
+    "reviewed_at": "2026-11-15",
     "sample": [
       "Commit messages are checked by the CI range; no local `commit-msg` hook is",
       "is an ancestor of HEAD, and that `ran_at` is an ISO timestamp.",
       "`Documentation contracts`); a required status check keys on the job, not on a"
     ],
-    "reviewed_sha": "sha256:e48447c635010c8d7f15c351ee5946264272c95db46d7d21127bbcede7b07b67",
-    "reviewed_note": "model=deepseek-flash; session=v-20261114-b"
+    "reviewed_sha": "sha256:1c9d05a353c3092c7e5217f22cc635dfd39a964d56eb87b25bed1171d2accd12",
+    "reviewed_note": "model=deepseek-flash; session=v-20261115-b"
   },
   "docs/development/reference/providers.md": {
     "verified_at": "2026-11-14",
@@ -372,7 +372,7 @@
     "verified_at": "2026-11-14",
     "sources": {
       ".github/workflows/ci.yml": "sha256:812511ed7e1aa1bd012176a09decec0681a94ea0cdbae5a8237478598407c73f",
-      "Cargo.toml": "sha256:3f38c4bb1521d927f87e2961ff20da6c154b27f904c25e784e324ba9ab9afc47",
+      "Cargo.toml": "sha256:0ebe0f2e483fec4ff43781b94fc250e38cf7a02ad95576c8559d55b744b206bd",
       "crates/zroutery-core/src/config/plugin.rs": "sha256:a8dd503076c1eb444d93955dea3ce817e29c933f51245de521498bbd9593c92c",
       "crates/zroutery-core/src/config/provider.rs": "sha256:5e5c0ad707bae62fcf23bb5b20b0dd1a21a44dc142e3fdb995c4c04bced9391b",
       "crates/zroutery-core/src/config/registry.rs": "sha256:58971e31d044907188d2ad9be770bf3185dcbdb173e67224546725286bcb9c16",
@@ -381,7 +381,7 @@
       "crates/zroutery-core/src/server/handlers.rs": "sha256:fab479470870597d7be4b37a27948754140d49963d8ccf0d089b5dc514b27681",
       "crates/zroutery-plugin-api/src/capability.rs": "sha256:d4b15db0c1c291c05151173e6132e07821411312f1f1d9033ddd1650030f60cc",
       "crates/zroutery-plugin-api/src/manifest.rs": "sha256:1895fced84b296125bcc36e6a3b6cb742b4093f2f7b4c03f84551f05e9f615ee",
-      "package.json": "sha256:487c40e417797bce3c7d46b2715d3c3a664a905f87689972f683430f3001f83c",
+      "package.json": "sha256:1f2d59af2e5e68dd61e864c62ac5bdcd0aa921fbf1cfd289c5b752daa9f5804e",
       "src-tauri/Cargo.toml": "sha256:649d3187e676ec80ff7748ef6ba9e9bf3f6101370e0d9ff4d961327a98cfb015",
       "src-tauri/src/platform.rs": "sha256:32b5068e409a2a44caa8aabdbee0438aa3fba903f0bc81325ce40738eb91d181",
       "src-tauri/src/store.rs": "sha256:690bdbeffb7a1bcd5a802303e404d17cdbb81830d29070f0e6927935e96149ab",
@@ -392,22 +392,22 @@
       "pnpm --dir ui test"
     ],
     "note": "Key facts are anchored to the manifest, defaults, routes, bundle and data-path code; translations share the same anchors.",
-    "reviewed_commit": "ad22f8d2894d81e601ec966d797e9fc87081365f",
+    "reviewed_commit": "d68281f",
     "reviewed_by": "verifier-agent",
-    "reviewed_at": "2026-11-14",
+    "reviewed_at": "2026-11-15",
     "sample": [
       "There is no Linux packaging target; the credential-store dependency for Linux is compiled in `src-tauri/Cargo.toml`, so a source build may run, but it is not tested or shipped.",
       "Theme and plugin surfaces: `crates/zroutery-plugin-api/src/capability.rs::Capability`, `crates/zroutery-plugin-api/src/manifest.rs::PluginManifestV1`, `crates/zroutery-core/src/config/plugin.rs::PluginInstanceConfig`, `ui/src/themes/registry.ts`, `scripts/plugin_theme_test.py`, `scripts/theme_sources/manifest.json`.",
       "Point `ZROUTERY_CONFIG_DIR` at a custom config directory."
     ],
-    "reviewed_sha": "sha256:afdbf5ec9fbfade3f38b436a5d4719b60692d66569ef161f54c772946c9fa207",
-    "reviewed_note": "model=deepseek-flash; session=v-20261114-g"
+    "reviewed_sha": "sha256:38f45f8df679674373ea4b13a06d69e8a5a8d242d6ff6762750e55865ec1e504",
+    "reviewed_note": "model=deepseek-flash; session=v-20261115-b"
   },
   "README.zh-CN.md": {
     "verified_at": "2026-11-14",
     "sources": {
       ".github/workflows/ci.yml": "sha256:812511ed7e1aa1bd012176a09decec0681a94ea0cdbae5a8237478598407c73f",
-      "Cargo.toml": "sha256:3f38c4bb1521d927f87e2961ff20da6c154b27f904c25e784e324ba9ab9afc47",
+      "Cargo.toml": "sha256:0ebe0f2e483fec4ff43781b94fc250e38cf7a02ad95576c8559d55b744b206bd",
       "crates/zroutery-core/src/config/plugin.rs": "sha256:a8dd503076c1eb444d93955dea3ce817e29c933f51245de521498bbd9593c92c",
       "crates/zroutery-core/src/config/provider.rs": "sha256:5e5c0ad707bae62fcf23bb5b20b0dd1a21a44dc142e3fdb995c4c04bced9391b",
       "crates/zroutery-core/src/config/registry.rs": "sha256:58971e31d044907188d2ad9be770bf3185dcbdb173e67224546725286bcb9c16",
@@ -416,7 +416,7 @@
       "crates/zroutery-core/src/server/handlers.rs": "sha256:fab479470870597d7be4b37a27948754140d49963d8ccf0d089b5dc514b27681",
       "crates/zroutery-plugin-api/src/capability.rs": "sha256:d4b15db0c1c291c05151173e6132e07821411312f1f1d9033ddd1650030f60cc",
       "crates/zroutery-plugin-api/src/manifest.rs": "sha256:1895fced84b296125bcc36e6a3b6cb742b4093f2f7b4c03f84551f05e9f615ee",
-      "package.json": "sha256:487c40e417797bce3c7d46b2715d3c3a664a905f87689972f683430f3001f83c",
+      "package.json": "sha256:1f2d59af2e5e68dd61e864c62ac5bdcd0aa921fbf1cfd289c5b752daa9f5804e",
       "src-tauri/Cargo.toml": "sha256:649d3187e676ec80ff7748ef6ba9e9bf3f6101370e0d9ff4d961327a98cfb015",
       "src-tauri/src/platform.rs": "sha256:32b5068e409a2a44caa8aabdbee0438aa3fba903f0bc81325ce40738eb91d181",
       "src-tauri/src/store.rs": "sha256:690bdbeffb7a1bcd5a802303e404d17cdbb81830d29070f0e6927935e96149ab",
@@ -427,22 +427,22 @@
       "pnpm --dir ui test"
     ],
     "note": "Key facts are anchored to the manifest, defaults, routes, bundle and data-path code; translations share the same anchors.",
-    "reviewed_commit": "ad22f8d2894d81e601ec966d797e9fc87081365f",
+    "reviewed_commit": "d68281f",
     "reviewed_by": "verifier-agent",
-    "reviewed_at": "2026-11-14",
+    "reviewed_at": "2026-11-15",
     "sample": [
       "\u9ed8\u8ba4\u76d1\u542c\u5730\u5740\u3001\u7aef\u53e3\u4e0e\u8bf7\u6c42\u4f53\u4e0a\u9650\uff1a`crates/zroutery-core/src/config/server.rs::ServerConfig`\u3002",
       "\u63d0\u4ea4\u4fe1\u606f\u6309 Conventional Commits \u4e66\u5199\uff0cCI \u4f1a\u9010\u6761\u68c0\u67e5\u3002\u67b6\u6784\u51b3\u7b56\u548c\u5404\u9636\u6bb5\u7684\u8bb0\u5f55\u5728 `docs/development/`\uff1b\u6539\u4ee3\u7801\u524d\u5148\u770b `CONTRIBUTING.md` \u548c `AGENTS.md`\u3002",
       "\u6253\u5305\u76ee\u6807\uff1a`src-tauri/tauri.conf.json::bundle`\u3002"
     ],
-    "reviewed_sha": "sha256:2ad51d5a73661b12ce66045c0881c8d8c09b5ace39d4177bcef8d03c0213e67a",
-    "reviewed_note": "model=deepseek-flash; session=v-20261114-g"
+    "reviewed_sha": "sha256:c514dc5665d68e479935ab3d2b27e67a535b51a27f99755f05362e6859598bc3",
+    "reviewed_note": "model=deepseek-flash; session=v-20261115-b"
   },
   "README.zh-TW.md": {
     "verified_at": "2026-11-14",
     "sources": {
       ".github/workflows/ci.yml": "sha256:812511ed7e1aa1bd012176a09decec0681a94ea0cdbae5a8237478598407c73f",
-      "Cargo.toml": "sha256:3f38c4bb1521d927f87e2961ff20da6c154b27f904c25e784e324ba9ab9afc47",
+      "Cargo.toml": "sha256:0ebe0f2e483fec4ff43781b94fc250e38cf7a02ad95576c8559d55b744b206bd",
       "crates/zroutery-core/src/config/plugin.rs": "sha256:a8dd503076c1eb444d93955dea3ce817e29c933f51245de521498bbd9593c92c",
       "crates/zroutery-core/src/config/provider.rs": "sha256:5e5c0ad707bae62fcf23bb5b20b0dd1a21a44dc142e3fdb995c4c04bced9391b",
       "crates/zroutery-core/src/config/registry.rs": "sha256:58971e31d044907188d2ad9be770bf3185dcbdb173e67224546725286bcb9c16",
@@ -451,7 +451,7 @@
       "crates/zroutery-core/src/server/handlers.rs": "sha256:fab479470870597d7be4b37a27948754140d49963d8ccf0d089b5dc514b27681",
       "crates/zroutery-plugin-api/src/capability.rs": "sha256:d4b15db0c1c291c05151173e6132e07821411312f1f1d9033ddd1650030f60cc",
       "crates/zroutery-plugin-api/src/manifest.rs": "sha256:1895fced84b296125bcc36e6a3b6cb742b4093f2f7b4c03f84551f05e9f615ee",
-      "package.json": "sha256:487c40e417797bce3c7d46b2715d3c3a664a905f87689972f683430f3001f83c",
+      "package.json": "sha256:1f2d59af2e5e68dd61e864c62ac5bdcd0aa921fbf1cfd289c5b752daa9f5804e",
       "src-tauri/Cargo.toml": "sha256:649d3187e676ec80ff7748ef6ba9e9bf3f6101370e0d9ff4d961327a98cfb015",
       "src-tauri/src/platform.rs": "sha256:32b5068e409a2a44caa8aabdbee0438aa3fba903f0bc81325ce40738eb91d181",
       "src-tauri/src/store.rs": "sha256:690bdbeffb7a1bcd5a802303e404d17cdbb81830d29070f0e6927935e96149ab",
@@ -462,16 +462,16 @@
       "pnpm --dir ui test"
     ],
     "note": "Key facts are anchored to the manifest, defaults, routes, bundle and data-path code; translations share the same anchors.",
-    "reviewed_commit": "ad22f8d2894d81e601ec966d797e9fc87081365f",
+    "reviewed_commit": "d68281f",
     "reviewed_by": "verifier-agent",
-    "reviewed_at": "2026-11-14",
+    "reviewed_at": "2026-11-15",
     "sample": [
       "\u5ba2\u6236\u7aef\u7528\u54ea\u7a2e\u5354\u5b9a\u90fd\u884c\u2014\u2014Anthropic\u3001OpenAI Chat\u3001OpenAI Responses\u3001Gemini\uff1bClaude Code\u3001Codex\u3001Chatbox \u6216\u4efb\u610f SDK \u6307\u5411 `http://127.0.0.1:8787` \u5373\u53ef\u4f7f\u7528\uff0c\u8acb\u6c42\u5931\u6557\u6703\u81ea\u52d5\u5207\u63db\u5230\u4e0b\u4e00\u500b\u6a21\u578b\u3002macOS \u548c Windows \u4e0a\u662f\u5e38\u99d0\u9078\u55ae\u5217 / \u7cfb\u7d71\u5323\u7684\u684c\u9762\u61c9\u7528\uff0c\u4e5f\u53ef\u4ee5\u4e0d\u958b\u4ecb\u9762\uff0c\u53ea\u8dd1\u4ee3\u7406\u7a0b\u5e8f\u3002",
       "\u53e6\u5916\u6709 `GET /v1/models`\uff08\u5217\u51fa\u6240\u6709\u53ef\u547c\u53eb\u7684 id\uff09\u3001`GET /v1/status` \u548c `GET /health`\uff08\u552f\u4e00\u4e0d\u9700\u8981\u9a57\u8b49\u7684\u4ecb\u9762\uff09\u3002\u9a57\u8b49\u652f\u63f4 `x-api-key` \u548c `Authorization: Bearer`\uff0ctoken \u5728\u300c\u9598\u9053\u300d\u9078\u55ae\u88e1\u8907\u88fd\u3002",
       "[![release](https://img.shields.io/badge/release-1.0.0--rc.2-blue)](https://github.com/hemingtsai/Zroutery/releases)"
     ],
-    "reviewed_sha": "sha256:5cf308007bf78854a2e906a2d9f85a4bbcf5cd80a4aebb17164a1539f6b6cab5",
-    "reviewed_note": "model=deepseek-flash; session=v-20261114-g"
+    "reviewed_sha": "sha256:4da0c177b5042a2fc9f3929037bb0dfed52256d816d78e9630341410694cad78",
+    "reviewed_note": "model=deepseek-flash; session=v-20261115-b"
   },
   "docs/development/runbook.md": {
     "verified_at": "2026-11-14",
@@ -480,7 +480,7 @@
       "crates/zroutery-core/src/config/plugin.rs": "sha256:a8dd503076c1eb444d93955dea3ce817e29c933f51245de521498bbd9593c92c",
       "crates/zroutery-core/src/migration/state.rs": "sha256:3d683b8a4f97f62fdb00b20843dc6012b33ee34ac4bef445b3265d7d43308728",
       "crates/zroutery-core/src/server/ml_state.rs": "sha256:3b7a4a6e92058113ad7031fa747ff5fc563cc677066173c792476441fc0fa0bf",
-      "package.json": "sha256:487c40e417797bce3c7d46b2715d3c3a664a905f87689972f683430f3001f83c",
+      "package.json": "sha256:1f2d59af2e5e68dd61e864c62ac5bdcd0aa921fbf1cfd289c5b752daa9f5804e",
       "src-tauri/src/platform.rs": "sha256:32b5068e409a2a44caa8aabdbee0438aa3fba903f0bc81325ce40738eb91d181",
       "src-tauri/src/store.rs": "sha256:690bdbeffb7a1bcd5a802303e404d17cdbb81830d29070f0e6927935e96149ab",
       "src-tauri/tauri.conf.json": "sha256:ba1bd4d259ff2a0fc355e3e5a075da8a2c3f64fd27ae289a9565942042c14782"
@@ -489,16 +489,16 @@
       "python3 -B scripts/docs_check.py"
     ],
     "note": "Operational facts are anchored to the commands, config paths, bundle and rollback state; the start/stop steps are exercised manually.",
-    "reviewed_commit": "ad22f8d2894d81e601ec966d797e9fc87081365f",
+    "reviewed_commit": "d68281f",
     "reviewed_by": "verifier-agent",
-    "reviewed_at": "2026-11-14",
+    "reviewed_at": "2026-11-15",
     "sample": [
       "Migration state and rollback: `crates/zroutery-core/src/migration/state.rs::MigrationState`.",
       "python3 -B scripts/commit_contract_test.py --base <start> --head HEAD",
       "Takeover release state: `crates/zroutery-core/src/agent_takeover/ownership.rs::OwnershipState`."
     ],
-    "reviewed_sha": "sha256:9a7c3bc95f97641d71c190a79721b9aacb32f981886e4ae845ba946b4cb9be79",
-    "reviewed_note": "model=deepseek-flash; session=v-20261114-c"
+    "reviewed_sha": "sha256:f8c41d9efded561c1f663dae9a53eb73db30eb3f0390428bcec4213692b94759",
+    "reviewed_note": "model=deepseek-flash; session=v-20261115-b"
   },
   "docs/development/reference/migration.md": {
     "verified_at": "2026-11-14",
