@@ -37,7 +37,9 @@ cargo +1.90.0 check --workspace --all-targets --locked
 ```
 
 Frontend uses Node 22 and the pnpm pin (`package.json::packageManager`,
-`.github/workflows/ci.yml::setup-node`).
+`.github/workflows/ci.yml::setup-node`). The Tauri CLI and API pins live in
+`package.json` and `ui/package.json`; `Cargo.lock` records the resolved Rust
+dependency versions.
 
 ## Tier 1 — blocking, every change
 
