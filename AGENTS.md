@@ -65,6 +65,22 @@ reported as unverified. Never weaken a gate or use `--no-verify`.
 - Re-read a shared file immediately before patching it; stage explicit paths; one
   owner publishes commits at a time. Delegate only when authorized.
 
+## Delegation
+
+- A subagent receives this file only when its session mounts
+  `dsh-agent-instructions`: the `standard`, `ptc` and `cordis` presets do,
+  `minimal` does not. Keep repository work on a mounted preset and keep the
+  child's `cwd` inside the project root.
+- Require a receipt before accepting delegated work. The child runs
+  `python3 -B scripts/agent_brief.py` and returns its JSON; the parent runs it
+  too and compares `agents_sha256`, `state_sha256`, `head`, `state_head`,
+  `recorded_gates` and `dod_quote`. A missing or mismatched receipt means the
+  child did not read the guidance; reject the result.
+- The receipt proves exposure, not compliance. Delegated work still passes
+  `docs_contracts.py` and a review recorded in a session other than its author's.
+- A subagent outside this harness, or under a preset without the instruction
+  plugin, reads `AGENTS.md` (or `CLAUDE.md`) and returns the same receipt.
+
 ## Implementation contracts
 
 [reference/implementation-contracts.md](docs/development/reference/implementation-contracts.md)
