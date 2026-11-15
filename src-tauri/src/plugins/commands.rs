@@ -1,9 +1,12 @@
 //! Typed management commands; paths come from a host file picker, never ESM.
 use super::views::{PluginInspection, PluginInstallation, PluginTheme, PluginUiView};
-use super::{prune_action_intents, Watchdog};
+use super::prune_action_intents;
+#[cfg(target_os = "windows")]
+use super::Watchdog;
 use crate::state::Desktop;
 use std::collections::BTreeMap;
 use std::sync::Arc;
+#[cfg(target_os = "windows")]
 use std::time::Duration;
 use tauri::{AppHandle, Emitter, Manager, State};
 use tauri_plugin_dialog::DialogExt;
@@ -17,8 +20,10 @@ use zroutery_plugin_api::{
     Capability, PermissionRequest, Principal, ResourceLimits,
 };
 use zroutery_plugin_host::{
-    install::Package, lifecycle::Manager as PluginManager, sandbox, supervisor,
+    install::Package, lifecycle::Manager as PluginManager, supervisor,
 };
+#[cfg(target_os = "windows")]
+use zroutery_plugin_host::sandbox;
 
 fn manager(desktop: &Desktop) -> Result<&PluginManager, String> {
     desktop
@@ -336,27 +341,51 @@ fn run_worker_call(
     let expected_epoch = envelope.grant_epoch.clone();
     let expected_generation = envelope.worker_generation.clone();
 
+    let result = run_sandboxed_process(
+        &worker,
+        &work,
+        &bootstrap,
+        &envelope,
+        &expected_epoch,
+        &expected_generation,
+        limits.wall_ms,
+    );
+    let _ = std::fs::remove_dir_all(&work);
+    result
+}
+
+/// The restricted process and its private pipes exist for Windows builds.
+#[cfg(target_os = "windows")]
+fn run_sandboxed_process(
+    worker: &std::path::Path,
+    work: &std::path::Path,
+    bootstrap: &WorkerBootstrap,
+    envelope: &Envelope<WorkerCall>,
+    expected_epoch: &str,
+    expected_generation: &str,
+    wall_ms: u64,
+) -> std::result::Result<WorkerReply, String> {
     let result = (|| {
-        let mut process = sandbox::launch(&worker, &work, "").map_err(|e| e.to_string())?;
+        let mut process = sandbox::launch(worker, work, "").map_err(|e| e.to_string())?;
         // A wedged worker is terminated at the declared wall budget. The killed
         // job closes the private pipe, so the read below fails instead of
         // hanging a broker thread forever; the caller then reports a timeout.
         let watchdog = Watchdog::spawn(
-            Duration::from_millis(limits.wall_ms),
+            Duration::from_millis(wall_ms),
             process.watchdog().map_err(|e| e.to_string())?,
         );
         let outcome = (|| {
-            ipc::write_frame(&mut process.input, &bootstrap).map_err(|e| e.to_string())?;
-            ipc::write_frame(&mut process.input, &envelope).map_err(|e| e.to_string())?;
+            ipc::write_frame(&mut process.input, bootstrap).map_err(|e| e.to_string())?;
+            ipc::write_frame(&mut process.input, envelope).map_err(|e| e.to_string())?;
             let reply: Envelope<WorkerReply> =
                 ipc::read_frame(&mut process.output).map_err(|e| e.to_string())?;
-            let mut pending = supervisor::PendingCall::new(envelope);
+            let mut pending = supervisor::PendingCall::new(envelope.clone());
             pending
-                .complete(reply, &expected_epoch, &expected_generation)
+                .complete(reply, expected_epoch, expected_generation)
                 .map_err(|e| e.to_string())
         })();
         let fired = watchdog.stand_down();
-        let _ = process.wait(limits.wall_ms.min(5000) as u32);
+        let _ = process.wait(wall_ms.min(5000) as u32);
         // A terminated job surfaces as a broken pipe, which the IPC layer
         // reports as a crash; when the watchdog fired, the real breach was the
         // wall clock and the reply says so.
@@ -365,8 +394,22 @@ fn run_worker_call(
             outcome => outcome,
         }
     })();
-    let _ = std::fs::remove_dir_all(&work);
     result
+}
+
+/// Other hosts refuse the call with the same refusal the safe mode and the
+/// sandbox gate produce: a plugin is never run outside the restricted process.
+#[cfg(not(target_os = "windows"))]
+fn run_sandboxed_process(
+    _worker: &std::path::Path,
+    _work: &std::path::Path,
+    _bootstrap: &WorkerBootstrap,
+    _envelope: &Envelope<WorkerCall>,
+    _expected_epoch: &str,
+    _expected_generation: &str,
+    _wall_ms: u64,
+) -> std::result::Result<WorkerReply, String> {
+    Err("sandbox_unavailable".into())
 }
 
 fn default_locale() -> Locale {

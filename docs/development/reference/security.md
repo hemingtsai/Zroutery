@@ -78,7 +78,9 @@ That is the model; hiding the token from the same user is not a goal.
   terminated when the budget lapses and the call reports a timeout instead of
   hanging a broker thread
   (`src-tauri/src/plugins/commands.rs::run_worker_call`,
-  `src-tauri/src/plugins/mod.rs::Watchdog`).
+  `src-tauri/src/plugins/mod.rs::Watchdog`). The restricted process ships for
+  Windows builds; a host without it answers `sandbox_unavailable` instead of
+  running a plugin unsandboxed.
 - A rendered action button is a single-use, short-lived, table-bounded intent
   that a revoke drops immediately, and invoking it also requires the active
   grant to authorize `host.action.request` for that manifest action

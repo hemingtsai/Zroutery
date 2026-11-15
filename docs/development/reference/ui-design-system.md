@@ -64,6 +64,9 @@ interaction coverage saves both settings without changing the model pool
   refused save returns bounded field error codes to the plugin's own UI, which
   renders them — the host never displays raw option values
   (`src-tauri/src/plugins/commands.rs::invoke_plugin_ui_action`).
+- A host without the restricted process answers a plugin worker call with
+  `sandbox_unavailable`; the call is never run unsandboxed
+  (`src-tauri/src/plugins/commands.rs::run_sandboxed_process`).
 
 ## Gates
 
