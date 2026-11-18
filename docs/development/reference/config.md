@@ -108,6 +108,9 @@ provider key. `SecretStore` is the credential boundary
 ## Feature gates
 
 - `zroutery-core` ships no default feature (`crates/zroutery-core/Cargo.toml::default`).
+- The Rust dependencies compiled for Core and the desktop shell are pinned in
+  `crates/zroutery-core/Cargo.toml::dependencies` and
+  `src-tauri/Cargo.toml::dependencies`.
 - The desktop crate enables `ml`, `account`, `newapi`, `account-maint`,
   `opencode` and `plugin` by default (`src-tauri/Cargo.toml::default`).
 - A capability compiled by a feature is inert until configured. A capability the

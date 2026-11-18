@@ -10,6 +10,10 @@ not restate them.
 - Keep module boundaries and feature gates; a capability compiled by a feature is
   inert until requested (`crates/zroutery-core/Cargo.toml::default`,
   `src-tauri/Cargo.toml::default`).
+- A dependency major is pinned by the crate that calls it
+  (`crates/zroutery-core/Cargo.toml::dependencies`,
+  `src-tauri/Cargo.toml::dependencies`); an API-breaking upgrade migrates the
+  caller in the same change (`crates/zroutery-core/src/router/selection.rs::weighted_shuffle`).
 - Backend wire fields are `snake_case`; the Tauri argument mapping lives in the
   typed frontend contract (`ui/src/api.ts`).
 - Configuration is declaration; runtime observations, credentials and historical

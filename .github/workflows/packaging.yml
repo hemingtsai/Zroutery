@@ -111,6 +111,18 @@ jobs:
           if ($msi.Count -ne 1) {
             throw "expected exactly one MSI under target/release/bundle/msi, found $($msi.Count)"
           }
+          # The NSIS gate above leaves HKCU\Software\zroutery\Zroutery behind:
+          # Tauri's NSIS uninstaller deletes that install-location key only when
+          # the interactive "delete app data" box is ticked, and a silent /S
+          # uninstall never ticks it. Tauri's MSI then adopts that key as
+          # INSTALLDIR (the main.wxs RegistrySearch prefers a previous NSIS
+          # location over Program Files), so without this cleanup the MSI
+          # silently installs into %LOCALAPPDATA%\Zroutery, msiexec exits 0 and
+          # the check below fails on a path the MSI never used. A fresh machine
+          # has no such key, so removing it here is what makes this gate test
+          # the same fresh-machine install the check asserts.
+          Remove-Item -Path "HKCU:\Software\zroutery\Zroutery" -ErrorAction SilentlyContinue
+          Remove-Item -Path "HKCU:\Software\zroutery" -ErrorAction SilentlyContinue
           $log = Join-Path $env:RUNNER_TEMP "msi-install.log"
           $install = Start-Process msiexec.exe -Wait -PassThru -ArgumentList @(
             "/i", "`"$($msi[0].FullName)`"", "/qn", "/norestart", "/l*v", "`"$log`""

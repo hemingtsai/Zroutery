@@ -12,7 +12,7 @@ use crate::ir::Capability;
 #[cfg(feature = "ml")]
 use crate::observation::ObservationStore;
 use crate::registry::Registry;
-use rand::Rng;
+use rand::RngExt;
 
 impl Router {
     /// Turn a pool of models into an ordered list of attempts, applying health,
@@ -287,10 +287,10 @@ impl Router {
     pub(super) fn weighted_shuffle<'a>(&self, members: &[&'a ModelEntry]) -> Vec<&'a ModelEntry> {
         let mut pool: Vec<&ModelEntry> = members.to_vec();
         let mut out = Vec::with_capacity(pool.len());
-        let mut rng = rand::thread_rng();
+        let mut rng = rand::rng();
         while !pool.is_empty() {
             let total: u64 = pool.iter().map(|m| m.weight.max(1) as u64).sum();
-            let mut pick = rng.gen_range(0..total);
+            let mut pick = rng.random_range(0..total);
             let mut chosen = 0usize;
             for (i, m) in pool.iter().enumerate() {
                 let w = m.weight.max(1) as u64;

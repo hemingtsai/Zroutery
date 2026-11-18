@@ -69,7 +69,10 @@ impl Package {
             let mut entry = archive
                 .by_index(i)
                 .map_err(|_| PluginError::InvalidManifest)?;
-            let name = entry.name().to_string();
+            let name = entry
+                .name()
+                .map_err(|_| PluginError::InvalidManifest)?
+                .to_string();
             // Only regular files: links, encrypted entries and directory aliases
             // cannot become a second loader path. ZIP attributes are untrusted.
             if !strict::package_path(&name)
