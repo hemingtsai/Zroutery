@@ -2,39 +2,39 @@
 
 # Current state
 
-as of `2026-11-15` · branch `dev` · verified code head `47f687d`
+as of `2026-11-18` · branch `main` · verified code head `ccd1a83`
 
 ## Gates
 
 | Gate | Status | Source | Command | Detail |
 |---|---|---|---|---|
-| documentation contracts (local) | **pass** | recorded | `python3 -B scripts/docs_contracts.py` | all non-range documentation gates |
+| documentation contracts (local) | **fail** | recorded | `python3 -B scripts/docs_contracts.py` | all non-range documentation gates |
 | fmt | **pass** | asserted | `cargo fmt --all -- --check` | ran on local rustc 1.98.0; the CI-resolved toolchain was not available, so this is not a CI-toolchain pass |
 | clippy (workspace, all targets, all features) | **pass** | asserted | `cargo clippy --workspace --all-targets --all-features --locked -- -D warnings` | ran on local rustc 1.98.0; the CI-resolved toolchain was not available, so this is not a CI-toolchain pass |
 | tests (workspace, all features) | **pass** | asserted | `cargo test --workspace --all-features --locked` | 3556 passed, 0 failed, 22 ignored, 122 suites; ran on local rustc 1.98.0; the CI-resolved toolchain was not available, so this is not a CI-toolchain pass |
 | frontend build | **pass** | asserted | `pnpm --dir ui build` |  |
 | frontend tests | **pass** | asserted | `pnpm --dir ui test` | 86 passed |
 | command surface | **pass** | asserted | `python3 -B scripts/command_surface_test.py` | 90 interface commands, 254 registered |
-| documentation sources | **pass** | recorded | `python3 -B scripts/docs_sources.py --check` | docs-sources: 930 anchor(s) resolved in 36 active document(s) (936cbb5) |
-| markdown structure | **pass** | recorded | `python3 -B scripts/markdown_check.py` | markdown-check: fenced blocks and tables are well formed (936cbb5) |
-| documentation check | **pass** | recorded | `python3 -B scripts/docs_check.py` | docs-check: 47 active document(s), 0 pending, 0 warning(s), all checks passed (936cbb5) |
-| documentation parity | **pass** | recorded | `python3 -B scripts/docs_parity.py --check` | docs-parity: the three READMEs have matching headings, fences, images and source anchors (936cbb5) |
-| module coverage | **pass** | recorded | `python3 -B scripts/coverage_check.py` | coverage-check: 38 top-level modules (36 owned, 1 covered elsewhere, 1 unowned) (936cbb5) |
-| rendered state | **pass** | recorded | `python3 -B scripts/current_state.py --check` | current-state: clean (936cbb5) |
-| invariant evidence | **pass** | recorded | `python3 -B scripts/invariant_check.py` | invariant-check: 15 invariants, 13 with test anchors, 2 explicitly untested (936cbb5) |
-| state schema | **pass** | recorded | `python3 -B scripts/state_check.py` | state-check: 27 gates (13 recorded, 14 asserted), 4 blockers; schema and blockers valid (936cbb5) |
+| documentation sources | **pass** | recorded | `python3 -B scripts/docs_sources.py --check` | docs-sources: 1171 anchor(s) resolved in 36 active document(s) (ccd1a83) |
+| markdown structure | **pass** | recorded | `python3 -B scripts/markdown_check.py` | markdown-check: fenced blocks and tables are well formed (ccd1a83) |
+| documentation check | **pass** | recorded | `python3 -B scripts/docs_check.py` | docs-check: 48 active document(s), 0 pending, 0 warning(s), all checks passed (ccd1a83) |
+| documentation parity | **pass** | recorded | `python3 -B scripts/docs_parity.py --check` | docs-parity: the three READMEs have matching headings, fences, images and source anchors (ccd1a83) |
+| module coverage | **pass** | recorded | `python3 -B scripts/coverage_check.py` | coverage-check: 38 top-level modules (36 owned, 1 covered elsewhere, 1 unowned) (ccd1a83) |
+| rendered state | **pass** | recorded | `python3 -B scripts/current_state.py --check` | current-state: clean (ccd1a83) |
+| invariant evidence | **pass** | recorded | `python3 -B scripts/invariant_check.py` | invariant-check: 15 invariants, 14 with test anchors, 1 explicitly untested (ccd1a83) |
+| state schema | **pass** | recorded | `python3 -B scripts/state_check.py` | state-check: 27 gates (13 recorded, 14 asserted), 4 blockers; schema and blockers valid (ccd1a83) |
 | whitespace | **pass** | asserted | `git diff --check` | no trailing whitespace damage |
 | orchestration docs (legacy) | **retired** | asserted | `scripts/orch_docs_test.py (not run)` | legacy node and evidence records are archived; validation retired |
 | UI budget | **pass** | asserted | `python3 -B scripts/ui_budget_test.py` | 734,994 B JS of 742,000 |
 | UI layout | **pass** | asserted | `python3 -B scripts/ui_layout_test.py` | 12 surfaces, 79 controls |
 | UI overflow | **unrun** | asserted | `python3 -B scripts/ui_overflow_test.py` | routing tab timeout; lazy page stuck on Helium 0.21.2 (quarantined by frontend until 2026-11-21) |
 | UI interaction | **unrun** | asserted | `python3 -B scripts/ui_interaction_test.py` | timed out after 900s on Helium 0.21.2; not a pass and not a product failure (quarantined by frontend until 2026-11-21) |
-| Rust advisories | **fail** | asserted | `cargo audit --file Cargo.lock` | 5 vulnerabilities, 18 warnings |
+| Rust advisories | **pass** | asserted | `cargo audit --file Cargo.lock` | cargo audit --no-fetch: 0 vulnerabilities, 9 allowed warnings; resolved tree from Cargo.lock at ccd1a83 with the 2026-11-18 advisory database |
 | frontend advisories | **pass** | asserted | `pnpm audit --prod` |  |
-| freshness | **pass** | recorded | `python3 -B scripts/freshness_report.py --check` | freshness: 32 documents; every post-review source change is covered by a same-change document edit (936cbb5) |
-| rules registry | **pass** | recorded | `python3 -B scripts/docs_rules.py` | docs-rules: 17 rules; 16 machine, 13 executed gates covered (936cbb5) |
-| verified ledger | **pass** | recorded | `python3 -B scripts/docs_verified.py --check` | docs-verified: ledger covers 32 document(s) (936cbb5) |
-| review evidence | **pass** | recorded | `python3 -B scripts/docs_review.py --check` | docs-review: 32 document(s) have recorded review evidence (936cbb5) |
+| freshness | **pass** | recorded | `python3 -B scripts/freshness_report.py --check` | freshness: 32 documents; every post-review source change is covered by a same-change document edit (ccd1a83) |
+| rules registry | **pass** | recorded | `python3 -B scripts/docs_rules.py` | docs-rules: 17 rules; 16 machine, 13 executed gates covered (ccd1a83) |
+| verified ledger | **pass** | recorded | `python3 -B scripts/docs_verified.py --check` | docs-verified: ledger covers 32 document(s) (ccd1a83) |
+| review evidence | **fail** | recorded | `python3 -B scripts/docs_review.py --check` | fix: run `python3 -B scripts/docs_review.py --record <reviewer> --doc <path>` after reading the document (ccd1a83) |
 
 ## Blockers
 

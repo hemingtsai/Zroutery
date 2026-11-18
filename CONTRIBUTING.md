@@ -28,13 +28,9 @@ The declared minimum (`Cargo.toml::rust-version`) is a separate check:
 cargo +1.90.0 check --workspace --all-targets --locked
 ```
 
-The frontend is Node 22 with the pinned pnpm (`package.json::packageManager`),
-the workspace carries the plugin crates (`Cargo.toml::workspace`), and the Tauri
-CLI/API pins live in `package.json` and `ui/package.json`. Rust dependency
-majors are pinned in the owning crates
-(`crates/zroutery-core/Cargo.toml::dependencies`,
-`crates/zroutery-plugin-host/Cargo.toml::dependencies`,
-`src-tauri/Cargo.toml::dependencies`); `Cargo.lock` records the resolved tree.
+The frontend is Node 22 with pinned pnpm (`package.json::packageManager`); the
+workspace carries plugin crates (`Cargo.toml::workspace`), Tauri pins live in
+`package.json`/`ui/package.json`, and Rust pins in `crates/zroutery-core/Cargo.toml::dependencies`.
 
 ## Commit format
 
