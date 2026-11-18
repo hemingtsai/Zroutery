@@ -39,7 +39,12 @@ cargo +1.90.0 check --workspace --all-targets --locked
 Frontend uses Node 22 and the pnpm pin (`package.json::packageManager`,
 `.github/workflows/ci.yml::setup-node`). The Tauri CLI and API pins live in
 `package.json` and `ui/package.json`; `Cargo.lock` records the resolved Rust
-dependency versions.
+dependency versions. The Rust pins live in
+`crates/zroutery-core/Cargo.toml::dependencies`,
+`crates/zroutery-plugin-host/Cargo.toml::dependencies` and
+`src-tauri/Cargo.toml::dependencies`. The packaging gate removes the NSIS
+install-location key before the MSI install so the check measures a fresh
+machine (`.github/workflows/packaging.yml::installer`).
 
 ## Tier 1 — blocking, every change
 

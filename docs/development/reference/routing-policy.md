@@ -112,7 +112,9 @@ The plan is the failover order. An attempt fails, the failure is classified, and
 the loop decides whether to retry the same candidate or move to the next one;
 the order comes from the router, not from the caller. An empty candidate set is
 the `NoCandidate` error, never an empty plan served by a rejected fallback
-(`crates/zroutery-core/src/router/selection.rs::plan_candidates`).
+(`crates/zroutery-core/src/router/selection.rs::plan_candidates`). The weighted
+shuffle that orders those candidates uses the random-range API
+(`crates/zroutery-core/src/router/selection.rs::weighted_shuffle`).
 
 ## Failure modes
 

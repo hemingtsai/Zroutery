@@ -23,6 +23,11 @@ and enables the product's capability set through named features
 (`src-tauri/Cargo.toml::default`). The headless binary wires the same desktop
 state and then serves (`crates/zroutery-headless/src/main.rs::main`).
 
+Dependency majors stay with the crate that calls them: Core's weighted attempt
+shuffle uses the `rand` API (`crates/zroutery-core/src/router/selection.rs::weighted_shuffle`,
+`crates/zroutery-core/Cargo.toml::dependencies`) and the plugin host's archive
+reader uses the `zip` API (`crates/zroutery-plugin-host/Cargo.toml::dependencies`).
+
 The module boundary is declared once in
 `crates/zroutery-core/src/lib.rs::pub mod`; a new top-level module is an
 architecture change, not a private refactor.

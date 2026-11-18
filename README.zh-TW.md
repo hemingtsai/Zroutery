@@ -153,6 +153,7 @@ MIT（見 `Cargo.toml` 的 `license`）。
 ## 事實來源
 
 - Rust 最低版本與 Node/pnpm 固定版本：`Cargo.toml::rust-version`、`package.json::packageManager`、`package.json::scripts`、`.github/workflows/ci.yml::setup-node`。
+- Rust 相依固定版本：`crates/zroutery-core/Cargo.toml::dependencies`、`crates/zroutery-plugin-host/Cargo.toml::dependencies`、`src-tauri/Cargo.toml::dependencies`；解析後的版本記錄於 `Cargo.lock`。
 - 預設監聽位址、連接埠與請求本文上限：`crates/zroutery-core/src/config/server.rs::ServerConfig`。
 - HTTP 路由：`crates/zroutery-core/src/server/handlers.rs::build_app`。
 - 上游協定型別與 API 端面：`crates/zroutery-core/src/config/provider.rs::ProviderKind`、`crates/zroutery-core/src/config/provider.rs::ApiSurface`、`crates/zroutery-core/src/config/provider.rs::ProviderKind::is_decision`、`crates/zroutery-core/src/config/registry.rs::ProviderConfig::dialect`。
@@ -314,6 +315,7 @@ MIT（見 `Cargo.toml` 的 `license`）。
 ## 事實來源
 
 - Rust 最低版本與 Node/pnpm 固定版本：`Cargo.toml::rust-version`、`package.json::packageManager`、`package.json::scripts`、`.github/workflows/ci.yml::setup-node`。
+- Rust 相依固定版本：`crates/zroutery-core/Cargo.toml::dependencies`、`crates/zroutery-plugin-host/Cargo.toml::dependencies`、`src-tauri/Cargo.toml::dependencies`；解析後的版本記錄於 `Cargo.lock`。
 - 預設監聽位址、連接埠與請求本文上限：`crates/zroutery-core/src/config/server.rs::ServerConfig`。
 - HTTP 路由：`crates/zroutery-core/src/server/handlers.rs::build_app`。
 - 上游協定型別與 API 端面：`crates/zroutery-core/src/config/provider.rs::ProviderKind`、`crates/zroutery-core/src/config/provider.rs::ApiSurface`、`crates/zroutery-core/src/config/provider.rs::ProviderKind::is_decision`、`crates/zroutery-core/src/config/registry.rs::ProviderConfig::dialect`。
