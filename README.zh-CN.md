@@ -153,6 +153,7 @@ MIT（见 `Cargo.toml` 的 `license`）。
 ## 事实来源
 
 - Rust 最低版本与 Node/pnpm 固定版本：`Cargo.toml::rust-version`、`package.json::packageManager`、`package.json::scripts`、`.github/workflows/ci.yml::setup-node`。
+- Rust 依赖固定版本：`crates/zroutery-core/Cargo.toml::dependencies`、`crates/zroutery-plugin-host/Cargo.toml::dependencies`、`src-tauri/Cargo.toml::dependencies`；解析后的版本记录在 `Cargo.lock`。
 - 默认监听地址、端口与请求体上限：`crates/zroutery-core/src/config/server.rs::ServerConfig`。
 - HTTP 路由：`crates/zroutery-core/src/server/handlers.rs::build_app`。
 - 上游协议类型与 API 端面：`crates/zroutery-core/src/config/provider.rs::ProviderKind`、`crates/zroutery-core/src/config/provider.rs::ApiSurface`、`crates/zroutery-core/src/config/provider.rs::ProviderKind::is_decision`、`crates/zroutery-core/src/config/registry.rs::ProviderConfig::dialect`。
@@ -314,6 +315,7 @@ MIT（见 `Cargo.toml` 的 `license`）。
 ## 事实来源
 
 - Rust 最低版本与 Node/pnpm 固定版本：`Cargo.toml::rust-version`、`package.json::packageManager`、`package.json::scripts`、`.github/workflows/ci.yml::setup-node`。
+- Rust 依赖固定版本：`crates/zroutery-core/Cargo.toml::dependencies`、`crates/zroutery-plugin-host/Cargo.toml::dependencies`、`src-tauri/Cargo.toml::dependencies`；解析后的版本记录在 `Cargo.lock`。
 - 默认监听地址、端口与请求体上限：`crates/zroutery-core/src/config/server.rs::ServerConfig`。
 - HTTP 路由：`crates/zroutery-core/src/server/handlers.rs::build_app`。
 - 上游协议类型与 API 端面：`crates/zroutery-core/src/config/provider.rs::ProviderKind`、`crates/zroutery-core/src/config/provider.rs::ApiSurface`、`crates/zroutery-core/src/config/provider.rs::ProviderKind::is_decision`、`crates/zroutery-core/src/config/registry.rs::ProviderConfig::dialect`。

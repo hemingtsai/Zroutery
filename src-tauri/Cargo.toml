@@ -115,7 +115,7 @@ tokio-tungstenite = { version = "0.30.0", default-features = false, features = [
 ] }
 
 # Reading CC Switch's provider database; bundled so no system SQLite is needed.
-rusqlite = { version = "0.40", features = ["bundled"] }
+rusqlite = { version = "0.41", features = ["bundled"] }
 
 tauri = { version = "2", features = ["tray-icon", "macos-private-api", "image-png"] }
 tauri-plugin-clipboard-manager = "2"

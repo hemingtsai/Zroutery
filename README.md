@@ -155,6 +155,7 @@ MIT (see the `license` field in `Cargo.toml`).
 ## Fact sources
 
 - Rust minimum and Node/pnpm pins: `Cargo.toml::rust-version`, `package.json::packageManager`, `package.json::scripts`, `.github/workflows/ci.yml::setup-node`.
+- Rust dependency pins: `crates/zroutery-core/Cargo.toml::dependencies`, `crates/zroutery-plugin-host/Cargo.toml::dependencies`, `src-tauri/Cargo.toml::dependencies`; resolved versions are in `Cargo.lock`.
 - Default bind address, port and body limit: `crates/zroutery-core/src/config/server.rs::ServerConfig`.
 - HTTP routes: `crates/zroutery-core/src/server/handlers.rs::build_app`.
 - Upstream protocol kinds and surfaces: `crates/zroutery-core/src/config/provider.rs::ProviderKind`, `crates/zroutery-core/src/config/provider.rs::ApiSurface`, `crates/zroutery-core/src/config/provider.rs::ProviderKind::is_decision`, `crates/zroutery-core/src/config/registry.rs::ProviderConfig::dialect`.
@@ -316,6 +317,7 @@ MIT (see the `license` field in `Cargo.toml`).
 ## Fact sources
 
 - Rust minimum and Node/pnpm pins: `Cargo.toml::rust-version`, `package.json::packageManager`, `package.json::scripts`, `.github/workflows/ci.yml::setup-node`.
+- Rust dependency pins: `crates/zroutery-core/Cargo.toml::dependencies`, `crates/zroutery-plugin-host/Cargo.toml::dependencies`, `src-tauri/Cargo.toml::dependencies`; resolved versions are in `Cargo.lock`.
 - Default bind address, port and body limit: `crates/zroutery-core/src/config/server.rs::ServerConfig`.
 - HTTP routes: `crates/zroutery-core/src/server/handlers.rs::build_app`.
 - Upstream protocol kinds and surfaces: `crates/zroutery-core/src/config/provider.rs::ProviderKind`, `crates/zroutery-core/src/config/provider.rs::ApiSurface`, `crates/zroutery-core/src/config/provider.rs::ProviderKind::is_decision`, `crates/zroutery-core/src/config/registry.rs::ProviderConfig::dialect`.
