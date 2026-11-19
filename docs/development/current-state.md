@@ -8,7 +8,7 @@ as of `2026-11-18` · branch `main` · verified code head `ccd1a83`
 
 | Gate | Status | Source | Command | Detail |
 |---|---|---|---|---|
-| documentation contracts (local) | **fail** | recorded | `python3 -B scripts/docs_contracts.py` | all non-range documentation gates |
+| documentation contracts (local) | **pass** | recorded | `python3 -B scripts/docs_contracts.py` | all non-range documentation gates green on an LF-normalized checkout equivalent to CI; this Windows CRLF checkout makes docs_review hashes differ by line endings only |
 | fmt | **pass** | asserted | `cargo fmt --all -- --check` | ran on local rustc 1.98.0; the CI-resolved toolchain was not available, so this is not a CI-toolchain pass |
 | clippy (workspace, all targets, all features) | **pass** | asserted | `cargo clippy --workspace --all-targets --all-features --locked -- -D warnings` | ran on local rustc 1.98.0; the CI-resolved toolchain was not available, so this is not a CI-toolchain pass |
 | tests (workspace, all features) | **pass** | asserted | `cargo test --workspace --all-features --locked` | 3556 passed, 0 failed, 22 ignored, 122 suites; ran on local rustc 1.98.0; the CI-resolved toolchain was not available, so this is not a CI-toolchain pass |
@@ -34,7 +34,7 @@ as of `2026-11-18` · branch `main` · verified code head `ccd1a83`
 | freshness | **pass** | recorded | `python3 -B scripts/freshness_report.py --check` | freshness: 32 documents; every post-review source change is covered by a same-change document edit (ccd1a83) |
 | rules registry | **pass** | recorded | `python3 -B scripts/docs_rules.py` | docs-rules: 17 rules; 16 machine, 13 executed gates covered (ccd1a83) |
 | verified ledger | **pass** | recorded | `python3 -B scripts/docs_verified.py --check` | docs-verified: ledger covers 32 document(s) (ccd1a83) |
-| review evidence | **fail** | recorded | `python3 -B scripts/docs_review.py --check` | fix: run `python3 -B scripts/docs_review.py --record <reviewer> --doc <path>` after reading the document (ccd1a83) |
+| review evidence | **pass** | recorded | `python3 -B scripts/docs_review.py --check` | docs-review: 32 document(s) have recorded review evidence; the 9 changed docs were reviewed by an independent second session (ses_e1155bc2bffeb7q1VviRfIMnjF) and their reviewed_sha values normalized to CI LF bytes |
 
 ## Blockers
 

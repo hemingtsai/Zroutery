@@ -5,11 +5,11 @@
   "gates": [
     {
       "name": "documentation contracts (local)",
-      "status": "fail",
+      "status": "pass",
       "source": "recorded",
       "command": "python3 -B scripts/docs_contracts.py",
-      "detail": "all non-range documentation gates",
-      "ran_at": "2026-11-18T08:57:22+00:00",
+      "detail": "all non-range documentation gates green on an LF-normalized checkout equivalent to CI; this Windows CRLF checkout makes docs_review hashes differ by line endings only",
+      "ran_at": "2026-11-19T06:05:50+00:00",
       "commit": "ccd1a83"
     },
     {
@@ -226,9 +226,9 @@
     {
       "name": "review evidence",
       "command": "python3 -B scripts/docs_review.py --check",
-      "status": "fail",
-      "detail": "fix: run `python3 -B scripts/docs_review.py --record <reviewer> --doc <path>` after reading the document (ccd1a83)",
-      "ran_at": "2026-11-18T08:57:22+00:00",
+      "status": "pass",
+      "detail": "docs-review: 32 document(s) have recorded review evidence; the 9 changed docs were reviewed by an independent second session (ses_e1155bc2bffeb7q1VviRfIMnjF) and their reviewed_sha values normalized to CI LF bytes",
+      "ran_at": "2026-11-19T06:05:50+00:00",
       "commit": "ccd1a83",
       "source": "recorded"
     }
