@@ -198,14 +198,14 @@
     "note": "Every invariant is cited to the symbol that implements or tests it; the 3,478-test workspace run was the behavioural check.",
     "reviewed_commit": "ad22f8d2894d81e601ec966d797e9fc87081365f",
     "reviewed_by": "second-reader",
-    "reviewed_at": "2026-11-15",
+    "reviewed_at": "2026-11-18",
     "sample": [
       "`crates/zroutery-core/src/budget.rs::Ledger`,",
       "against the frontend contract by `scripts/command_surface_test.py`.",
       "early exit; `/health` is the only unauthenticated route"
     ],
-    "reviewed_sha": "sha256:f46044d9f4fdd474a71eb05a40db1e1e51e5520df1096f6bbd75eba3ae3b7e5d",
-    "reviewed_note": "model=lightvela-auto; session=ses_e252286ddffe8Z3GfQw4rQOiDF"
+    "reviewed_sha": "sha256:7a8cc362952c642937753d10402e754423017d39c84d063ca663af8d4ec204fd",
+    "reviewed_note": "model=opencode/big-pickle; session=ses_e1155bc2bffeb7q1VviRfIMnjF; role=independent doc review"
   },
   "CONTRIBUTING.md": {
     "verified_at": "2026-11-15",
@@ -219,15 +219,15 @@
     ],
     "note": "Toolchain and pnpm pins are read from the manifests; the commit allowlists are owned by the validator and are not copied into prose.",
     "reviewed_commit": "ad22f8d2894d81e601ec966d797e9fc87081365f",
-    "reviewed_by": "verifier-agent",
-    "reviewed_at": "2026-11-15",
+    "reviewed_by": "second-reader",
+    "reviewed_at": "2026-11-18",
     "sample": [
       "The validator is authoritative: `scripts/commit_contract_test.py`.",
       "`python3 -B scripts/docs_impact.py --base <start> --head HEAD`.",
-      "The frontend is Node 22 with the pinned pnpm (`package.json::packageManager`),"
+      "cargo +1.90.0 check --workspace --all-targets --locked"
     ],
-    "reviewed_sha": "sha256:1878c6cb19069daedb3e68212b9d8a957cdcec83182eef1621dc8fb83c82085e",
-    "reviewed_note": "model=deepseek-flash; session=v-20261114-b"
+    "reviewed_sha": "sha256:539e22899245bb9edcba53c002f6664a7a3a57c0ade0d789f4cc6c2ff529ccce",
+    "reviewed_note": "model=opencode/big-pickle; session=ses_e1155bc2bffeb7q1VviRfIMnjF; role=independent doc review"
   },
   "docs/DOCUMENTATION.md": {
     "verified_at": "2026-11-15",
@@ -287,15 +287,15 @@
     ],
     "note": "Commands ran on the local toolchain (rustc 1.98.0). The CI-resolved toolchain was not available offline; this is recorded rather than claimed as a CI-toolchain verification.",
     "reviewed_commit": "ad22f8d2894d81e601ec966d797e9fc87081365f",
-    "reviewed_by": "split-reviewer",
-    "reviewed_at": "2026-11-15",
+    "reviewed_by": "second-reader",
+    "reviewed_at": "2026-11-18",
     "sample": [
       "Commit messages are checked by the CI range; no local `commit-msg` hook is",
       "is an ancestor of HEAD, and that `ran_at` is an ISO timestamp.",
       "(`scripts/docs_sources.py::reverse_index`)."
     ],
-    "reviewed_sha": "sha256:2847b4d4749aa445daeb61a981b43083585f573f5c48347e1d4412f290531255",
-    "reviewed_note": "model=lightvela-auto; session=ses_e25b26f55ffeXFN449tWoeGvHw"
+    "reviewed_sha": "sha256:9a12a2ec326996e9954f691ee04448397c5d1134ae02ff8842a4fc8cc07a972f",
+    "reviewed_note": "model=opencode/big-pickle; session=ses_e1155bc2bffeb7q1VviRfIMnjF; role=independent doc review"
   },
   "docs/development/reference/providers.md": {
     "verified_at": "2026-11-15",
@@ -429,14 +429,14 @@
     "note": "Key facts are anchored to the manifest, defaults, routes, bundle and data-path code; translations share the same anchors.",
     "reviewed_commit": "ad22f8d2894d81e601ec966d797e9fc87081365f",
     "reviewed_by": "second-reader",
-    "reviewed_at": "2026-11-15",
+    "reviewed_at": "2026-11-18",
     "sample": [
       "There is no Linux packaging target; the credential-store dependency for Linux is compiled in `src-tauri/Cargo.toml`, so a source build may run, but it is not tested or shipped.",
       "There is no Linux packaging target; the credential-store dependency for Linux is compiled in `src-tauri/Cargo.toml`, so a source build may run, but it is not tested or shipped.",
-      "Theme and plugin surfaces: `crates/zroutery-plugin-api/src/capability.rs::Capability`, `crates/zroutery-plugin-api/src/manifest.rs::PluginManifestV1`, `crates/zroutery-core/src/config/plugin.rs::PluginInstanceConfig`, `ui/src/themes/registry.ts`, `scripts/plugin_theme_test.py`, `scripts/theme_sources/manifest.json`."
+      "Rust dependency pins: `crates/zroutery-core/Cargo.toml::dependencies`, `crates/zroutery-plugin-host/Cargo.toml::dependencies`, `src-tauri/Cargo.toml::dependencies`; resolved versions are in `Cargo.lock`."
     ],
-    "reviewed_sha": "sha256:e5daae460891e6f25ea93744a00e504549d8a6d48b6a4ef0d017bb791b0c6353",
-    "reviewed_note": "model=lightvela-auto; session=ses_e252286ddffe8Z3GfQw4rQOiDF"
+    "reviewed_sha": "sha256:a5380dadbdb384da733092d1e27b4d16de8545eb70809d7925eb5fff3f81bb0f",
+    "reviewed_note": "model=opencode/big-pickle; session=ses_e1155bc2bffeb7q1VviRfIMnjF; role=independent doc review"
   },
   "README.zh-CN.md": {
     "verified_at": "2026-11-15",
@@ -469,14 +469,14 @@
     "note": "Key facts are anchored to the manifest, defaults, routes, bundle and data-path code; translations share the same anchors.",
     "reviewed_commit": "ad22f8d2894d81e601ec966d797e9fc87081365f",
     "reviewed_by": "second-reader",
-    "reviewed_at": "2026-11-15",
+    "reviewed_at": "2026-11-18",
     "sample": [
       "\u9ed8\u8ba4\u76d1\u542c\u5730\u5740\u3001\u7aef\u53e3\u4e0e\u8bf7\u6c42\u4f53\u4e0a\u9650\uff1a`crates/zroutery-core/src/config/server.rs::ServerConfig`\u3002",
       "\u9ed8\u8ba4\u76d1\u542c\u5730\u5740\u3001\u7aef\u53e3\u4e0e\u8bf7\u6c42\u4f53\u4e0a\u9650\uff1a`crates/zroutery-core/src/config/server.rs::ServerConfig`\u3002",
       "\u63d0\u4ea4\u4fe1\u606f\u6309 Conventional Commits \u4e66\u5199\uff0cCI \u4f1a\u9010\u6761\u68c0\u67e5\u3002\u67b6\u6784\u51b3\u7b56\u548c\u5404\u9636\u6bb5\u7684\u8bb0\u5f55\u5728 `docs/development/`\uff1b\u6539\u4ee3\u7801\u524d\u5148\u770b `CONTRIBUTING.md` \u548c `AGENTS.md`\u3002"
     ],
-    "reviewed_sha": "sha256:408bef64c77ee0efb5f0cef8091fe267796da3fc80c5c41608abaf143082ed5c",
-    "reviewed_note": "model=lightvela-auto; session=ses_e252286ddffe8Z3GfQw4rQOiDF"
+    "reviewed_sha": "sha256:e18f906be2d976a51ab760316a85f6c8c95ff4bb0b00769b9733ad6f0200e9c4",
+    "reviewed_note": "model=opencode/big-pickle; session=ses_e1155bc2bffeb7q1VviRfIMnjF; role=independent doc review"
   },
   "README.zh-TW.md": {
     "verified_at": "2026-11-15",
@@ -509,14 +509,14 @@
     "note": "Key facts are anchored to the manifest, defaults, routes, bundle and data-path code; translations share the same anchors.",
     "reviewed_commit": "ad22f8d2894d81e601ec966d797e9fc87081365f",
     "reviewed_by": "second-reader",
-    "reviewed_at": "2026-11-15",
+    "reviewed_at": "2026-11-18",
     "sample": [
       "\u5ba2\u6236\u7aef\u7528\u54ea\u7a2e\u5354\u5b9a\u90fd\u884c\u2014\u2014Anthropic\u3001OpenAI Chat\u3001OpenAI Responses\u3001Gemini\uff1bClaude Code\u3001Codex\u3001Chatbox \u6216\u4efb\u610f SDK \u6307\u5411 `http://127.0.0.1:8787` \u5373\u53ef\u4f7f\u7528\uff0c\u8acb\u6c42\u5931\u6557\u6703\u81ea\u52d5\u5207\u63db\u5230\u4e0b\u4e00\u500b\u6a21\u578b\u3002macOS \u548c Windows \u4e0a\u662f\u5e38\u99d0\u9078\u55ae\u5217 / \u7cfb\u7d71\u5323\u7684\u684c\u9762\u61c9\u7528\uff0c\u4e5f\u53ef\u4ee5\u4e0d\u958b\u4ecb\u9762\uff0c\u53ea\u8dd1\u4ee3\u7406\u7a0b\u5e8f\u3002",
       "\u5ba2\u6236\u7aef\u7528\u54ea\u7a2e\u5354\u5b9a\u90fd\u884c\u2014\u2014Anthropic\u3001OpenAI Chat\u3001OpenAI Responses\u3001Gemini\uff1bClaude Code\u3001Codex\u3001Chatbox \u6216\u4efb\u610f SDK \u6307\u5411 `http://127.0.0.1:8787` \u5373\u53ef\u4f7f\u7528\uff0c\u8acb\u6c42\u5931\u6557\u6703\u81ea\u52d5\u5207\u63db\u5230\u4e0b\u4e00\u500b\u6a21\u578b\u3002macOS \u548c Windows \u4e0a\u662f\u5e38\u99d0\u9078\u55ae\u5217 / \u7cfb\u7d71\u5323\u7684\u684c\u9762\u61c9\u7528\uff0c\u4e5f\u53ef\u4ee5\u4e0d\u958b\u4ecb\u9762\uff0c\u53ea\u8dd1\u4ee3\u7406\u7a0b\u5e8f\u3002",
       "\u4e3b\u984c\u8207\u5916\u639b\u7aef\u9762\uff1a`crates/zroutery-plugin-api/src/capability.rs::Capability`\u3001`crates/zroutery-plugin-api/src/manifest.rs::PluginManifestV1`\u3001`crates/zroutery-plugin-api/src/options.rs::OptionsSchemaV1`\u3001`crates/zroutery-core/src/config/plugin.rs::PluginInstanceConfig`\u3001`ui/src/themes/registry.ts`\u3001`scripts/plugin_theme_test.py`\u3001`scripts/theme_sources/manifest.json`\u3002"
     ],
-    "reviewed_sha": "sha256:44eee49665b915d47a8c3c3617b382783411d31416aa667cdaf850e3f5661507",
-    "reviewed_note": "model=lightvela-auto; session=ses_e252286ddffe8Z3GfQw4rQOiDF"
+    "reviewed_sha": "sha256:760cfdb10011d354167a48b6dbcd38ff26f1e216bec2bace2f04d9a341c5cf62",
+    "reviewed_note": "model=opencode/big-pickle; session=ses_e1155bc2bffeb7q1VviRfIMnjF; role=independent doc review"
   },
   "docs/development/runbook.md": {
     "verified_at": "2026-11-15",
@@ -676,14 +676,14 @@
     "note": "The plan builder and breaker are the source; the reference does not claim a specific provider's latency.",
     "reviewed_commit": "ad22f8d2894d81e601ec966d797e9fc87081365f",
     "reviewed_by": "second-reader",
-    "reviewed_at": "2026-11-15",
+    "reviewed_at": "2026-11-18",
     "sample": [
       "context (`crates/zroutery-core/src/server/pipeline/session_binding.rs::UpstreamSessions::thread_registry`,",
       "`crates/zroutery-core/src/server/pipeline/effort.rs::direct_requirements`).",
       "order (`crates/zroutery-core/src/election.rs::Election`,"
     ],
-    "reviewed_sha": "sha256:fee7f7de7286e1a3a3fcdfd2cc82a83b68dcae27458ad05a70043d82de2d15cb",
-    "reviewed_note": "model=lightvela-auto; session=ses_e252286ddffe8Z3GfQw4rQOiDF"
+    "reviewed_sha": "sha256:e29bdf28ee0d64a84c1ab94592d0f1848e901ace8364b40fa2ee08b3b1903284",
+    "reviewed_note": "model=opencode/big-pickle; session=ses_e1155bc2bffeb7q1VviRfIMnjF; role=independent doc review"
   },
   "docs/development/reference/failure.md": {
     "verified_at": "2026-11-15",
@@ -766,14 +766,14 @@
     "note": "Defaults, validation and the save/apply path are the source; the document is declaration, not runtime state.",
     "reviewed_commit": "ad22f8d2894d81e601ec966d797e9fc87081365f",
     "reviewed_by": "second-reader",
-    "reviewed_at": "2026-11-15",
+    "reviewed_at": "2026-11-18",
     "sample": [
       "`crates/zroutery-core/src/config/plugin.rs::CONFIG_SCHEMA_VERSION`",
       "(`crates/zroutery-core/src/config/routing.rs::ClassifierConfig::default`,",
       "(`src-tauri/src/lib.rs::generate_handler`,"
     ],
-    "reviewed_sha": "sha256:32b33d46fc8661f0e054db7e9d18b43713267eddc6e7d45b737479519c92c313",
-    "reviewed_note": "model=lightvela-auto; session=ses_e252286ddffe8Z3GfQw4rQOiDF"
+    "reviewed_sha": "sha256:a52e4296fad6c66cf9ac711be5b3b687a052fc36a47d6aa4aa3dff4253ed0266",
+    "reviewed_note": "model=opencode/big-pickle; session=ses_e1155bc2bffeb7q1VviRfIMnjF; role=independent doc review"
   },
   "docs/development/reference/security.md": {
     "verified_at": "2026-11-15",
@@ -1006,14 +1006,14 @@
     "note": "AGENTS routes here; the contracts are anchored to the modules that enforce them.",
     "reviewed_commit": "ad22f8d2894d81e601ec966d797e9fc87081365f",
     "reviewed_by": "second-reader",
-    "reviewed_at": "2026-11-15",
+    "reviewed_at": "2026-11-18",
     "sample": [
       "controls (`crates/zroutery-core/src/ir/mod.rs::ChatRequest`,",
       "`crates/zroutery-core/src/plugin/mod.rs`",
       "`crates/zroutery-core/src/outcome/attempt.rs::Attempt`)."
     ],
-    "reviewed_sha": "sha256:d6bf4c0870b88774b13fbca89d3c72f892fe07092bd9cd0d52575944ee0bb2fe",
-    "reviewed_note": "model=lightvela-auto; session=ses_e252286ddffe8Z3GfQw4rQOiDF"
+    "reviewed_sha": "sha256:86955bc16461998e5040388c8d6bd1095c67bbee4781a6e5a1e3a73d330deb31",
+    "reviewed_note": "model=opencode/big-pickle; session=ses_e1155bc2bffeb7q1VviRfIMnjF; role=independent doc review"
   },
   "docs/development/reference/documentation-rules.md": {
     "verified_at": "2026-11-15",
