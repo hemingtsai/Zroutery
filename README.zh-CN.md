@@ -157,6 +157,7 @@ MIT（见 `Cargo.toml` 的 `license`）。
 - 默认监听地址、端口与请求体上限：`crates/zroutery-core/src/config/server.rs::ServerConfig`。
 - HTTP 路由：`crates/zroutery-core/src/server/handlers.rs::build_app`。
 - 上游协议类型与 API 端面：`crates/zroutery-core/src/config/provider.rs::ProviderKind`、`crates/zroutery-core/src/config/provider.rs::ApiSurface`、`crates/zroutery-core/src/config/provider.rs::ProviderKind::is_decision`、`crates/zroutery-core/src/config/registry.rs::ProviderConfig::dialect`。
+- 上游客户端身份：`crates/zroutery-core/src/config/provider.rs::AUTO_IDENTITY_HEADERS`、`crates/zroutery-core/src/config/provider.rs::resolve_client_identity`。
 - 主题与插件端面：`crates/zroutery-plugin-api/src/capability.rs::Capability`、`crates/zroutery-plugin-api/src/manifest.rs::PluginManifestV1`、`crates/zroutery-plugin-api/src/options.rs::OptionsSchemaV1`、`crates/zroutery-core/src/config/plugin.rs::PluginInstanceConfig`、`ui/src/themes/registry.ts`、`scripts/plugin_theme_test.py`、`scripts/theme_sources/manifest.json`。
 - 打包目标：`src-tauri/tauri.conf.json::bundle`。
 - 配置文件与网关 token：`src-tauri/src/store.rs::FILE_NAME`、`src-tauri/src/store.rs::generate_token`。
@@ -319,6 +320,7 @@ MIT（见 `Cargo.toml` 的 `license`）。
 - 默认监听地址、端口与请求体上限：`crates/zroutery-core/src/config/server.rs::ServerConfig`。
 - HTTP 路由：`crates/zroutery-core/src/server/handlers.rs::build_app`。
 - 上游协议类型与 API 端面：`crates/zroutery-core/src/config/provider.rs::ProviderKind`、`crates/zroutery-core/src/config/provider.rs::ApiSurface`、`crates/zroutery-core/src/config/provider.rs::ProviderKind::is_decision`、`crates/zroutery-core/src/config/registry.rs::ProviderConfig::dialect`。
+- 上游客户端身份：`crates/zroutery-core/src/config/provider.rs::AUTO_IDENTITY_HEADERS`、`crates/zroutery-core/src/config/provider.rs::resolve_client_identity`。
 - 主题与插件端面：`crates/zroutery-plugin-api/src/capability.rs::Capability`、`crates/zroutery-plugin-api/src/manifest.rs::PluginManifestV1`、`crates/zroutery-core/src/config/plugin.rs::PluginInstanceConfig`、`ui/src/themes/registry.ts`、`scripts/plugin_theme_test.py`、`scripts/theme_sources/manifest.json`。
 - 打包目标：`src-tauri/tauri.conf.json::bundle`。
 - 配置文件与网关 token：`src-tauri/src/store.rs::FILE_NAME`、`src-tauri/src/store.rs::generate_token`。

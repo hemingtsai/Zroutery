@@ -1,6 +1,6 @@
 # Provider Surfaces Reference
 
-> Authority: reference · Owner: backend · Last verified: 2026-11-15 · Verified by: `cargo test --workspace --all-features --locked`
+> Authority: reference · Owner: backend · Last verified: 2026-11-21 · Verified by: `cargo test --workspace --all-features --locked`
 
 This page covers the provider kinds that are not the plain Anthropic/OpenAI
 upstream: NewAPI account panels, OpenCode Zen, and the CC Switch import. It does
@@ -80,6 +80,40 @@ Neither kind is a generic OpenAI relay. A build without the `opencode` feature
 still accepts the configuration and sends the request unshaped — no OpenCode
 headers or session, no OAuth refresh — and the upstream then rejects it.
 
+## Client identity
+
+A provider's client profile decides the identity name the upstream sees
+(`crates/zroutery-core/src/config/provider.rs::ProviderClientProfile`). The
+pipeline hands the resolver the operator's choice, not an already-resolved
+profile, which is what keeps `Auto` able to read the request
+(`crates/zroutery-core/src/server/pipeline/client.rs::client_for`).
+
+- `Auto` presents a caller it has a fingerprint for as that profile, and a caller
+  it has none for as itself: the caller's own `user-agent` plus the
+  `x-opencode-*` identity headers it sent
+  (`crates/zroutery-core/src/config/provider.rs::AUTO_IDENTITY_HEADERS`).
+- A pinned `Native` presents Zroutery's own name: the transport supplies
+  `zroutery/<version>` and the caller's user agent is never forwarded
+  (`crates/zroutery-core/src/upstream/mod.rs::USER_AGENT`,
+  `crates/zroutery-core/src/config/provider.rs::ProviderClientProfile::passthrough_headers`).
+  Session binding and the native Anthropic header allowlist are separate
+  mechanisms and can still carry a client header on that profile
+  (`crates/zroutery-core/src/server/pipeline/client.rs::client_for`).
+- A pinned fingerprint (`claude_code`, `codex`, `opencode_cli`) forwards only its
+  own allowlist and never the caller's user agent, so one request cannot carry
+  two identities
+  (`crates/zroutery-core/src/config/provider.rs::ProviderClientProfile::passthrough_headers`).
+- Authentication is never assembled from a client header: every forwarded name
+  is checked against `PASSTHROUGH_DENIED`, and the provider's own credential is
+  restored after the forwarding set is applied
+  (`crates/zroutery-core/src/upstream/headers.rs::build_headers_for_identity`).
+
+OpenCode routed through a custom provider is the case that makes the difference
+visible: it inherits the AI SDK's user agent rather than an `opencode/…` one, so
+the `x-opencode-*` headers are the only identity it leaves on the wire
+(`crates/zroutery-core/src/client.rs::opencode_header_pair`). Forwarding them is
+what makes an `Auto` provider present the caller instead of the gateway.
+
 ## CC Switch import
 
 CC Switch is a client provider database, imported read-only.
@@ -116,6 +150,7 @@ every member is a decision endpoint
 |---|---|---|
 | panel token rejected as expired | wrong panel root or missing user id | check `panel_root` and the account user id |
 | balance reports zero | the panel answered a different account | compare the account/user binding |
+| request refused 403 `client_not_allowed` | the upstream admits coding clients by name and saw `zroutery/<version>` | pin the profile that upstream admits; OpenCode through a custom provider presents the AI SDK's agent, so an OpenCode-only relay needs `opencode_cli` |
 | OpenCode request refused 403 | missing or wrong shaping | check the provider kind and profile |
 | Console token refresh fails | expired refresh token | re-run the device-code flow |
 | CC Switch import finds nothing | wrong database or no usage rows | check the source path and range |
@@ -135,6 +170,12 @@ every member is a decision endpoint
 
 - `crates/zroutery-core/src/config/provider.rs::ProviderKind`
 - `crates/zroutery-core/src/config/provider.rs::ProviderKind::is_decision`
+- `crates/zroutery-core/src/config/provider.rs::AUTO_IDENTITY_HEADERS`
+- `crates/zroutery-core/src/config/provider.rs::ProviderClientProfile::passthrough_headers`
+- `crates/zroutery-core/src/server/pipeline/client.rs::client_for`
+- `crates/zroutery-core/src/upstream/headers.rs::build_headers_for_identity`
+- `crates/zroutery-core/src/upstream/mod.rs::USER_AGENT`
+- `crates/zroutery-core/src/client.rs::opencode_header_pair`
 - `crates/zroutery-core/src/config/binding.rs::panel_root`
 - `crates/zroutery-core/src/config/registry.rs::AccountConfig`
 - `crates/zroutery-core/src/account/adapters/newapi/mod.rs::NewApiAdapter`

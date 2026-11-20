@@ -1,6 +1,6 @@
 # Architecture
 
-> Authority: normative · Owner: backend · Last verified: 2026-11-15 · Verified by: `scripts/docs_check.py`
+> Authority: normative · Owner: backend · Last verified: 2026-11-21 · Verified by: `scripts/docs_check.py`
 
 This document describes the current boundaries and the invariants a change must
 preserve. It does not track pass/fail status (`current-state.md`), command
@@ -64,6 +64,20 @@ ingress handler
   before the router orders it (`crates/zroutery-core/src/policy/policy.rs::RoutingPolicy`).
 - Transport is one `Upstream` per provider policy
   (`crates/zroutery-core/src/upstream/mod.rs::Upstream`).
+- Client identity is resolved once per attempt, from the operator's configured
+  profile rather than an already-resolved one
+  (`crates/zroutery-core/src/server/pipeline/client.rs::client_for`). An `Auto`
+  provider presents a caller it has a fingerprint for as that profile, and a
+  caller it has none for as itself: its own `user-agent` and `x-opencode-*`
+  headers travel instead of the transport's `zroutery/<version>`
+  (`crates/zroutery-core/src/config/provider.rs::AUTO_IDENTITY_HEADERS`,
+  `crates/zroutery-core/src/config/provider.rs::resolve_client_identity`), which
+  the resolver and wire tests assert
+  (`crates/zroutery-core/tests/client_profile_resolution_test.rs::auto_forwards_the_opencode_headers_a_custom_provider_still_carries`,
+  `crates/zroutery-core/src/upstream/client_tests.rs::auto_forwards_the_callers_own_ua_to_the_actual_wire`).
+  A pinned profile never forwards the caller's user agent, so one request cannot
+  carry two identities
+  (`crates/zroutery-core/src/config/provider.rs::ProviderClientProfile::passthrough_headers`).
 
 ## 3. Invariants
 

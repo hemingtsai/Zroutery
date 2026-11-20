@@ -157,6 +157,7 @@ MIT（見 `Cargo.toml` 的 `license`）。
 - 預設監聽位址、連接埠與請求本文上限：`crates/zroutery-core/src/config/server.rs::ServerConfig`。
 - HTTP 路由：`crates/zroutery-core/src/server/handlers.rs::build_app`。
 - 上游協定型別與 API 端面：`crates/zroutery-core/src/config/provider.rs::ProviderKind`、`crates/zroutery-core/src/config/provider.rs::ApiSurface`、`crates/zroutery-core/src/config/provider.rs::ProviderKind::is_decision`、`crates/zroutery-core/src/config/registry.rs::ProviderConfig::dialect`。
+- 上游用戶端身分：`crates/zroutery-core/src/config/provider.rs::AUTO_IDENTITY_HEADERS`、`crates/zroutery-core/src/config/provider.rs::resolve_client_identity`。
 - 主題與外掛端面：`crates/zroutery-plugin-api/src/capability.rs::Capability`、`crates/zroutery-plugin-api/src/manifest.rs::PluginManifestV1`、`crates/zroutery-plugin-api/src/options.rs::OptionsSchemaV1`、`crates/zroutery-core/src/config/plugin.rs::PluginInstanceConfig`、`ui/src/themes/registry.ts`、`scripts/plugin_theme_test.py`、`scripts/theme_sources/manifest.json`。
 - 打包目標：`src-tauri/tauri.conf.json::bundle`。
 - 設定檔與閘道 token：`src-tauri/src/store.rs::FILE_NAME`、`src-tauri/src/store.rs::generate_token`。
@@ -319,6 +320,7 @@ MIT（見 `Cargo.toml` 的 `license`）。
 - 預設監聽位址、連接埠與請求本文上限：`crates/zroutery-core/src/config/server.rs::ServerConfig`。
 - HTTP 路由：`crates/zroutery-core/src/server/handlers.rs::build_app`。
 - 上游協定型別與 API 端面：`crates/zroutery-core/src/config/provider.rs::ProviderKind`、`crates/zroutery-core/src/config/provider.rs::ApiSurface`、`crates/zroutery-core/src/config/provider.rs::ProviderKind::is_decision`、`crates/zroutery-core/src/config/registry.rs::ProviderConfig::dialect`。
+- 上游用戶端身分：`crates/zroutery-core/src/config/provider.rs::AUTO_IDENTITY_HEADERS`、`crates/zroutery-core/src/config/provider.rs::resolve_client_identity`。
 - 主題與外掛端面：`crates/zroutery-plugin-api/src/capability.rs::Capability`、`crates/zroutery-plugin-api/src/manifest.rs::PluginManifestV1`、`crates/zroutery-core/src/config/plugin.rs::PluginInstanceConfig`、`ui/src/themes/registry.ts`、`scripts/plugin_theme_test.py`、`scripts/theme_sources/manifest.json`。
 - 打包目標：`src-tauri/tauri.conf.json::bundle`。
 - 設定檔與閘道 token：`src-tauri/src/store.rs::FILE_NAME`、`src-tauri/src/store.rs::generate_token`。

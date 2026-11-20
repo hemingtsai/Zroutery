@@ -283,6 +283,46 @@ async fn codex_profile_overrides_the_default_ua_on_the_actual_wire() {
     assert!(!request.contains("\r\nuser-agent: opencode/"));
 }
 
+#[tokio::test]
+async fn auto_forwards_the_callers_own_ua_to_the_actual_wire() {
+    // The resolver's forwarding set is only a claim until the bytes are written.
+    // `Auto` on an unknown client has to put that client's user agent on the
+    // request, replacing the transport's `zroutery/<ver>` default.
+    let (port, captured) = one_shot(response(
+        "HTTP/1.1 200 OK",
+        "content-type: application/json\r\n",
+        COMPLETION_BODY,
+    ))
+    .await;
+    let provider = local_provider(port);
+    let mut inbound = axum::http::HeaderMap::new();
+    inbound.insert("user-agent", "ai-sdk/5.0.0".parse().unwrap());
+    let identity =
+        crate::config::resolve_client_identity(provider.configured_client_profile(), &inbound);
+    super::Upstream::new(true, 5)
+        .send_with_identity(
+            &provider,
+            Some("sk-fixture"),
+            &serde_json::json!({"model": "test-model", "messages": [{"role": "user", "content": "hi"}]}),
+            &identity,
+        )
+        .await
+        .unwrap();
+    let request = captured.await.unwrap().to_ascii_lowercase();
+    assert!(
+        request.contains("\r\nuser-agent: ai-sdk/5.0.0\r\n"),
+        "the caller's own user agent must reach the upstream: {request:?}"
+    );
+    assert!(
+        !request.contains("\r\nuser-agent: zroutery/"),
+        "the transport default must not survive alongside it: {request:?}"
+    );
+    assert!(
+        request.contains("\r\nauthorization: bearer sk-fixture\r\n"),
+        "forwarding an identity never changes who the call authenticates as: {request:?}"
+    );
+}
+
 fn with_proxy(inherited_bypass: bool, port: u16) -> super::Upstream {
     super::Upstream {
         clients: std::sync::RwLock::new(super::http::HttpClients::with_test_proxy(

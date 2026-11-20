@@ -1,6 +1,6 @@
 # Protocol Reference
 
-> Authority: reference · Owner: backend · Last verified: 2026-11-15 · Verified by: `cargo test --workspace --all-features --locked`
+> Authority: reference · Owner: backend · Last verified: 2026-11-21 · Verified by: `cargo test --workspace --all-features --locked`
 
 This page describes the canonical IR, the four client dialects, SSE and the
 media/reasoning bridges. It does not define routing; see the routing reference.
@@ -55,6 +55,13 @@ provider's `ApiSurface` selects which OpenAI surface it answers
 `encode_request` dispatches on the resulting `Dialect`
 (`crates/zroutery-core/src/protocol/mod.rs::encode_request`). Gemini is a client
 entry protocol only (`crates/zroutery-core/src/config/provider.rs::ProviderKind`).
+
+The dialect and the client identity are separate choices. Which surface the
+request is encoded for is `ApiSurface`; which name the upstream sees is the
+provider's client profile, and an `Auto` provider that has no fingerprint for the
+caller forwards the caller's own instead of the gateway's
+(`crates/zroutery-core/src/config/provider.rs::AUTO_IDENTITY_HEADERS`,
+`crates/zroutery-core/src/config/provider.rs::resolve_client_identity`).
 
 ## Streaming
 

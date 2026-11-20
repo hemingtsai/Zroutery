@@ -303,3 +303,131 @@ fn an_unknown_profile_name_is_rejected_rather_than_defaulted() {
         "an unrecognised profile name should fail to parse"
     );
 }
+
+/// The names in one resolved forwarding set, in allowlist order.
+fn forwarded(identity: &zroutery_core::ClientIdentity) -> Vec<&str> {
+    identity
+        .passthrough
+        .iter()
+        .map(|(name, _)| name.as_str())
+        .collect()
+}
+
+/// Inbound headers as they arrive from a client with no fabricated fingerprint.
+fn unknown_client_headers() -> axum::http::HeaderMap {
+    let mut headers = axum::http::HeaderMap::new();
+    headers.insert("user-agent", "ai-sdk/5.0.0".parse().unwrap());
+    headers
+}
+
+#[test]
+fn auto_forwards_an_unknown_clients_own_identity() {
+    // The whole point of `Auto` is to be the client that is calling. A client
+    // with no fingerprint of its own has only one honest presentation left, and
+    // it is the one the upstream needs to see: without it the request leaves as
+    // `zroutery/<ver>` and a gateway that admits coding clients by name refuses
+    // it (observed: `403 client_not_allowed`).
+    let identity = zroutery_core::resolve_client_identity(Profile::Auto, &unknown_client_headers());
+
+    assert_eq!(
+        identity.profile,
+        Profile::Native,
+        "an unknown client is still resolved to the native profile"
+    );
+    assert_eq!(
+        forwarded(&identity),
+        vec!["user-agent"],
+        "its own user agent is what travels"
+    );
+    assert_eq!(
+        identity.passthrough[0].1.to_str().unwrap(),
+        "ai-sdk/5.0.0",
+        "the value forwarded is the client's, never a fabricated one"
+    );
+}
+
+#[test]
+fn auto_forwards_the_opencode_headers_a_custom_provider_still_carries() {
+    // OpenCode routed through a custom provider inherits the AI SDK's user
+    // agent, so `opencode/…` never appears in its UA; the `x-opencode-*` headers
+    // are the identity it does leave on the wire (`crate::client`). Forwarding
+    // them is what makes the forwarded identity the *caller's*.
+    let mut headers = unknown_client_headers();
+    headers.insert("x-opencode-client", "cli".parse().unwrap());
+    headers.insert("x-opencode-project", "global".parse().unwrap());
+    headers.insert(
+        "x-opencode-session",
+        "ses_0123456789abcdefghijklmnop".parse().unwrap(),
+    );
+    headers.insert(
+        "x-opencode-request",
+        "msg_0123456789abcdefghijklmnop".parse().unwrap(),
+    );
+
+    let identity = zroutery_core::resolve_client_identity(Profile::Auto, &headers);
+
+    assert_eq!(
+        forwarded(&identity),
+        vec![
+            "user-agent",
+            "x-opencode-client",
+            "x-opencode-project",
+            "x-opencode-session",
+            "x-opencode-request",
+        ],
+        "every identity header the caller sent travels, and nothing else"
+    );
+}
+
+#[test]
+fn auto_never_forwards_a_header_that_authenticates() {
+    // The identity set is an allowlist, and authentication is not on it: a
+    // client header may never decide who the upstream call authenticates as.
+    let mut headers = unknown_client_headers();
+    headers.insert("authorization", "Bearer sk-client".parse().unwrap());
+    headers.insert("x-api-key", "sk-client".parse().unwrap());
+
+    let identity = zroutery_core::resolve_client_identity(Profile::Auto, &headers);
+
+    assert_eq!(forwarded(&identity), vec!["user-agent"]);
+}
+
+#[test]
+fn a_pinned_native_profile_forwards_nothing_of_the_callers_identity() {
+    // Pinning `Native` is how an operator asks for Zroutery's own identity; the
+    // `Auto` forwarding above is the opposite request and must not leak into it.
+    let pinned = provider(ProviderKind::OpenAICompatible, Profile::Native);
+
+    let identity = zroutery_core::resolve_client_identity(
+        pinned.configured_client_profile(),
+        &unknown_client_headers(),
+    );
+
+    assert_eq!(identity.profile, Profile::Native);
+    assert!(
+        identity.passthrough.is_empty(),
+        "a pinned native identity carries nothing of the caller's: {:?}",
+        forwarded(&identity)
+    );
+}
+
+#[test]
+fn a_pinned_claude_code_profile_forwards_its_allowlist_not_the_user_agent() {
+    // A fixed profile forwards what that CLI really sends, and the user agent is
+    // the fabricator's to own there — forwarding the caller's would present two
+    // different identities in one request.
+    let pinned = provider(ProviderKind::OpenAICompatible, Profile::ClaudeCode);
+    let mut headers = axum::http::HeaderMap::new();
+    headers.insert("user-agent", CLAUDE_UA.parse().unwrap());
+    headers.insert("x-stainless-lang", "js".parse().unwrap());
+
+    let identity =
+        zroutery_core::resolve_client_identity(pinned.configured_client_profile(), &headers);
+
+    assert_eq!(identity.profile, Profile::ClaudeCode);
+    assert_eq!(
+        forwarded(&identity),
+        vec!["x-stainless-lang"],
+        "only the profile's own allowlist travels"
+    );
+}

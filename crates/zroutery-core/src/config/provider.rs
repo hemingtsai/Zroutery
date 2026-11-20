@@ -326,6 +326,10 @@ impl ProviderClientProfile {
     pub fn passthrough_headers(self) -> &'static [&'static str] {
         match self {
             // Fabrication-only: the native identity carries nothing of its own.
+            // `Auto` is never resolved to itself — [`resolve_client_identity`]
+            // reads the request — so its arm is unreachable in practice; the
+            // caller's own identity travels under [`AUTO_IDENTITY_HEADERS`]
+            // instead, which is a different question from a profile's allowlist.
             Self::Auto | Self::Native => &[],
             // The OpenCode identity is fabricated by the profile arm; its session
             // header is owned there too, never forwarded verbatim (a non-canonical
@@ -384,6 +388,34 @@ pub fn passthrough_denied(name: &str) -> bool {
     PASSTHROUGH_DENIED.iter().any(|denied| *denied == name)
 }
 
+/// What an `Auto` provider forwards when it has no fingerprint to present.
+///
+/// `Auto` means "be the client that is calling". A client with a fabricated
+/// profile is presented as that profile, but a client with none has only one
+/// honest presentation left: its own. Without these, the transport's own
+/// `zroutery/<version>` is what the upstream sees, so a gateway that admits
+/// coding clients *by name* refuses a request it would otherwise serve —
+/// observed as `403 client_not_allowed` from a relay sold to coding CLIs, where
+/// the only difference between the refused request and the served one was the
+/// user agent.
+///
+/// The OpenCode CLI is the case that forces the `x-opencode-*` entries: routed
+/// through a custom provider it inherits the AI SDK's user agent, so the UA
+/// alone does not name it (see [`crate::client`]), while those headers are set
+/// on the shared request path and do. They travel as the caller's identity, not
+/// as a credential: [`PASSTHROUGH_DENIED`] still wins, and nothing here can
+/// reach a header that authenticates.
+///
+/// A *pinned* `Native` is unaffected — pinning it is how an operator asks for
+/// Zroutery's own identity, and this is the opposite request.
+pub const AUTO_IDENTITY_HEADERS: &[&str] = &[
+    "user-agent",
+    "x-opencode-client",
+    "x-opencode-project",
+    "x-opencode-session",
+    "x-opencode-request",
+];
+
 /// Detection result plus the already-validated forwarding set.
 ///
 /// Built once per inbound request by [`resolve_client_identity`] and then handed
@@ -391,7 +423,8 @@ pub fn passthrough_denied(name: &str) -> bool {
 /// replay all present the identical client.
 ///
 /// Forwarding is an *allowlist*: this carries only the client headers the
-/// resolved profile names, each one actually sent by the client, and never a
+/// resolved profile names — or, under `Auto` with no fingerprint for the caller,
+/// the caller's own identity — each one actually sent by the client, and never a
 /// general copy of the inbound request. Authentication and framing headers are
 /// excluded both by the allowlist and by [`PASSTHROUGH_DENIED`].
 #[derive(Debug, Clone)]
@@ -429,21 +462,36 @@ pub struct ClientIdentity {
 /// builds the passthrough set, because an operator who pins Claude Code wants the
 /// real CLI's headers just as much as an auto-detected one does.
 ///
-/// Only the resolved profile's allowlisted headers are collected. This is
+/// Only the resolved profile's allowlisted headers are collected, with one
+/// addition: under `Auto`, a caller with no fingerprint of its own is presented
+/// as itself, so [`AUTO_IDENTITY_HEADERS`] are forwarded for it. This is
 /// deliberately not a general passthrough: the profile is the contract for which
 /// of the client's own headers may travel, and everything outside it is dropped.
+///
+/// `configured` has to be the operator's choice, not the already-resolved
+/// profile: resolving first destroys the `Auto` case, and with it both the
+/// detection and this identity forwarding.
 pub fn resolve_client_identity(
     configured: ProviderClientProfile,
     headers: &HeaderMap,
 ) -> ClientIdentity {
-    let profile = if matches!(configured, ProviderClientProfile::Auto) {
+    let auto = matches!(configured, ProviderClientProfile::Auto);
+    let profile = if auto {
         detect_client_profile(headers)
     } else {
         configured
     };
 
+    // A caller we have a fingerprint for keeps its profile allowlist. A caller
+    // we have none for — `Auto` resolved to `Native` — is presented as itself.
+    let allowlist: &[&str] = if auto && profile == ProviderClientProfile::Native {
+        AUTO_IDENTITY_HEADERS
+    } else {
+        profile.passthrough_headers()
+    };
+
     let mut passthrough = Vec::new();
-    for header in profile.passthrough_headers() {
+    for header in allowlist {
         // Defence in depth: an allowlist entry that reaches this point with a
         // denied name is dropped, never forwarded.
         if passthrough_denied(header) {
@@ -494,7 +542,9 @@ fn header_text<'a>(headers: &'a HeaderMap, name: &str) -> Option<&'a str> {
 /// 4. `User-Agent` starting with `claude-cli/`.
 /// 5. `User-Agent` starting with `codex_cli_rs/`, `codex/`, or an observed
 ///    Codex Desktop form (`codex_desktop_` / `Codex Desktop/`).
-/// 6. Nothing matched: the client is unknown and gets the native identity.
+/// 6. Nothing matched: the client is unknown and gets the native identity — and,
+///    under `Auto`, its own headers travel with it
+///    ([`AUTO_IDENTITY_HEADERS`]).
 fn detect_client_profile(headers: &HeaderMap) -> ProviderClientProfile {
     if let Some(hint) = header_text(headers, "x-zroutery-client") {
         match hint.trim().to_ascii_lowercase().as_str() {

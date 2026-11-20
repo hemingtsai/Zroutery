@@ -52,7 +52,11 @@ pub(super) fn client_identity(headers: &HeaderMap) -> Option<String> {
 pub(super) fn client_for(req: &ChatRequest, provider: &ProviderConfig) -> ClientIdentity {
     #[allow(unused_mut)]
     let mut identity = resolve_client_identity(
-        provider.client_profile_for(req.client_identity.as_deref()),
+        // The operator's choice, not the already-resolved profile: `Auto` has to
+        // reach the resolver as `Auto`, or it can neither detect the client from
+        // the headers nor forward that client's own identity when it has no
+        // fingerprint to present.
+        provider.configured_client_profile(),
         &req.client_headers,
     );
     identity.reply_headers = req.reply_headers.clone();
