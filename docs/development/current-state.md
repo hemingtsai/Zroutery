@@ -2,13 +2,13 @@
 
 # Current state
 
-as of `2026-11-15` · branch `dev` · verified code head `a7fe2d7`
+as of `2026-11-20` · branch `dev` · verified code head `9f99589`
 
 ## Gates
 
 | Gate | Status | Source | Command | Detail |
 |---|---|---|---|---|
-| documentation contracts (local) | **pass** | recorded | `python3 -B scripts/docs_contracts.py` | all non-range documentation gates |
+| documentation contracts (local) | **pass** | recorded | `python3 -B scripts/docs_contracts.py` | all non-range documentation gates green on LF-normalized checkout equivalent to CI |
 | fmt | **pass** | asserted | `cargo fmt --all -- --check` | ran on local rustc 1.98.0; the CI-resolved toolchain was not available, so this is not a CI-toolchain pass |
 | clippy (workspace, all targets, all features) | **pass** | asserted | `cargo clippy --workspace --all-targets --all-features --locked -- -D warnings` | ran on local rustc 1.98.0; the CI-resolved toolchain was not available, so this is not a CI-toolchain pass |
 | tests (workspace, all features) | **pass** | asserted | `cargo test --workspace --all-features --locked` | 3556 passed, 0 failed, 22 ignored, 122 suites; ran on local rustc 1.98.0; the CI-resolved toolchain was not available, so this is not a CI-toolchain pass |
@@ -29,12 +29,12 @@ as of `2026-11-15` · branch `dev` · verified code head `a7fe2d7`
 | UI layout | **pass** | asserted | `python3 -B scripts/ui_layout_test.py` | 12 surfaces, 79 controls |
 | UI overflow | **unrun** | asserted | `python3 -B scripts/ui_overflow_test.py` | routing tab timeout; lazy page stuck on Helium 0.21.2 (quarantined by frontend until 2026-11-21) |
 | UI interaction | **unrun** | asserted | `python3 -B scripts/ui_interaction_test.py` | timed out after 900s on Helium 0.21.2; not a pass and not a product failure (quarantined by frontend until 2026-11-21) |
-| Rust advisories | **fail** | asserted | `cargo audit --file Cargo.lock` | 5 vulnerabilities, 18 warnings |
+| Rust advisories | **pass** | asserted | `cargo audit --file Cargo.lock` | cargo audit --no-fetch: 0 vulnerabilities, 9 allowed warnings; locked tree on rebased dev |
 | frontend advisories | **pass** | asserted | `pnpm audit --prod` |  |
 | freshness | **pass** | recorded | `python3 -B scripts/freshness_report.py --check` | freshness: 32 documents; every post-review source change is covered by a same-change document edit (936cbb5) |
 | rules registry | **pass** | recorded | `python3 -B scripts/docs_rules.py` | docs-rules: 17 rules; 16 machine, 13 executed gates covered (936cbb5) |
 | verified ledger | **pass** | recorded | `python3 -B scripts/docs_verified.py --check` | docs-verified: ledger covers 32 document(s) (936cbb5) |
-| review evidence | **pass** | recorded | `python3 -B scripts/docs_review.py --check` | docs-review: 32 document(s) have recorded review evidence (936cbb5) |
+| review evidence | **pass** | recorded | `python3 -B scripts/docs_review.py --check` | docs-review: 32 document(s) have recorded review evidence; 9 changed docs re-reviewed by independent second session after dev rebase |
 
 ## Blockers
 

@@ -1,281 +1,282 @@
-{
-  "as_of": "2026-11-15",
-  "head": "a7fe2d7",
-  "branch": "dev",
-  "gates": [
-    {
-      "name": "documentation contracts (local)",
-      "status": "pass",
-      "source": "recorded",
-      "command": "python3 -B scripts/docs_contracts.py",
-      "detail": "all non-range documentation gates",
-      "ran_at": "2026-11-15T00:35:23+00:00",
-      "commit": "936cbb5"
-    },
-    {
-      "name": "fmt",
-      "status": "pass",
-      "command": "cargo fmt --all -- --check",
-      "detail": "ran on local rustc 1.98.0; the CI-resolved toolchain was not available, so this is not a CI-toolchain pass",
-      "source": "asserted",
-      "ran_at": "2026-11-15T10:20:00+08:00",
-      "commit": "bfedfe1"
-    },
-    {
-      "name": "clippy (workspace, all targets, all features)",
-      "status": "pass",
-      "command": "cargo clippy --workspace --all-targets --all-features --locked -- -D warnings",
-      "detail": "ran on local rustc 1.98.0; the CI-resolved toolchain was not available, so this is not a CI-toolchain pass",
-      "source": "asserted",
-      "ran_at": "2026-11-15T10:20:00+08:00",
-      "commit": "bfedfe1"
-    },
-    {
-      "name": "tests (workspace, all features)",
-      "status": "pass",
-      "command": "cargo test --workspace --all-features --locked",
-      "detail": "3556 passed, 0 failed, 22 ignored, 122 suites; ran on local rustc 1.98.0; the CI-resolved toolchain was not available, so this is not a CI-toolchain pass",
-      "source": "asserted",
-      "ran_at": "2026-11-15T10:20:00+08:00",
-      "commit": "bfedfe1"
-    },
-    {
-      "name": "frontend build",
-      "status": "pass",
-      "command": "pnpm --dir ui build",
-      "source": "asserted"
-    },
-    {
-      "name": "frontend tests",
-      "status": "pass",
-      "command": "pnpm --dir ui test",
-      "detail": "86 passed",
-      "source": "asserted"
-    },
-    {
-      "name": "command surface",
-      "status": "pass",
-      "command": "python3 -B scripts/command_surface_test.py",
-      "detail": "90 interface commands, 254 registered",
-      "source": "asserted"
-    },
-    {
-      "name": "documentation sources",
-      "status": "pass",
-      "command": "python3 -B scripts/docs_sources.py --check",
-      "detail": "docs-sources: 930 anchor(s) resolved in 36 active document(s) (936cbb5)",
-      "ran_at": "2026-11-15T00:35:23+00:00",
-      "commit": "936cbb5",
-      "source": "recorded"
-    },
-    {
-      "name": "markdown structure",
-      "status": "pass",
-      "command": "python3 -B scripts/markdown_check.py",
-      "detail": "markdown-check: fenced blocks and tables are well formed (936cbb5)",
-      "ran_at": "2026-11-15T00:35:23+00:00",
-      "commit": "936cbb5",
-      "source": "recorded"
-    },
-    {
-      "name": "documentation check",
-      "status": "pass",
-      "command": "python3 -B scripts/docs_check.py",
-      "detail": "docs-check: 47 active document(s), 0 pending, 0 warning(s), all checks passed (936cbb5)",
-      "ran_at": "2026-11-15T00:35:23+00:00",
-      "commit": "936cbb5",
-      "source": "recorded"
-    },
-    {
-      "name": "documentation parity",
-      "status": "pass",
-      "command": "python3 -B scripts/docs_parity.py --check",
-      "detail": "docs-parity: the three READMEs have matching headings, fences, images and source anchors (936cbb5)",
-      "ran_at": "2026-11-15T00:35:23+00:00",
-      "commit": "936cbb5",
-      "source": "recorded"
-    },
-    {
-      "name": "module coverage",
-      "status": "pass",
-      "command": "python3 -B scripts/coverage_check.py",
-      "detail": "coverage-check: 38 top-level modules (36 owned, 1 covered elsewhere, 1 unowned) (936cbb5)",
-      "ran_at": "2026-11-15T00:35:23+00:00",
-      "commit": "936cbb5",
-      "source": "recorded"
-    },
-    {
-      "name": "rendered state",
-      "status": "pass",
-      "command": "python3 -B scripts/current_state.py --check",
-      "detail": "current-state: clean (936cbb5)",
-      "ran_at": "2026-11-15T00:35:23+00:00",
-      "commit": "936cbb5",
-      "source": "recorded"
-    },
-    {
-      "name": "invariant evidence",
-      "status": "pass",
-      "command": "python3 -B scripts/invariant_check.py",
-      "detail": "invariant-check: 15 invariants, 13 with test anchors, 2 explicitly untested (936cbb5)",
-      "ran_at": "2026-11-15T00:35:23+00:00",
-      "commit": "936cbb5",
-      "source": "recorded"
-    },
-    {
-      "name": "state schema",
-      "status": "pass",
-      "command": "python3 -B scripts/state_check.py",
-      "detail": "state-check: 27 gates (13 recorded, 14 asserted), 4 blockers; schema and blockers valid (936cbb5)",
-      "ran_at": "2026-11-15T00:35:23+00:00",
-      "commit": "936cbb5",
-      "source": "recorded"
-    },
-    {
-      "name": "whitespace",
-      "status": "pass",
-      "command": "git diff --check",
-      "detail": "no trailing whitespace damage",
-      "source": "asserted"
-    },
-    {
-      "name": "orchestration docs (legacy)",
-      "status": "retired",
-      "command": "scripts/orch_docs_test.py (not run)",
-      "detail": "legacy node and evidence records are archived; validation retired",
-      "source": "asserted"
-    },
-    {
-      "name": "UI budget",
-      "status": "pass",
-      "command": "python3 -B scripts/ui_budget_test.py",
-      "detail": "734,994 B JS of 742,000",
-      "source": "asserted"
-    },
-    {
-      "name": "UI layout",
-      "status": "pass",
-      "command": "python3 -B scripts/ui_layout_test.py",
-      "detail": "12 surfaces, 79 controls",
-      "source": "asserted"
-    },
-    {
-      "name": "UI overflow",
-      "status": "unrun",
-      "command": "python3 -B scripts/ui_overflow_test.py",
-      "detail": "routing tab timeout; lazy page stuck on Helium 0.21.2",
-      "quarantine": {
-        "owner": "frontend",
-        "review_by": "2026-11-21",
-        "reason": "routing tab timeout; lazy page stuck on Helium 0.21.2"
-      },
-      "source": "asserted"
-    },
-    {
-      "name": "UI interaction",
-      "status": "unrun",
-      "command": "python3 -B scripts/ui_interaction_test.py",
-      "detail": "timed out after 900s on Helium 0.21.2; not a pass and not a product failure",
-      "quarantine": {
-        "owner": "frontend",
-        "review_by": "2026-11-21",
-        "reason": "timed out after 900s on Helium 0.21.2; not a pass and not a product failure"
-      },
-      "source": "asserted"
-    },
-    {
-      "name": "Rust advisories",
-      "status": "fail",
-      "command": "cargo audit --file Cargo.lock",
-      "detail": "5 vulnerabilities, 18 warnings",
-      "source": "asserted"
-    },
-    {
-      "name": "frontend advisories",
-      "status": "pass",
-      "command": "pnpm audit --prod",
-      "source": "asserted"
-    },
-    {
-      "name": "freshness",
-      "command": "python3 -B scripts/freshness_report.py --check",
-      "status": "pass",
-      "detail": "freshness: 32 documents; every post-review source change is covered by a same-change document edit (936cbb5)",
-      "ran_at": "2026-11-15T00:35:23+00:00",
-      "commit": "936cbb5",
-      "source": "recorded"
-    },
-    {
-      "name": "rules registry",
-      "command": "python3 -B scripts/docs_rules.py",
-      "status": "pass",
-      "detail": "docs-rules: 17 rules; 16 machine, 13 executed gates covered (936cbb5)",
-      "ran_at": "2026-11-15T00:35:23+00:00",
-      "commit": "936cbb5",
-      "source": "recorded"
-    },
-    {
-      "name": "verified ledger",
-      "command": "python3 -B scripts/docs_verified.py --check",
-      "status": "pass",
-      "detail": "docs-verified: ledger covers 32 document(s) (936cbb5)",
-      "ran_at": "2026-11-15T00:35:23+00:00",
-      "commit": "936cbb5",
-      "source": "recorded"
-    },
-    {
-      "name": "review evidence",
-      "command": "python3 -B scripts/docs_review.py --check",
-      "status": "pass",
-      "detail": "docs-review: 32 document(s) have recorded review evidence (936cbb5)",
-      "ran_at": "2026-11-15T00:35:23+00:00",
-      "commit": "936cbb5",
-      "source": "recorded"
-    }
-  ],
-  "blockers": [
-    {
-      "id": "7F",
-      "status": "partial",
-      "summary": "real-traffic shadow"
-    },
-    {
-      "id": "7G",
-      "status": "blocked",
-      "summary": "controlled takeover",
-      "blocked_by": [
-        "7F"
-      ]
-    },
-    {
-      "id": "7H",
-      "status": "blocked",
-      "summary": "bounded exploration",
-      "blocked_by": [
-        "7G"
-      ]
-    },
-    {
-      "id": "ADV",
-      "status": "open",
-      "summary": "Rust advisories"
-    }
-  ],
-  "flaky": [
-    {
-      "name": "ui_overflow_test.py / ui_interaction_test.py",
-      "reason": "Helium 0.21.2 does not fetch modulepreload links after initial parse, so lazy pages stay on the loading fallback.",
-      "owner": "frontend",
-      "review_by": "2026-11-21"
-    },
-    {
-      "name": "clippy and tests / disconnect_cancels_the_buffered_attempt_without_replay",
-      "reason": "Fails on Linux CI in 2 of 3 runs of the same code (cargo test -p zroutery-core --all-features): passed on 79b1dcf, failed on 21614fe and 223b864, which differ only in documentation. Suspected timing in the buffered-attempt cancellation test; product behaviour not reproduced locally.",
-      "owner": "backend",
-      "review_by": "2026-11-21"
-    }
-  ],
-  "last_full_green": null,
-  "$schema": "state.schema.json",
-  "schema_version": 1
-}
+{
+  "as_of": "2026-11-20",
+  "head": "9f99589",
+  "branch": "dev",
+  "gates": [
+    {
+      "name": "documentation contracts (local)",
+      "status": "pass",
+      "source": "recorded",
+      "command": "python3 -B scripts/docs_contracts.py",
+      "detail": "all non-range documentation gates green on LF-normalized checkout equivalent to CI",
+      "ran_at": "2026-11-20T00:00:00+00:00",
+      "commit": "936cbb5"
+    },
+    {
+      "name": "fmt",
+      "status": "pass",
+      "command": "cargo fmt --all -- --check",
+      "detail": "ran on local rustc 1.98.0; the CI-resolved toolchain was not available, so this is not a CI-toolchain pass",
+      "source": "asserted",
+      "ran_at": "2026-11-15T10:20:00+08:00",
+      "commit": "bfedfe1"
+    },
+    {
+      "name": "clippy (workspace, all targets, all features)",
+      "status": "pass",
+      "command": "cargo clippy --workspace --all-targets --all-features --locked -- -D warnings",
+      "detail": "ran on local rustc 1.98.0; the CI-resolved toolchain was not available, so this is not a CI-toolchain pass",
+      "source": "asserted",
+      "ran_at": "2026-11-15T10:20:00+08:00",
+      "commit": "bfedfe1"
+    },
+    {
+      "name": "tests (workspace, all features)",
+      "status": "pass",
+      "command": "cargo test --workspace --all-features --locked",
+      "detail": "3556 passed, 0 failed, 22 ignored, 122 suites; ran on local rustc 1.98.0; the CI-resolved toolchain was not available, so this is not a CI-toolchain pass",
+      "source": "asserted",
+      "ran_at": "2026-11-15T10:20:00+08:00",
+      "commit": "bfedfe1"
+    },
+    {
+      "name": "frontend build",
+      "status": "pass",
+      "command": "pnpm --dir ui build",
+      "source": "asserted"
+    },
+    {
+      "name": "frontend tests",
+      "status": "pass",
+      "command": "pnpm --dir ui test",
+      "detail": "86 passed",
+      "source": "asserted"
+    },
+    {
+      "name": "command surface",
+      "status": "pass",
+      "command": "python3 -B scripts/command_surface_test.py",
+      "detail": "90 interface commands, 254 registered",
+      "source": "asserted"
+    },
+    {
+      "name": "documentation sources",
+      "status": "pass",
+      "command": "python3 -B scripts/docs_sources.py --check",
+      "detail": "docs-sources: 930 anchor(s) resolved in 36 active document(s) (936cbb5)",
+      "ran_at": "2026-11-15T00:35:23+00:00",
+      "commit": "936cbb5",
+      "source": "recorded"
+    },
+    {
+      "name": "markdown structure",
+      "status": "pass",
+      "command": "python3 -B scripts/markdown_check.py",
+      "detail": "markdown-check: fenced blocks and tables are well formed (936cbb5)",
+      "ran_at": "2026-11-15T00:35:23+00:00",
+      "commit": "936cbb5",
+      "source": "recorded"
+    },
+    {
+      "name": "documentation check",
+      "status": "pass",
+      "command": "python3 -B scripts/docs_check.py",
+      "detail": "docs-check: 47 active document(s), 0 pending, 0 warning(s), all checks passed (936cbb5)",
+      "ran_at": "2026-11-15T00:35:23+00:00",
+      "commit": "936cbb5",
+      "source": "recorded"
+    },
+    {
+      "name": "documentation parity",
+      "status": "pass",
+      "command": "python3 -B scripts/docs_parity.py --check",
+      "detail": "docs-parity: the three READMEs have matching headings, fences, images and source anchors (936cbb5)",
+      "ran_at": "2026-11-15T00:35:23+00:00",
+      "commit": "936cbb5",
+      "source": "recorded"
+    },
+    {
+      "name": "module coverage",
+      "status": "pass",
+      "command": "python3 -B scripts/coverage_check.py",
+      "detail": "coverage-check: 38 top-level modules (36 owned, 1 covered elsewhere, 1 unowned) (936cbb5)",
+      "ran_at": "2026-11-15T00:35:23+00:00",
+      "commit": "936cbb5",
+      "source": "recorded"
+    },
+    {
+      "name": "rendered state",
+      "status": "pass",
+      "command": "python3 -B scripts/current_state.py --check",
+      "detail": "current-state: clean (936cbb5)",
+      "ran_at": "2026-11-15T00:35:23+00:00",
+      "commit": "936cbb5",
+      "source": "recorded"
+    },
+    {
+      "name": "invariant evidence",
+      "status": "pass",
+      "command": "python3 -B scripts/invariant_check.py",
+      "detail": "invariant-check: 15 invariants, 13 with test anchors, 2 explicitly untested (936cbb5)",
+      "ran_at": "2026-11-15T00:35:23+00:00",
+      "commit": "936cbb5",
+      "source": "recorded"
+    },
+    {
+      "name": "state schema",
+      "status": "pass",
+      "command": "python3 -B scripts/state_check.py",
+      "detail": "state-check: 27 gates (13 recorded, 14 asserted), 4 blockers; schema and blockers valid (936cbb5)",
+      "ran_at": "2026-11-15T00:35:23+00:00",
+      "commit": "936cbb5",
+      "source": "recorded"
+    },
+    {
+      "name": "whitespace",
+      "status": "pass",
+      "command": "git diff --check",
+      "detail": "no trailing whitespace damage",
+      "source": "asserted"
+    },
+    {
+      "name": "orchestration docs (legacy)",
+      "status": "retired",
+      "command": "scripts/orch_docs_test.py (not run)",
+      "detail": "legacy node and evidence records are archived; validation retired",
+      "source": "asserted"
+    },
+    {
+      "name": "UI budget",
+      "status": "pass",
+      "command": "python3 -B scripts/ui_budget_test.py",
+      "detail": "734,994 B JS of 742,000",
+      "source": "asserted"
+    },
+    {
+      "name": "UI layout",
+      "status": "pass",
+      "command": "python3 -B scripts/ui_layout_test.py",
+      "detail": "12 surfaces, 79 controls",
+      "source": "asserted"
+    },
+    {
+      "name": "UI overflow",
+      "status": "unrun",
+      "command": "python3 -B scripts/ui_overflow_test.py",
+      "detail": "routing tab timeout; lazy page stuck on Helium 0.21.2",
+      "quarantine": {
+        "owner": "frontend",
+        "review_by": "2026-11-21",
+        "reason": "routing tab timeout; lazy page stuck on Helium 0.21.2"
+      },
+      "source": "asserted"
+    },
+    {
+      "name": "UI interaction",
+      "status": "unrun",
+      "command": "python3 -B scripts/ui_interaction_test.py",
+      "detail": "timed out after 900s on Helium 0.21.2; not a pass and not a product failure",
+      "quarantine": {
+        "owner": "frontend",
+        "review_by": "2026-11-21",
+        "reason": "timed out after 900s on Helium 0.21.2; not a pass and not a product failure"
+      },
+      "source": "asserted"
+    },
+    {
+      "name": "Rust advisories",
+      "status": "pass",
+      "command": "cargo audit --file Cargo.lock",
+      "detail": "cargo audit --no-fetch: 0 vulnerabilities, 9 allowed warnings; locked tree on rebased dev",
+      "source": "asserted",
+      "ran_at": "2026-11-20T00:00:00+00:00"
+    },
+    {
+      "name": "frontend advisories",
+      "status": "pass",
+      "command": "pnpm audit --prod",
+      "source": "asserted"
+    },
+    {
+      "name": "freshness",
+      "command": "python3 -B scripts/freshness_report.py --check",
+      "status": "pass",
+      "detail": "freshness: 32 documents; every post-review source change is covered by a same-change document edit (936cbb5)",
+      "ran_at": "2026-11-15T00:35:23+00:00",
+      "commit": "936cbb5",
+      "source": "recorded"
+    },
+    {
+      "name": "rules registry",
+      "command": "python3 -B scripts/docs_rules.py",
+      "status": "pass",
+      "detail": "docs-rules: 17 rules; 16 machine, 13 executed gates covered (936cbb5)",
+      "ran_at": "2026-11-15T00:35:23+00:00",
+      "commit": "936cbb5",
+      "source": "recorded"
+    },
+    {
+      "name": "verified ledger",
+      "command": "python3 -B scripts/docs_verified.py --check",
+      "status": "pass",
+      "detail": "docs-verified: ledger covers 32 document(s) (936cbb5)",
+      "ran_at": "2026-11-15T00:35:23+00:00",
+      "commit": "936cbb5",
+      "source": "recorded"
+    },
+    {
+      "name": "review evidence",
+      "command": "python3 -B scripts/docs_review.py --check",
+      "status": "pass",
+      "detail": "docs-review: 32 document(s) have recorded review evidence; 9 changed docs re-reviewed by independent second session after dev rebase",
+      "ran_at": "2026-11-20T00:00:00+00:00",
+      "commit": "936cbb5",
+      "source": "recorded"
+    }
+  ],
+  "blockers": [
+    {
+      "id": "7F",
+      "status": "partial",
+      "summary": "real-traffic shadow"
+    },
+    {
+      "id": "7G",
+      "status": "blocked",
+      "summary": "controlled takeover",
+      "blocked_by": [
+        "7F"
+      ]
+    },
+    {
+      "id": "7H",
+      "status": "blocked",
+      "summary": "bounded exploration",
+      "blocked_by": [
+        "7G"
+      ]
+    },
+    {
+      "id": "ADV",
+      "status": "open",
+      "summary": "Rust advisories"
+    }
+  ],
+  "flaky": [
+    {
+      "name": "ui_overflow_test.py / ui_interaction_test.py",
+      "reason": "Helium 0.21.2 does not fetch modulepreload links after initial parse, so lazy pages stay on the loading fallback.",
+      "owner": "frontend",
+      "review_by": "2026-11-21"
+    },
+    {
+      "name": "clippy and tests / disconnect_cancels_the_buffered_attempt_without_replay",
+      "reason": "Fails on Linux CI in 2 of 3 runs of the same code (cargo test -p zroutery-core --all-features): passed on 79b1dcf, failed on 21614fe and 223b864, which differ only in documentation. Suspected timing in the buffered-attempt cancellation test; product behaviour not reproduced locally.",
+      "owner": "backend",
+      "review_by": "2026-11-21"
+    }
+  ],
+  "last_full_green": null,
+  "$schema": "state.schema.json",
+  "schema_version": 1
+}
