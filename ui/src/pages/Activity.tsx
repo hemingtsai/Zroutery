@@ -261,6 +261,13 @@ export default function Activity({
   const [historyError, setHistoryError] = useState<string | null>(null);
   const [usageSource, setUsageSource] = useState<"local" | "standby">("local");
   const [usageSources, setUsageSources] = useState<UsageSourcesView | null>(null);
+  /*
+   * The effect below reads this through the ref on its failure path: the state
+   * is an object identity, so listing it in the dependency array would re-run
+   * the fetch after every response, while the captured closure can be up to
+   * one refresh interval old.
+   */
+  const usageSourcesRef = useRef<UsageSourcesView | null>(null);
   const [usageSourceError, setUsageSourceError] = useState<string | null>(null);
   const [standbyPath, setStandbyPath] = useState<string | null>(null);
   const [usageRefresh, setUsageRefresh] = useState(0);
@@ -325,12 +332,13 @@ export default function Activity({
     api
       .usageSources(HEATMAP_DAYS)
       .then((sources) => {
+        usageSourcesRef.current = sources;
         setUsageSources(sources);
         setUsageSourceError(null);
       })
       .catch((error) => {
         setUsageSourceError(String(error));
-        if (!usageSources) {
+        if (!usageSourcesRef.current) {
           api.usageDays(HEATMAP_DAYS).then(setUsageDays).catch(() => setUsageDays([]));
         }
       });
@@ -757,11 +765,15 @@ export default function Activity({
     }
   }, []);
 
+  // The stream runs while logs have loaded; that predicate is its own value so
+  // the dependency list holds something the linter can see instead of an
+  // inline comparison.
+  const logsStreaming = logs !== null;
   useEffect(() => {
-    if (logs === null) return;
+    if (!logsStreaming) return;
     const timer = setInterval(loadLogs, 1500);
     return () => clearInterval(timer);
-  }, [logs !== null, loadLogs]);
+  }, [logsStreaming, loadLogs]);
 
   const successRate =
     activeSummary.requests > 0
