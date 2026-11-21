@@ -367,7 +367,7 @@ mod tests {
                     "space-bunny-free": {
                         "reasoning": true,
                         "reasoning_options": [
-                            {"type": "effort", "values": ["low", "medium", "high", "xhigh", "max"]}
+                            {"type": "effort", "values": ["low", "medium", "high", "xhigh", "max", "ultra"]}
                         ],
                         "tool_call": true,
                         "attachment": true,
@@ -406,7 +406,7 @@ mod tests {
         assert!(found.capabilities.vision);
         assert_eq!(
             found.effort_levels,
-            vec!["low", "medium", "high", "xhigh", "max"]
+            vec!["low", "medium", "high", "xhigh", "max", "ultra"]
         );
     }
 

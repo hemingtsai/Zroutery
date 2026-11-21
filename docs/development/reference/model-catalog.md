@@ -1,6 +1,6 @@
 # Model Catalog Reference
 
-> Authority: reference · Owner: backend · Last verified: 2026-11-21 · Verified by: `cargo test --workspace --all-features --locked`
+> Authority: reference · Owner: backend · Last verified: 2026-11-22 · Verified by: `cargo test --workspace --all-features --locked`
 
 models.dev supplies the capabilities a provider's own `/models` route rarely
 answers: context window, max output, vision/audio/video/file support, tools,
@@ -38,7 +38,9 @@ configuration stays authoritative.
 
 The accepted vocabulary includes Codex's native `ultra` value. It is exposed for
 a model only when that model explicitly declares it; it is preserved as a native
-effort rather than assigned an invented token budget
+effort rather than assigned an invented token budget. Picker values are matched
+case-insensitively and emitted in the canonical `EFFORT_LEVELS` order, so Codex
+Ultra follows Max regardless of the order the picker declared
 (`crates/zroutery-core/src/ir/reasoning.rs::NATIVE_EFFORTS`,
 `crates/zroutery-core/src/config/model.rs::normalize_effort_levels`,
 `crates/zroutery-core/src/agent_takeover/catalogue.rs::codex_catalogue`).

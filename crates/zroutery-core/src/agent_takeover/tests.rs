@@ -2193,7 +2193,7 @@ fn the_opencode_model_table_carries_the_declared_effort_levels() {
 
     // A hand-edited level the gateway cannot encode never reaches the client.
     let mut target = a_target();
-    target.classes[0].effort_levels = vec!["low".into(), "ultra".into()];
+    target.classes[0].effort_levels = vec!["low".into(), "telepathic".into()];
     let fields = takeover_fields(AgentType::OpenCode, &target, None).unwrap();
     let variants = fields
         .iter()

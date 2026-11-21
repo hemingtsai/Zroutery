@@ -6,7 +6,9 @@ use serde::{Deserialize, Serialize};
 use super::ThinkingConfig;
 
 pub const REASONING_SCHEMA_VERSION: u32 = 1;
-pub const NATIVE_EFFORTS: [&str; 7] = ["none", "minimal", "low", "medium", "high", "xhigh", "max"];
+pub const NATIVE_EFFORTS: [&str; 8] = [
+    "none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra",
+];
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]

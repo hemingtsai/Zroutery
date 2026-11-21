@@ -9,7 +9,7 @@ use crate::ir::CapabilityState;
 ///
 /// `none` disables reasoning; `minimal` is a distinct enabled native value.
 /// A model advertises only its own evidence-backed subset, never all by default.
-pub const EFFORT_LEVELS: [&str; 7] = crate::ir::NATIVE_EFFORTS;
+pub const EFFORT_LEVELS: [&str; 8] = crate::ir::NATIVE_EFFORTS;
 
 /// Restrict declared effort levels to the accepted vocabulary and put them in
 /// [`EFFORT_LEVELS`] order.
@@ -234,15 +234,15 @@ mod tests {
     fn effort_levels_are_normalized_to_the_accepted_vocabulary() {
         let stored = vec![
             "max".to_string(),
-            "ultra".to_string(),
             "HIGH".to_string(),
             "low".to_string(),
             "high".to_string(),
+            "ULTRA".to_string(),
         ];
         assert_eq!(
             normalize_effort_levels(&stored),
-            vec!["low", "high", "max"],
-            "unknown values are dropped, case is folded, and order is the picker's"
+            vec!["low", "high", "max", "ultra"],
+            "unknown values are dropped, case is folded, and Codex Ultra follows Max"
         );
     }
 }

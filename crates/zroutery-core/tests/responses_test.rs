@@ -35,6 +35,30 @@ fn reasoning_effort_supports_xhigh_and_max() {
 }
 
 #[test]
+fn codex_ultra_is_preserved_as_native_effort_without_a_synthetic_budget() {
+    let req = decode_request(json!({
+        "model": "gpt-5",
+        "reasoning": {"effort": "ultra"},
+        "input": [{"type": "input_text", "text": "hi"}]
+    }))
+    .unwrap();
+
+    assert_eq!(
+        req.reasoning.as_ref().and_then(ReasoningRequest::effort),
+        Some("ultra")
+    );
+    assert_eq!(
+        req.thinking
+            .as_ref()
+            .and_then(|thinking| thinking.budget_tokens),
+        None,
+        "Codex Ultra is not translated into an invented token budget"
+    );
+    let encoded = encode_request(&req, "gpt-5").unwrap();
+    assert_eq!(encoded["reasoning"]["effort"], "ultra");
+}
+
+#[test]
 fn reasoning_effort_none_is_an_explicit_disable_and_round_trips() {
     let body = json!({
         "model": "gpt-5",
