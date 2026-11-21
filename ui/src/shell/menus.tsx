@@ -136,7 +136,16 @@ export function AppearanceMenu({
       ariaLabel={t("appearance.title")}
       trigger={
         <span aria-hidden className="glyph">
-          {"◐"}
+          {/*
+            * Inline SVG, not a text glyph: "◐" is missing from Roboto and
+            * Segoe, so its metrics came from whatever CJK fallback each font
+            * stack reached, and the moon's optical center drifted per skin.
+            * A path centers the same way everywhere.
+            */}
+          <svg viewBox="0 0 24 24" width="13" height="13" aria-hidden="true">
+            <circle cx="12" cy="12" r="8" fill="none" stroke="currentColor" strokeWidth="1.5" />
+            <path d="M12 4a8 8 0 0 1 0 16Z" fill="currentColor" />
+          </svg>
         </span>
       }
     >

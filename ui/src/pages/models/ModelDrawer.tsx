@@ -42,7 +42,7 @@ import { PriceFields } from "./PriceFields";
  * as client variants, and a value outside this list is not encodable to any
  * dialect.
  */
-export const EFFORT_LEVELS = ["none", "minimal", "low", "medium", "high", "xhigh", "max"] as const;
+export const EFFORT_LEVELS = ["none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra"] as const;
 
 /**
  * One model's whole story. "Used for" answers where it sits in routing;

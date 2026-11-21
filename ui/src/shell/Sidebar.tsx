@@ -3,6 +3,7 @@ import { useI18n } from "../i18n";
 import type { Snapshot } from "../api";
 import type { Page } from "../navigation";
 import { NAV } from "./nav";
+import { NAV_ICONS } from "./navIcons";
 
 export function Sidebar({
   snapshot,
@@ -42,6 +43,9 @@ export function Sidebar({
           title={`Alt+${index + 1}`}
           onClick={() => onNavigate(item.id)}
         >
+          <span className="nav-icon" aria-hidden="true">
+            {NAV_ICONS[item.id]}
+          </span>
           {t(item.labelKey)}
           {item.id === "models" && unclassified.length > 0 && (
             <span className="nav-count" title={t("nav.unclassified_title", { n: unclassified.length })}>

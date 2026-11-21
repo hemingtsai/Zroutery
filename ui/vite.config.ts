@@ -1,20 +1,44 @@
 import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
 import { compileTheme } from "./src/themes/compiler.ts";
-import md3Manifest from "../plugins/theme-md3/zroutery.plugin.json" with { type: "json" };
-import fluentManifest from "../plugins/theme-fluent/zroutery.plugin.json" with { type: "json" };
-import md3Theme from "../plugins/theme-md3/theme.json" with { type: "json" };
-import fluentTheme from "../plugins/theme-fluent/theme.json" with { type: "json" };
+// The ui tsconfig carries no @types/node, but vite bundles this config with
+// esbuild, which resolves node builtins at run time — the suppression and the
+// local `process` shape are load-bearing.
+// @ts-expect-error — node builtins are unavailable to the ui typecheck
+import { existsSync, readFileSync } from "node:fs";
+declare const process: { cwd(): string };
 
 // Both official data packs go through the same bounded compiler as third-party
 // themes. Only compiled CSS is shipped in the first-frame sheet; the raw recipe
 // JSON is not parsed twice at runtime or paid for in the entry JavaScript chunk.
+const REPO_ROOT = (() => {
+  let dir = process.cwd().replace(/\\/g, "/");
+  for (let depth = 0; depth < 6 && !existsSync(`${dir}/plugins/theme-md3/theme.json`); depth += 1) {
+    const parent = dir.slice(0, dir.lastIndexOf("/"));
+    if (!parent) throw new Error("theme packs not found above the working directory");
+    dir = parent;
+  }
+  return dir;
+})();
+const PACKS = [
+  { id: "org.zroutery.theme.md3", dir: `${REPO_ROOT}/plugins/theme-md3` },
+  { id: "org.zroutery.theme.fluent", dir: `${REPO_ROOT}/plugins/theme-fluent` },
+];
 const bundledThemes = {
   name: "zroutery-bundled-themes",
   resolveId(id: string) { return id === "virtual:zroutery-bundled-themes.css" ? "\0zroutery-bundled-themes.css" : undefined; },
-  load(id: string) {
+  load(this: { addWatchFile?: (path: string) => void }, id: string) {
     if (id !== "\0zroutery-bundled-themes.css") return undefined;
-    return [[md3Manifest, md3Theme], [fluentManifest, fluentTheme]].map(([manifest, theme]) => compileTheme(theme, (manifest as typeof md3Manifest).id)).join("\n");
+    // Read at request time and watch the pack files: config-level imports are
+    // evaluated once at server start, so pack edits never reached a running
+    // dev session and the skins silently went stale.
+    return PACKS.map(({ id: packId, dir }) => {
+      const manifest = JSON.parse(readFileSync(`${dir}/zroutery.plugin.json`, "utf-8"));
+      const theme = JSON.parse(readFileSync(`${dir}/theme.json`, "utf-8"));
+      this.addWatchFile?.(`${dir}/zroutery.plugin.json`);
+      this.addWatchFile?.(`${dir}/theme.json`);
+      return compileTheme(theme, (manifest as { id: string }).id || packId);
+    }).join("\n");
   },
 };
 

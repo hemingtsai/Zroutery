@@ -32,6 +32,7 @@ import {
   type ConfirmRequest,
 } from "../../components";
 import { AccountBindingReview } from "../../AccountBindingReview";
+import { isLoginSettledCheckin } from "../../accountCheckin";
 
 /** A fresh declaration: nothing observed, nothing scheduled, provider's key. */
 function blankMaintenance(): Maintenance {
@@ -657,9 +658,13 @@ export function AccountSection({
                         // NewAPI's dominant layout. Filled only when the field
                         // is empty so an operator's correction is never
                         // overwritten by turning the toggle off and on again.
-                        d.maintenance.checkin_path ??= "/console/personal";
-                        d.maintenance.checkin_trigger_selector ??= "button.checkin";
-                        d.maintenance.login_path ??= "/sign-in";
+                        if (isLoginSettledCheckin(provider, d.maintenance)) {
+                          d.maintenance.login_path ??= "/login";
+                        } else {
+                          d.maintenance.checkin_path ??= "/console/personal";
+                          d.maintenance.checkin_trigger_selector ??= "button.checkin";
+                          d.maintenance.login_path ??= "/sign-in";
+                        }
                       }
                     })
                   }

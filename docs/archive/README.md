@@ -1,6 +1,6 @@
 # Archive
 
-> Authority: index · Owner: docs · Last verified: 2026-11-14 · Verified by: `scripts/docs_check.py`
+> Authority: index · Owner: docs · Last verified: 2026-11-21 · Verified by: `scripts/docs_check.py`
 
 This directory holds documents that cannot be made current by editing: past
 audits, superseded plans, execution records, historical snapshots and the

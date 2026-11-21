@@ -229,12 +229,44 @@
           "radius": 4.0
         },
         {
+          "part": "select.item",
+          "when": {
+            "interaction": "hover"
+          },
+          "fill": {
+            "role": "subtle-secondary"
+          }
+        },
+        {
+          "part": "select.item",
+          "when": {
+            "interaction": "rest",
+            "checked": true
+          },
+          "fill": {
+            "role": "selected"
+          }
+        },
+        {
           "part": "navigation.item",
           "when": {
             "interaction": "rest"
           },
           "radius": 4.0,
-          "decoration": "indicator_anchor"
+          "decoration": "indicator_anchor",
+          "metrics": {
+            "font_size": 14.0
+          }
+        },
+        {
+          "part": "navigation.icon",
+          "when": {
+            "interaction": "rest"
+          },
+          "metrics": {
+            "width": 18.0,
+            "height": 18.0
+          }
         },
         {
           "part": "button",
@@ -257,6 +289,70 @@
             },
             "angle": 180
           }
+        },
+        {
+          "part": "button",
+          "when": {
+            "interaction": "pressed",
+            "disabled": false
+          },
+          "variant": "default",
+          "fill": {
+            "hex": "#e0e0e0"
+          },
+          "stroke": {
+            "width": 1,
+            "color": {
+              "role": "stroke-pressed"
+            }
+          },
+          "stroke_edge": "all"
+        },
+        {
+          "part": "button",
+          "when": {
+            "interaction": "pressed",
+            "disabled": false
+          },
+          "variant": "primary",
+          "fill": {
+            "mix": [
+              {
+                "role": "primary"
+              },
+              {
+                "hex": "#000000"
+              }
+            ],
+            "first_fraction": 0.3
+          },
+          "stroke": {
+            "width": 1,
+            "color": {
+              "hex": "#00000000"
+            }
+          },
+          "stroke_edge": "all"
+        },
+        {
+          "part": "button",
+          "when": {
+            "interaction": "rest",
+            "disabled": true
+          },
+          "fill": {
+            "hex": "#f0f0f0"
+          },
+          "foreground": {
+            "hex": "#bdbdbd"
+          },
+          "stroke": {
+            "width": 1,
+            "color": {
+              "hex": "#e0e0e0"
+            }
+          },
+          "stroke_edge": "all"
         },
         {
           "part": "navigation.item",
@@ -440,6 +536,15 @@
         {
           "part": "menu.item",
           "when": {
+            "interaction": "hover"
+          },
+          "fill": {
+            "role": "subtle-secondary"
+          }
+        },
+        {
+          "part": "menu.item",
+          "when": {
             "interaction": "rest",
             "focus_visible": true
           },
@@ -459,6 +564,23 @@
             "interaction": "rest"
           },
           "radius": 2.0
+        },
+        {
+          "part": "checkbox",
+          "when": {
+            "interaction": "rest",
+            "checked": true
+          },
+          "fill": {
+            "role": "primary"
+          },
+          "stroke": {
+            "width": 1,
+            "color": {
+              "role": "primary"
+            }
+          },
+          "stroke_edge": "all"
         },
         {
           "part": "segment.item",
@@ -1077,6 +1199,37 @@
           }
         },
         {
+          "part": "list.row",
+          "when": {
+            "interaction": "hover"
+          },
+          "fill": {
+            "role": "subtle-secondary"
+          }
+        },
+        {
+          "part": "timeline.item",
+          "when": {
+            "interaction": "rest"
+          },
+          "stroke": {
+            "width": 1,
+            "color": {
+              "role": "divider"
+            }
+          },
+          "stroke_edge": "bottom"
+        },
+        {
+          "part": "table.cell",
+          "when": {
+            "interaction": "hover"
+          },
+          "fill": {
+            "role": "subtle-secondary"
+          }
+        },
+        {
           "part": "navigation.item",
           "when": {
             "interaction": "rest",
@@ -1409,12 +1562,44 @@
           "radius": 4.0
         },
         {
+          "part": "select.item",
+          "when": {
+            "interaction": "hover"
+          },
+          "fill": {
+            "role": "subtle-secondary"
+          }
+        },
+        {
+          "part": "select.item",
+          "when": {
+            "interaction": "rest",
+            "checked": true
+          },
+          "fill": {
+            "role": "selected"
+          }
+        },
+        {
           "part": "navigation.item",
           "when": {
             "interaction": "rest"
           },
           "radius": 4.0,
-          "decoration": "indicator_anchor"
+          "decoration": "indicator_anchor",
+          "metrics": {
+            "font_size": 14.0
+          }
+        },
+        {
+          "part": "navigation.icon",
+          "when": {
+            "interaction": "rest"
+          },
+          "metrics": {
+            "width": 18.0,
+            "height": 18.0
+          }
         },
         {
           "part": "button",
@@ -1437,6 +1622,70 @@
             },
             "angle": 180
           }
+        },
+        {
+          "part": "button",
+          "when": {
+            "interaction": "pressed",
+            "disabled": false
+          },
+          "variant": "default",
+          "fill": {
+            "hex": "#1f1f1f"
+          },
+          "stroke": {
+            "width": 1,
+            "color": {
+              "role": "stroke-pressed"
+            }
+          },
+          "stroke_edge": "all"
+        },
+        {
+          "part": "button",
+          "when": {
+            "interaction": "pressed",
+            "disabled": false
+          },
+          "variant": "primary",
+          "fill": {
+            "mix": [
+              {
+                "role": "primary"
+              },
+              {
+                "hex": "#000000"
+              }
+            ],
+            "first_fraction": 0.3
+          },
+          "stroke": {
+            "width": 1,
+            "color": {
+              "hex": "#00000000"
+            }
+          },
+          "stroke_edge": "all"
+        },
+        {
+          "part": "button",
+          "when": {
+            "interaction": "rest",
+            "disabled": true
+          },
+          "fill": {
+            "hex": "#141414"
+          },
+          "foreground": {
+            "hex": "#5c5c5c"
+          },
+          "stroke": {
+            "width": 1,
+            "color": {
+              "hex": "#424242"
+            }
+          },
+          "stroke_edge": "all"
         },
         {
           "part": "navigation.item",
@@ -1620,6 +1869,15 @@
         {
           "part": "menu.item",
           "when": {
+            "interaction": "hover"
+          },
+          "fill": {
+            "role": "subtle-secondary"
+          }
+        },
+        {
+          "part": "menu.item",
+          "when": {
             "interaction": "rest",
             "focus_visible": true
           },
@@ -1639,6 +1897,23 @@
             "interaction": "rest"
           },
           "radius": 2.0
+        },
+        {
+          "part": "checkbox",
+          "when": {
+            "interaction": "rest",
+            "checked": true
+          },
+          "fill": {
+            "role": "primary"
+          },
+          "stroke": {
+            "width": 1,
+            "color": {
+              "role": "primary"
+            }
+          },
+          "stroke_edge": "all"
         },
         {
           "part": "segment.item",
@@ -2239,6 +2514,37 @@
           }
         },
         {
+          "part": "list.row",
+          "when": {
+            "interaction": "hover"
+          },
+          "fill": {
+            "role": "subtle-secondary"
+          }
+        },
+        {
+          "part": "timeline.item",
+          "when": {
+            "interaction": "rest"
+          },
+          "stroke": {
+            "width": 1,
+            "color": {
+              "role": "divider"
+            }
+          },
+          "stroke_edge": "bottom"
+        },
+        {
+          "part": "table.cell",
+          "when": {
+            "interaction": "hover"
+          },
+          "fill": {
+            "role": "subtle-secondary"
+          }
+        },
+        {
           "part": "navigation.item",
           "when": {
             "interaction": "rest",
@@ -2350,5 +2656,11 @@
     "segment_height": 36,
     "switch_width": 40,
     "switch_height": 20
+  },
+  "motion": {
+    "fast_ms": 150,
+    "page_ms": 200,
+    "drawer_ms": 300,
+    "ease": "easy_ease"
   }
 }

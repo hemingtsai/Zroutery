@@ -36,6 +36,10 @@ pub struct RestrictedProcess {
     job: Handle,
     pub input: File,
     pub output: File,
+    /// The per-launch AppContainer profile this worker runs under. The launch
+    /// creates it fresh and never reuses it, so the caller can delete it once
+    /// the process is gone instead of letting profiles accumulate per spawn.
+    pub profile_name: String,
 }
 impl RestrictedProcess {
     pub fn wait(&self, milliseconds: u32) -> Result<u32> {
@@ -86,6 +90,17 @@ impl Drop for RestrictedProcess {
 }
 fn wide(value: &str) -> Vec<u16> {
     value.encode_utf16().chain(Some(0)).collect()
+}
+
+/// Best-effort deletion of one per-launch AppContainer profile. The profile is
+/// created fresh per spawn and is never reused, so deleting it as soon as the
+/// worker is gone keeps the profile store from accumulating one entry per
+/// render. Returns whether the OS accepted the deletion; a failure leaves the
+/// name for the caller's ledger and the next sweep.
+pub fn delete_app_container_profile(name: &str) -> bool {
+    let name = wide(name);
+    let deleted = unsafe { DeleteAppContainerProfile(name.as_ptr()) };
+    deleted == 0
 }
 fn unavailable(stage: &'static str) -> PluginError {
     // Host-generated diagnostic only; no package/IPC/error body is logged.
@@ -180,7 +195,11 @@ pub fn probe(worker: &Path, temp_root: &Path) -> Result<crate::supervisor::Sandb
     );
     let result = (|| {
         let process = launch(worker, &work, &arguments)?;
-        match process.wait(5000) {
+        let profile = process.profile_name.clone();
+        let outcome = process.wait(5000);
+        // The probe worker is done either way; its profile must not linger.
+        let _ = delete_app_container_profile(&profile);
+        match outcome {
             Ok(0) => Ok(crate::supervisor::SandboxStatus::Verified),
             _ => Ok(crate::supervisor::SandboxStatus::Unavailable),
         }
@@ -212,10 +231,8 @@ pub fn launch(
     }
     // Per-process profile: no plugin/facet/account shares writable AppContainer
     // profile state or the ACL of another worker's helper copy.
-    let name = wide(&format!(
-        "org.zroutery.worker.{}",
-        uuid::Uuid::new_v4().simple()
-    ));
+    let profile_name = format!("org.zroutery.worker.{}", uuid::Uuid::new_v4().simple());
+    let name = wide(&profile_name);
     let mut sid = std::ptr::null_mut();
     // A derived SID without a registered profile can make LowBox process
     // creation fail with ERROR_FILE_NOT_FOUND. Registration has no capabilities.
@@ -505,5 +522,6 @@ pub fn launch(
         job,
         input,
         output,
+        profile_name,
     })
 }

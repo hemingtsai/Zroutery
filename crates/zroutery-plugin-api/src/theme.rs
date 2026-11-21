@@ -15,6 +15,7 @@ pub const PARTS: &[&str] = &[
     "segment.item",
     "segment.indicator",
     "navigation.item",
+    "navigation.icon",
     "navigation.indicator",
     "drawer",
     "banner",
@@ -102,6 +103,7 @@ pub enum ColorExpr {
     Hex(HexColor),
     Role(RoleColor),
     System(SystemColor),
+    Tonal(TonalColor),
     Mix(MixColor),
 }
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -118,6 +120,21 @@ pub struct RoleColor {
 #[serde(deny_unknown_fields)]
 pub struct SystemColor {
     pub system: AccentRole,
+    pub fallback: Box<ColorExpr>,
+}
+/// MD3 dynamic color: hue from the OS accent, lightness and chroma ceiling
+/// from the baseline role's own OKLCH coordinates.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct TonalColor {
+    pub tonal: TonalSpec,
+}
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct TonalSpec {
+    pub of: AccentRole,
+    pub lightness: f64,
+    pub chroma: f64,
     pub fallback: Box<ColorExpr>,
 }
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -246,6 +263,7 @@ pub enum Decoration {
     PlainTitle,
     Circle,
     IndicatorAnchor,
+    NavIndicatorMorph,
 }
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -254,6 +272,7 @@ pub enum RecipeLayout {
     FilledSection,
     FlattenNested,
     CardStack,
+    NavRail,
 }
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -362,6 +381,31 @@ pub struct ThemeV1 {
     pub modes: ThemeModes,
     pub typography: Typography,
     pub metrics: ThemeMetrics,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub motion: Option<Motion>,
+}
+
+/// Host motion tokens a skin may retune: the three duration slots every host
+/// transition reads and the shared easing curve, chosen from the host's
+/// closed curve set. Absent keeps the industrial defaults.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Motion {
+    pub fast_ms: f64,
+    pub page_ms: f64,
+    pub drawer_ms: f64,
+    pub ease: MotionEase,
+}
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum MotionEase {
+    Standard,
+    EmphasizedAccelerate,
+    EmphasizedDecelerate,
+    EasyEase,
+    DecelerateMax,
+    AccelerateMax,
+    ExpoOut,
 }
 
 fn finite(value: f64, max: f64) -> bool {
@@ -393,6 +437,11 @@ fn color_valid(
             valid
         }
         ColorExpr::System(v) => color_valid(&v.fallback, colors, seen, depth + 1),
+        ColorExpr::Tonal(v) => {
+            finite(v.tonal.lightness, 1.0)
+                && finite(v.tonal.chroma, 0.4)
+                && color_valid(&v.tonal.fallback, colors, seen, depth + 1)
+        }
         ColorExpr::Mix(v) => {
             finite(v.first_fraction, 1.0)
                 && v.mix
@@ -411,6 +460,14 @@ impl ThemeV1 {
             || !(16.0..=24.0).contains(&self.metrics.switch_height)
         {
             return Err(PluginError::InvalidManifest);
+        }
+        if let Some(motion) = &self.motion {
+            let durations_ok = [motion.fast_ms, motion.page_ms, motion.drawer_ms]
+                .iter()
+                .all(|d| (30.0..=600.0).contains(d));
+            if !durations_ok {
+                return Err(PluginError::InvalidManifest);
+            }
         }
         for mode in [&self.modes.light, &self.modes.dark] {
             if mode.colors.len() > COLOR_ROLES.len()
@@ -510,9 +567,13 @@ impl ThemeV1 {
                 }
                 if let Some(m) = &r.metrics {
                     if [m.width, m.height].into_iter().flatten().any(|v| {
+                        // The sidebar width is the one shell dimension a rail
+                        // theme must own; the compiler keeps the exact caps.
                         !finite(
                             v,
-                            if r.part.starts_with("shell.") {
+                            if r.part == "shell.sidebar" {
+                                280.0
+                            } else if r.part.starts_with("shell.") {
                                 64.0
                             } else {
                                 48.0
@@ -569,6 +630,75 @@ mod gradient_tests {
         ] {
             ThemeV1::decode(bytes).unwrap();
         }
+    }
+
+    #[test]
+    fn tonal_binds_the_accent_hue_to_a_bounded_baseline_profile() {
+        let value: serde_json::Value =
+            serde_json::from_slice(include_bytes!("../../../plugins/theme-md3/theme.json"))
+                .unwrap();
+        assert!(
+            value["modes"]["light"]["colors"]["primary-container"]
+                .get("tonal")
+                .is_some(),
+            "md3 baseline ships tonal containers"
+        );
+        // A different official seed rides the same profile.
+        let mut reseeded = value.clone();
+        reseeded["modes"]["light"]["colors"]["primary-container"]["tonal"]["fallback"] =
+            serde_json::json!({"hex": "#0078d4"});
+        ThemeV1::decode(&serde_json::to_vec(&reseeded).unwrap()).unwrap();
+        for (field, bad) in [
+            ("of", serde_json::json!("hue")),
+            ("lightness", serde_json::json!(1.2)),
+            ("lightness", serde_json::json!(-0.1)),
+            ("chroma", serde_json::json!(0.5)),
+        ] {
+            let mut broken = value.clone();
+            broken["modes"]["light"]["colors"]["primary-container"]["tonal"][field] = bad.clone();
+            let bytes = serde_json::to_vec(&broken).unwrap();
+            assert!(
+                ThemeV1::decode(&bytes).is_err(),
+                "reject tonal {field} = {bad}"
+            );
+        }
+        let mut unknown = value.clone();
+        unknown["modes"]["light"]["colors"]["primary-container"]["tonal"]["tone"] =
+            serde_json::json!(90);
+        let bytes = serde_json::to_vec(&unknown).unwrap();
+        assert!(
+            ThemeV1::decode(&bytes).is_err(),
+            "deny unknown tonal fields"
+        );
+    }
+
+    #[test]
+    fn motion_retunes_only_the_published_slots() {
+        let value: serde_json::Value =
+            serde_json::from_slice(include_bytes!("../../../plugins/theme-md3/theme.json"))
+                .unwrap();
+        assert!(value.get("motion").is_some(), "md3 ships motion");
+        ThemeV1::decode(&serde_json::to_vec(&value).unwrap()).unwrap();
+        for (field, bad) in [
+            ("fast_ms", serde_json::json!(10)),
+            ("page_ms", serde_json::json!(700)),
+            ("ease", serde_json::json!("spring")),
+        ] {
+            let mut broken = value.clone();
+            broken["motion"][field] = bad.clone();
+            let bytes = serde_json::to_vec(&broken).unwrap();
+            assert!(
+                ThemeV1::decode(&bytes).is_err(),
+                "reject motion {field} = {bad}"
+            );
+        }
+        let mut unknown = value.clone();
+        unknown["motion"]["curve"] = serde_json::json!("x");
+        let bytes = serde_json::to_vec(&unknown).unwrap();
+        assert!(
+            ThemeV1::decode(&bytes).is_err(),
+            "deny unknown motion fields"
+        );
     }
 
     #[test]

@@ -1,6 +1,6 @@
 # Verification
 
-> Authority: normative · Owner: backend · Last verified: 2026-11-21 · Verified by: `scripts/docs_check.py`
+> Authority: normative · Owner: backend · Last verified: 2026-11-22 · Verified by: `scripts/docs_check.py`
 
 This is the only document that defines the toolchain and the gates. Other
 documents point here; they do not restate a command. Current pass/fail status
@@ -82,6 +82,10 @@ surface they cover; the "CI" column says whether the pipeline runs them.
 | smoke | `python3 -B scripts/smoke_test.py` | proxy, routing or upstream transport | blocking (desktop) |
 | packaging | `.github/workflows/packaging.yml::installer` | installer or release changes | nightly |
 | advisories | `cargo audit --file Cargo.lock`, `pnpm audit --prod` | dependency changes and nightly | PR warning / nightly |
+
+A budget or layout ceiling is a ratchet, not a policy number: a raise must
+carry its measured justification as a comment beside the constant
+(`scripts/ui_budget_test.py::CSS_TOTAL_MAX`).
 
 ## What CI actually runs
 

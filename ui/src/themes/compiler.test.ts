@@ -99,4 +99,89 @@ describe("v1.1 recipe surface", () => {
     expect(css).toContain(".menu-item:hover");
     expect(css).toContain(".menu-item[data-highlighted]");
   });
+
+  it("a disabled recipe takes over the host's disabled fade with full opacity", () => {
+    const theme = structuredClone(base);
+    (theme.modes.light.recipes as unknown[]).push({
+      part: "button",
+      when: { interaction: "rest", disabled: true },
+      fill: { role: "text" },
+      foreground: { role: "bg" },
+    });
+    const css = compileTheme(theme);
+    expect(css).toContain(".btn:disabled:not([data-host-security]");
+    expect(css).toContain("opacity:1");
+  });
+
+  it("tonal roles ride a baseline literal under the accent-derived relative color", () => {
+    const css = compileTheme(md3);
+    expect(css).toContain(
+      "--primary-container:#eaddff;--primary-container:oklch(from var(--system-accent,#eaddff) 0.918 min(c,0.048) h)",
+    );
+    expect(css).toContain(
+      "--on-secondary-container:#1d192b;--on-secondary-container:oklch(from var(--system-accent,#1d192b) 0.227 min(c,0.035) h)",
+    );
+    for (const mutate of [
+      (colors: Record<string, unknown>) => { colors["primary-container"] = { tonal: { of: "hue", lightness: 0.9, chroma: 0.05, fallback: { hex: "#eaddff" } } }; },
+      (colors: Record<string, unknown>) => { colors["primary-container"] = { tonal: { of: "accent", lightness: 1.2, chroma: 0.05, fallback: { hex: "#eaddff" } } }; },
+      (colors: Record<string, unknown>) => { colors["primary-container"] = { tonal: { of: "accent", lightness: 0.9, chroma: 0.5, fallback: { hex: "#eaddff" } } }; },
+      (colors: Record<string, unknown>) => { colors["primary-container"] = { tonal: { of: "accent", lightness: 0.9, chroma: 0.05 } }; },
+    ]) {
+      const theme = structuredClone(md3);
+      mutate(theme.modes.light.colors as Record<string, unknown>);
+      expect(() => compileTheme(theme)).toThrow("invalid_theme");
+    }
+  });
+
+  it("retunes the host motion slots from the closed curve set", () => {
+    const css = compileTheme(md3);
+    expect(css).toContain(
+      "--t-fast:150ms;--t-page:250ms;--t-drawer:300ms;--ease:cubic-bezier(0.2,0,0,1)",
+    );
+    for (const bad of [
+      { fast_ms: 10, page_ms: 250, drawer_ms: 300, ease: "standard" },
+      { fast_ms: 150, page_ms: 250, drawer_ms: 700, ease: "standard" },
+      { fast_ms: 150, page_ms: 250, drawer_ms: 300, ease: "spring" },
+    ]) {
+      const broken = structuredClone(md3) as Record<string, unknown>;
+      broken.motion = bad;
+      expect(() => compileTheme(broken)).toThrow("invalid_theme");
+    }
+  });
+
+  it("the nav icon slot turns on only where a skin styles it", () => {
+    for (const theme of [md3, fluent]) {
+      const css = compileTheme(theme);
+      expect(css).toContain(".nav-item .nav-icon:not([data-host-security]");
+      expect(css).toContain("display:inline-flex");
+    }
+  });
+
+  it("the md3 rail stacks the nav item and wraps the icon slot in the indicator", () => {
+    const css = compileTheme(md3);
+    expect(css).toContain("display:inline-flex;flex-direction:column;align-items:center;text-align:center;gap:6px");
+    // The active pill lands on the icon slot via the ancestor's state.
+    expect(css).toContain(".nav-item.active .nav-icon:not(");
+    expect(css).toContain("background:var(--secondary-container)");
+    // The count badge loses its horizontal push under the rail.
+    expect(css).toContain(".nav-item:not([data-host-security],[data-host-security] *) .nav-count{margin:0}");
+    // Fluent keeps the horizontal drawer morphology: no rail layout.
+    expect(compileTheme(fluent)).not.toContain("flex-direction:column;align-items:center;text-align:center");
+  });
+
+  it("the nav indicator morph is pack-declared, not host-assumed", () => {
+    const md3Css = compileTheme(md3);
+    expect(md3Css).toContain("--nav-indicator-morph:1");
+    expect(md3Css).toContain(".nav-item.active:not([data-host-security],[data-host-security] *) .nav-icon{view-transition-name:nav-indicator}");
+    expect(compileTheme(fluent)).not.toContain("--nav-indicator-morph");
+    const broken = structuredClone(md3);
+    broken.modes.light.recipes[0].decoration = "nav_indicator_morph";
+    expect(() => compileTheme(broken)).toThrow("invalid_theme");
+  });
+
+  it("rejects the rail layout outside the navigation item", () => {
+    const broken = structuredClone(md3);
+    broken.modes.light.recipes[0].layout = "nav_rail";
+    expect(() => compileTheme(broken)).toThrow("invalid_theme");
+  });
 });

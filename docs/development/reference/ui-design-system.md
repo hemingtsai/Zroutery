@@ -1,6 +1,6 @@
 # UI Design System Reference
 
-> Authority: reference · Owner: frontend · Last verified: 2026-11-21 · Verified by: `pnpm --dir ui build && pnpm --dir ui test`
+> Authority: reference · Owner: frontend · Last verified: 2026-11-22 · Verified by: `pnpm --dir ui build && pnpm --dir ui test`
 
 This page covers the tokens, skins, primitives and gates of the dashboard. It is
 a reference, not a pixel specification; the shipped values are in the stylesheet.
@@ -12,6 +12,11 @@ a reference, not a pixel specification; the shipped values are in the stylesheet
   compiled per theme and override tokens — for example `--control-h` comes from
   the pack's `metrics.control_height` (24-40px)
   (`ui/src/themes/compiler.ts::compileTheme`, `ui/vite.config.ts`).
+- A pack can express MD3 dynamic color as a `tonal` color expression — the
+  system accent's hue re-toned per role, emitted as a relative `oklch(from …)`
+  color the webview resolves at paint time — and a navigation-rail item
+  morphology where the active indicator wraps the icon slot
+  (`ui/src/themes/compiler.ts::compileTheme`).
 - A theme preference is applied separately from a skin: `applyTheme` sets
   `data-theme` (`ui/src/theme.ts::applyTheme`); `applyThemeRef` sets
   `data-plugin-theme` and removes the legacy `data-skin`
@@ -26,7 +31,9 @@ a reference, not a pixel specification; the shipped values are in the stylesheet
 
 - The six task doors are declared once in `NAV`
   (`ui/src/shell/nav.ts::NAV`). The helper pages (`accounts`, `routing`,
-  `cutover`) are tabs inside a task door, not extra doors.
+  `cutover`) are tabs inside a task door, not extra doors. Each door carries a
+  static inline icon from a fixed per-page map, not a component tree
+  (`ui/src/shell/navIcons.tsx::NAV_ICONS`).
 - `Tabs` is a real tablist: arrow keys, Home/End, roving tabindex, and only the
   selected panel is mounted (`ui/src/components/tabs.tsx::Tabs`).
 - `Drawer` is the overlay for editing; it restores focus to its opener and keeps
@@ -83,6 +90,9 @@ interaction coverage saves both settings without changing the model pool
   [verification.md](../verification.md).
 - The interaction harness drives the mock bridge with real clicks and keys
   (`scripts/ui_interaction_test.py::main`); it is also local-only.
+- The headed-browser harnesses share one hand-rolled DevTools client rather
+  than carrying private copies that drift
+  (`scripts/cdp_client.py::DevTools`).
 - The overflow gate runs at the minimum window size
   (`scripts/ui_overflow_test.py::main`).
 - The theme baseline gate compares computed styles against the frozen v3.2
@@ -117,7 +127,8 @@ interaction coverage saves both settings without changing the model pool
   untrusted components (`scripts/plugin_theme_test.py::main`,
   `src-tauri/src/plugins/commands.rs::render_plugin_ui`).
 - Layout and interaction are not in CI; a green CI run does not cover them.
-- No icon set beyond the inline SVG/mark used by the shell.
+- No plugin-extensible icon set; the shell's navigation icons are a fixed
+  per-page map (`ui/src/shell/navIcons.tsx::NAV_ICONS`).
 
 ## Sources
 

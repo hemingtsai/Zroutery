@@ -102,12 +102,18 @@ acrylic slot (`shell.sidebar` only).
 
 | Part | Recipe |
 |---|---|
-| navigation.item | 4px radius; hover/selected = `subtle-secondary`; 3×16px `primary` leading indicator pill |
+| navigation.item | 4px radius, 14px Body label; hover/selected = `subtle-secondary`; 3×16px `primary` leading indicator pill |
 | segment | underline selection: 3px `primary` indicator, items carry `indicator_anchor` |
 | switch | WinUI toggle: 40px track, 1px `control-line` stroke, 12px `muted` thumb, checked = `primary` track |
 | focus.target | WinUI focus rect: 2px `text` outer ring at offset 0 + 1px inner ring (`surface` light, black dark) inset inside the fill |
 | input | 1px stroke; hover deepens to `stroke-hover`; focus = 1px `primary` stroke + 2px inset top shadow |
-| list.row | no fill; 12px inline padding; selection handled by nav/KPI recipes |
+| button pressed | default: `colorNeutralBackground1Pressed` (grey-88 light / grey-12 dark) + `stroke-pressed` border; accent: 30% black over accent |
+| button disabled | official ramps: grey-94/grey-74/grey-88 light, grey-8/grey-36/grey-26 dark (`colorNeutralBackgroundDisabled` / `ForegroundDisabled` / `StrokeDisabled`) |
+| checkbox | checked = `primary` fill + `primary` stroke |
+| select.item | hover = `subtle-secondary`; checked = `selected` |
+| menu.item hover | `subtle-secondary` (doubled onto Radix `data-highlighted`) |
+| list.row / table.cell hover | `subtle-secondary` |
+| timeline.item | 1px bottom `divider` |
 | scrollbar | 6px overlay; thumb = 24% text (hover 40%, pressed 55%), transparent track |
 
 ## Accessibility
@@ -164,6 +170,12 @@ Recorded decisions, not drift:
    geometry — while the reference maps dialogs to `shadow16`.
 5. **Scrollbar invariants.** Both modes reuse the light thumb greys
    (`#c6c6c6` / `#8f8f8f`) rather than a dark scrollbar palette.
+6. **Accent pressed derivation.** v9 presses the accent to `brand-40`
+   (light) / `brand-30` (dark); the pack mixes 30% black over the accent so
+   the step follows the OS accent instead of the pinned web ramp.
+7. **Disabled is grey ink, not opacity.** The pack disables with the official
+   `colorNeutral*Disabled` ramps; the compiler drops the host's 0.4 opacity
+   fade for any pack that styles the disabled state.
 
 ## Sources
 

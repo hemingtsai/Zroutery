@@ -1,6 +1,6 @@
 # Reference Index
 
-> Authority: index · Owner: docs · Last verified: 2026-11-14 · Verified by: `scripts/docs_check.py`
+> Authority: index · Owner: docs · Last verified: 2026-11-21 · Verified by: `scripts/docs_check.py`
 
 The pages in this directory are the source-verified subsystem references. A page
 owns its facts; other documents link to it instead of restating it.

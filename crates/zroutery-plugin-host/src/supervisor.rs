@@ -1,5 +1,5 @@
 //! Admission quotas and IPC result matching independent of any JS engine.
-use std::sync::{Arc, Mutex, OnceLock};
+use std::sync::{Arc, Mutex};
 use zroutery_plugin_api::ipc::{Envelope, WorkerCall, WorkerReply};
 use zroutery_plugin_api::{PluginError, Result};
 
@@ -80,19 +80,31 @@ pub enum SandboxStatus {
     Verified,
 }
 
-static SANDBOX_STATUS: OnceLock<SandboxStatus> = OnceLock::new();
+static SANDBOX_STATUS: std::sync::RwLock<SandboxStatus> =
+    std::sync::RwLock::new(SandboxStatus::Unavailable);
 
 /// Cached runtime sandbox attestation. Defaults to unavailable until a
 /// successful platform probe proves the OS boundary and negative checks.
 pub fn sandbox_status() -> SandboxStatus {
-    *SANDBOX_STATUS.get_or_init(|| SandboxStatus::Unavailable)
+    *SANDBOX_STATUS
+        .read()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
+/// Replace the cached attestation. The plugin reload command re-runs the
+/// platform probe and publishes the fresh answer here, so a worker that was
+/// missing at startup can be picked up without restarting the app.
+pub fn set_sandbox_status(status: SandboxStatus) {
+    *SANDBOX_STATUS
+        .write()
+        .unwrap_or_else(|poisoned| poisoned.into_inner()) = status;
 }
 
 /// Run the platform sandbox probe and cache the result. A failed or
 /// unavailable probe keeps executable facets denied.
 pub fn verify_sandbox(worker: &std::path::Path, temp_root: &std::path::Path) -> SandboxStatus {
     let status = crate::sandbox::probe(worker, temp_root).unwrap_or(SandboxStatus::Unavailable);
-    let _ = SANDBOX_STATUS.set(status);
+    set_sandbox_status(status);
     sandbox_status()
 }
 

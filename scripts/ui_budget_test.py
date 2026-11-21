@@ -70,7 +70,15 @@ DEFAULT_DIST = os.path.join(REPO, "ui", "dist")
 # in-Dialog keyboard fix) brought the final build to 799,803 B. CSS and
 # largest-chunk ceilings are unchanged.
 JS_TOTAL_MAX = 848_000
-CSS_TOTAL_MAX = 180_000
+# 180,000 -> 190,000: the 2026-11-21 theme batches bought it. Full interaction
+# state coverage in both plugin packs (pressed/disabled/checked/hover recipes
+# for buttons, checkbox, selects, menus, navigation, segments, tables); MD3
+# dynamic color, where eleven container/neutral roles each emit a baseline
+# literal and a relative-color oklch() declaration; the ThemeV1 motion surface
+# (per-skin duration/easing variables plus selection transitions on
+# navigation/segment/KPI parts); and the nav icon slot rules. Measured at
+# 187,494 B after the batch; JS and largest-chunk ceilings are unchanged.
+CSS_TOTAL_MAX = 190_000
 LARGEST_CHUNK_MAX = 320_000
 
 # What the report prints, largest first. Enough to name the file that grew

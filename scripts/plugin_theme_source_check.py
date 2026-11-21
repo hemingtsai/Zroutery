@@ -376,6 +376,9 @@ def resolve_expr(expr: dict, roles: dict, mode: str, depth: int = 0) -> str:
         return resolve_expr(roles[expr["role"]], roles, mode, depth + 1)
     if "system" in expr:
         return resolve_expr(expr["fallback"], roles, mode, depth + 1)
+    if "tonal" in expr:
+        # The hue is runtime-owned (OS accent); the static value is the seed.
+        return resolve_expr(expr["tonal"]["fallback"], roles, mode, depth + 1)
     a = resolve_expr(expr["mix"][0], roles, mode, depth + 1)
     b = resolve_expr(expr["mix"][1], roles, mode, depth + 1)
     return "mix(%s,%s,%.4f)" % (a, b, float(expr["first_fraction"]))
@@ -384,6 +387,21 @@ def resolve_expr(expr: dict, roles: dict, mode: str, depth: int = 0) -> str:
 def pack_colors(pack: dict, mode: str) -> dict[str, str]:
     roles = pack["modes"][mode]["colors"]
     return {name: resolve_expr(expr, roles, mode) for name, expr in roles.items()}
+
+
+def oklch(hexv: str) -> tuple[float, float]:
+    """OKLCH lightness/chroma of a #rrggbb color (hue stays accent-owned)."""
+    def lin(c: float) -> float:
+        return c / 12.92 if c <= 0.04045 else ((c + 0.055) / 1.055) ** 2.4
+    r, g, b = (lin(int(hexv[i:i + 2], 16) / 255) for i in (1, 3, 5))
+    l = 0.4122214708 * r + 0.5363325363 * g + 0.0514459929 * b
+    m = 0.2119034982 * r + 0.6806995451 * g + 0.1073969566 * b
+    s = 0.0883024619 * r + 0.2817188376 * g + 0.6299787005 * b
+    l_, m_, s_ = l ** (1 / 3), m ** (1 / 3), s ** (1 / 3)
+    a = 1.9779984951 * l_ - 2.4285922050 * m_ + 0.4505937099 * s_
+    b2 = 0.0259040371 * l_ + 0.7827717662 * m_ - 0.8086757660 * s_
+    lightness = 0.2104542553 * l_ + 0.7936177850 * m_ - 0.0040720468 * s_
+    return lightness, (a * a + b2 * b2) ** 0.5
 
 
 # ---------------------------------------------------------------------------
@@ -443,6 +461,14 @@ EXPECTED: list[tuple[str, str, str, str, str]] = [
     ("fluent", "part/navigation.indicator#width", "3", "deviation", "skin-spec v3.1: NavigationViewSelectionIndicator 3/16/2"),
     ("fluent", "part/navigation.indicator#height", "16", "deviation", "skin-spec v3.1: NavigationViewSelectionIndicator 3/16/2"),
     ("fluent", "part/section.flat/radius", "0", "deviation", "compiler flatten_nested layout semantics (v3.1 nested sections)"),
+    ("md3", "part/navigation.item#font_size", "12", "deviation", "md-sys-typescale label-medium 12sp (navigation rail label register)"),
+    ("fluent", "part/navigation.item#font_size", "14", "deviation", "fui-global-fonts fontSizeBase100 14px (NavigationView item Body register)"),
+    ("md3", "part/table.cell#height", "48", "deviation", "md-comp-data-table row-height 52dp clamped by the compiler metric bound (48)"),
+    ("md3", "part/navigation.icon#width", "48", "deviation", "M3 navigation rail active indicator width clamped by the compiler cell bound (48); height exact 32dp"),
+    ("md3", "part/navigation.icon#height", "32", "deviation", "M3 navigation rail active indicator height 32dp exact"),
+    ("md3", "part/shell.sidebar#width", "128", "deviation", "M3 navigation rail 80dp proportion widened to 128px to fit the host wordmark and CJK rail labels"),
+    ("fluent", "part/navigation.icon#width", "18", "deviation", "WinUI NavigationView item icon 16px family, host 18px icon slot"),
+    ("fluent", "part/navigation.icon#height", "18", "deviation", "WinUI NavigationView item icon 16px family, host 18px icon slot"),
     ("fluent", "light/stroke-hover", "#6e6e6e", "deviation", "skin-spec v3: control-line WCAG 3:1 darkening, v9 ramp extrapolation"),
     ("fluent", "light/warn", "#bc4b09", "deviation",
      "skin-spec v3 ok/warn: older v9 orange.shade10 kept for >=4.5:1 text contrast (current #de590b = 3.8:1)"),
@@ -456,6 +482,19 @@ EXPECTED: list[tuple[str, str, str, str, str]] = [
 ]
 
 
+# Motion rulings: the ThemeV1 `motion` block retunes the host's three duration
+# slots and the shared curve. Values are spec-cited, not snapshot-derived
+# (md-sys-motion is not pinned yet):
+#   md3    — md-sys-motion short3 150ms / medium1 250ms / medium2 300ms,
+#            curve `standard` = the M3 emphasized cubic-bezier(0.2,0,0,1)
+#   fluent — Fluent motion Fast 150ms / Normal 200ms / Slow 300ms,
+#            curve `easy_ease` = EasyEase cubic-bezier(0.33,0,0.67,1)
+MOTION_RULINGS = {
+    "md3": {"fast_ms": 150, "page_ms": 250, "drawer_ms": 300, "ease": "standard"},
+    "fluent": {"fast_ms": 150, "page_ms": 200, "drawer_ms": 300, "ease": "easy_ease"},
+}
+
+
 # ---------------------------------------------------------------------------
 # Verification
 
@@ -463,6 +502,7 @@ class Report:
     def __init__(self) -> None:
         self.official: list[str] = []
         self.mix: list[str] = []
+        self.tonal: list[str] = []
         self.deviation: list[str] = []
         self.unexplained: list[str] = []
 
@@ -471,6 +511,7 @@ class Report:
         out = [head,
                "  official-provenance values: %d" % len(self.official),
                "  mix (official operands + official opacity): %d" % len(self.mix),
+               "  tonal (baseline-profile dynamic tones): %d" % len(self.tonal),
                "  recorded deviations: %d" % len(self.deviation)]
         if self.unexplained:
             out.append("  UNEXPLAINED (%d):" % len(self.unexplained))
@@ -517,7 +558,23 @@ def verify_pack(skin: str, pack_path: str) -> Report:
             value = colors[name]
             cite = expected.get((skin, name)) or expected.get((skin, "%s/%s" % (mode, name)))
             alphas = alpha_form(expr, pack["modes"][mode]["colors"], mode)
-            if value in official[mode]:
+            if "tonal" in expr:
+                # Dynamic tone: hue comes from the OS accent at runtime, so the
+                # pack must declare the baseline role's own OKLCH lightness and
+                # chroma ceiling over an official fallback seed.
+                t = expr["tonal"]
+                seed = resolve_expr(t["fallback"], pack["modes"][mode]["colors"], mode)
+                lightness, chroma = oklch(seed)
+                if (seed not in official[mode] and seed not in official_any) \
+                        or abs(lightness - float(t["lightness"])) > 0.012 \
+                        or abs(chroma - float(t["chroma"])) > 0.012:
+                    report.unexplained.append(
+                        "%s color tonal %s: profile L%.3f/C%.4f vs declared L%.3f/C%.4f over %s"
+                        % (mode, name, lightness, chroma,
+                           float(t["lightness"]), float(t["chroma"]), seed))
+                else:
+                    report.tonal.append("%s/%s = tone over %s" % (mode, name, seed))
+            elif value in official[mode]:
                 src, token = official[mode][value]
                 report.official.append("%s/%s <- %s:%s" % (mode, name, src, token))
             elif alphas:
@@ -576,6 +633,16 @@ def verify_pack(skin: str, pack_path: str) -> Report:
             report.unexplained.append("metrics.%s = %s expected %s" % (prop, value, expected[key][0]))
         else:
             report.deviation.append("metrics.%s = %s [%s]" % (prop, value, expected[key][1]))
+
+    # Pack-level motion: the whole block must equal the recorded ruling or be
+    # absent (absent keeps the industrial defaults).
+    motion = pack.get("motion")
+    if skin in MOTION_RULINGS:
+        ruling = MOTION_RULINGS[skin]
+        if motion == ruling:
+            report.deviation.append("motion = %s [motion ruling]" % json.dumps(motion))
+        elif motion is not None:
+            report.unexplained.append("motion %s != ruling %s" % (json.dumps(motion), json.dumps(ruling)))
 
     return report
 

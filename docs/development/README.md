@@ -1,6 +1,6 @@
 # Development Record
 
-> Authority: index · Owner: docs · Last verified: 2026-11-14 · Verified by: `scripts/docs_check.py`
+> Authority: index · Owner: docs · Last verified: 2026-11-21 · Verified by: `scripts/docs_check.py`
 
 This directory holds the current development documentation. The generated map is
 [../INDEX.md](../INDEX.md); the rules for writing it are

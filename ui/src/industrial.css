@@ -357,13 +357,13 @@ code,
 
 .sidebar-brand {
   display: flex;
+  flex-wrap: wrap;
   align-items: baseline;
   gap: 6px;
   padding: 2px 10px 16px;
   font-size: 18px;
   font-weight: 600;
   letter-spacing: -0.01em;
-  white-space: nowrap;
 }
 
 .sidebar-brand .mono {
@@ -396,6 +396,49 @@ code,
 .nav-item.active {
   color: var(--text);
   background: var(--selected);
+}
+
+/*
+ * The icon slot inside every nav item. Industrial ships a text-only nav on
+ * purpose (see DESIGN.md), so the slot is hidden here and stays hidden unless
+ * a plugin theme's `navigation.icon` recipe turns it on — the compiler emits
+ * the display rule for that part, and currentColor carries the item's ink
+ * into the stroke paths.
+ */
+.nav-icon {
+  display: none;
+  align-self: center;
+  margin-right: 10px;
+}
+
+.nav-icon svg {
+  display: block;
+}
+
+/*
+ * The rail morph: a shared-element view transition slides the active item's
+ * icon slot to the newly navigated page. The whole wiring is pack-declared —
+ * a skin marks `navigation.item` with `decoration: "nav_indicator_morph"` and
+ * the compiler publishes the marker var plus the naming rule — so industrial
+ * (which declares nothing) keeps its pages unanimated. The root snapshot is
+ * unnamed, so only the pill animates; the old snapshot drops instantly to
+ * avoid the plus-lighter ghost of two semi-transparent pills mid-slide.
+ */
+:root {
+  view-transition-name: none;
+}
+
+::view-transition-group(nav-indicator) {
+  animation-duration: var(--t-page);
+  animation-timing-function: var(--ease);
+}
+
+::view-transition-old(nav-indicator) {
+  /* The old snapshot must vanish outright: `animation: none` alone froze it
+     at full opacity, and the sliding group then stacked two pills' strokes
+     through plus-lighter — the dotted mess. Only the new pill slides. */
+  animation: none;
+  opacity: 0;
 }
 
 .nav-count {
@@ -2107,8 +2150,15 @@ input::placeholder {
 }
 
 .bar-action .glyph {
-  font-size: 12px;
-  line-height: 1;
+  /* The glyph is an inline SVG now (see menus.tsx): a fixed 13px box that no
+     font fallback can move, replacing the "◐" text character whose optical
+     center drifted with each skin's font stack. */
+  display: inline-flex;
+  align-items: center;
+}
+
+.bar-action .glyph svg {
+  display: block;
 }
 
 /* ------------------------------------------------------------ popover menu */
@@ -3334,6 +3384,11 @@ input::placeholder {
   transform: translate(-50%, -50%);
   z-index: 50;
   width: min(400px, 88vw);
+  /* A consent dialog's permission list can outrun the viewport: cap the whole
+     dialog and scroll the body, keeping the title and the actions on screen. */
+  max-height: min(86vh, 720px);
+  display: flex;
+  flex-direction: column;
   padding: 20px 24px;
   background: var(--surface);
   border: 1px solid var(--border-primary, var(--line));
@@ -3369,6 +3424,9 @@ input::placeholder {
   font-size: 14px;
   color: var(--text-2);
   line-height: 1.6;
+  min-height: 0;
+  overflow-y: auto;
+  padding-right: 2px;
 }
 
 /* The release dialog's body carries the managed file's path and the strategy

@@ -3,7 +3,7 @@
 #[cfg(target_os = "windows")]
 mod windows;
 #[cfg(target_os = "windows")]
-pub use windows::{launch, RestrictedProcess};
+pub use windows::{delete_app_container_profile, launch, RestrictedProcess};
 
 use crate::supervisor::SandboxStatus;
 use std::path::Path;

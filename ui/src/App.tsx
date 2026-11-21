@@ -7,6 +7,7 @@
  * genuinely entangled: the state, the save pipeline, and the page routing.
  */
 import { Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { flushSync } from "react-dom";
 import { api, errorText, type AppConfig, type Snapshot } from "./api";
 import { Tabs, ToastProvider, useToast } from "./components";
 import { describeBackendError, I18nProvider, useI18n } from "./i18n";
@@ -94,6 +95,27 @@ function Shell() {
   const [snapshot, setSnapshot] = useState<Snapshot | null>(null);
   const [page, setPage] = useState<Page>("overview");
   const taskPage = taskFor(page);
+  // Skins that render the nav indicator pill morph it across items with a
+  // view transition (the shared-element snapshot slides — see industrial.css).
+  // flushSync is required inside the transition callback or React defers the
+  // DOM change past the frame the API captures. Reduced-motion users, and
+  // browsers without the API, navigate instantly; industrial's iconless nav
+  // produces no named snapshot either way, so its pages stay unanimated.
+  const navigate = (next: Page) => {
+    // The morph runs only for skins that declare `nav_indicator_morph` (the
+    // compiler publishes the marker var in the theme root). The layout
+    // harness injects its own global and scripts click sequences whose
+    // timing assumes synchronous navigation.
+    const reduce = matchMedia("(prefers-reduced-motion: reduce)").matches;
+    const harness = "__zrHarnessReady" in window;
+    const morph = getComputedStyle(document.documentElement)
+      .getPropertyValue("--nav-indicator-morph").trim() !== "";
+    if (!document.startViewTransition || reduce || harness || !morph) {
+      setPage(next);
+      return;
+    }
+    document.startViewTransition(() => flushSync(() => setPage(next)));
+  };
   const [themePref, setThemePref] = useState<ThemePref>(loadThemePref);
   // The mode is a presentation preference like the theme: read once from local
   // storage, written back on every change, never part of the configuration.
@@ -326,7 +348,7 @@ function Shell() {
     <SaveStatusContext.Provider value={saveStatus}>
     <SaveFeedbackResetContext.Provider value={resetSaveFeedback}>
     <div className="shell">
-      <Sidebar snapshot={snapshot} taskPage={taskPage} unclassified={unclassified} onNavigate={setPage} />
+      <Sidebar snapshot={snapshot} taskPage={taskPage} unclassified={unclassified} onNavigate={navigate} />
 
       <div className="main">
         <header className="mainbar">

@@ -11,6 +11,7 @@ export const THEME_PARTS = {
   "segment.item": ".segment-item",
   "segment.indicator": ".segment-item[data-active=true]::after",
   "navigation.item": ".nav-item",
+  "navigation.icon": ".nav-item .nav-icon",
   "navigation.indicator": ".nav-item.active::before",
   "drawer": ".drawer",
   "banner": ".banner",

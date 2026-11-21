@@ -38,6 +38,7 @@ import {
   type Snapshot,
 } from "../api";
 import type { TaskKind } from "../saveQueue";
+import { browserCheckinMissing, checkinAllTargets, isLoginSettledCheckin } from "../accountCheckin";
 
 /** A whole number of seconds, as a short relative phrase. */
 function ago(unix_secs: number): string {
@@ -68,6 +69,8 @@ export default function Accounts({
   // The account an HTTP check-in is in flight for, so the one button shows
   // progress without freezing the rest of the page.
   const [checking, setChecking] = useState<string | null>(null);
+  // A bulk browser check-in is walking the accounts one by one.
+  const [startingAll, setStartingAll] = useState(false);
 
   // Offered only when the build actually contains the account subsystem. A
   // command that was never registered looks exactly like one that failed, so the
@@ -79,6 +82,8 @@ export default function Accounts({
   const withAccounts = (snapshot.config.providers ?? []).filter(
     (p) => (p.accounts ?? []).length > 0,
   );
+  // The bulk action is offered against the accounts a press could start now.
+  const bulkTargets = checkinAllTargets(withAccounts, snapshot.checkin);
 
   // With nothing declared there is nothing to probe, so the page is the
   // explanation and where to declare one — not a disabled probe button over an
@@ -148,9 +153,58 @@ export default function Accounts({
     }
   };
 
+  /**
+   * Start every eligible browser check-in, one account at a time.
+   *
+   * Multi-account is sequential rather than one call because each account owns
+   * an isolated profile and its own window, and a login-settled panel needs a
+   * human in each. Accounts already running or awaiting a person are excluded
+   * by `checkinAllTargets`, so a press cannot replace an existing session.
+   */
+  const checkInAll = async () => {
+    const targets = checkinAllTargets(withAccounts, snapshot.checkin);
+    if (targets.length === 0) {
+      notify("ok", t("accounts.checkin_all_none"));
+      return;
+    }
+    setStartingAll(true);
+    let started = 0;
+    let failed = 0;
+    for (const target of targets) {
+      try {
+        await api.startCheckin(target.providerId, target.accountId);
+        started += 1;
+      } catch {
+        failed += 1;
+      }
+    }
+    // Each launch changed runtime state; re-read rather than patch locally.
+    await run(api.snapshot, "observe");
+    setStartingAll(false);
+    if (failed === 0) {
+      notify("ok", t("accounts.checkin_all_started", { count: started }));
+    } else {
+      notify("error", t("accounts.checkin_all_partial", { started, failed }));
+    }
+  };
+
   return (
     <>
-      <PageHead lede={t("accounts.lede")} />
+      <PageHead
+        lede={t("accounts.lede")}
+        actions={
+          <Button
+            kind="primary"
+            disabled={busy || startingAll || bulkTargets.length === 0}
+            title={t("accounts.checkin_all_hint")}
+            onClick={() => void checkInAll()}
+          >
+            {startingAll
+              ? t("accounts.checkin_all_running")
+              : t("accounts.checkin_all")}
+          </Button>
+        }
+      />
 
       <Section
         title={t("accounts.probe_section")}
@@ -201,6 +255,7 @@ export default function Accounts({
                   void startBrowser(
                     provider.id,
                     account.account_id,
+                    provider,
                     account.maintenance,
                     notify,
                     t,
@@ -256,6 +311,7 @@ function AccountRow({
     (b) => b.provider_id === provider.id && b.account_id === accountId,
   );
   const paused = view.awaiting_user;
+  const loginSettled = isLoginSettledCheckin(provider, maintenance);
 
   // The backend publishes a closed phase vocabulary, and a template key is not a
   // key TypeScript can check. The fallback matters more than the cast: an
@@ -388,7 +444,7 @@ function AccountRow({
           </>
         ) : (
           <>
-            {snapshot.api_checkin_available && (
+            {snapshot.api_checkin_available && !loginSettled && (
               <Button
                 kind="primary"
                 disabled={busy || checking || !maintenance.checkin_enabled}
@@ -400,7 +456,7 @@ function AccountRow({
             )}
             {snapshot.account_maintenance_available && (
               <>
-                <Button kind="ghost" disabled={busy || view.phase === "running"} onClick={onBrowserStart}>
+                <Button kind={loginSettled ? "primary" : "ghost"} disabled={busy || view.phase === "running" || !maintenance.checkin_enabled} onClick={onBrowserStart}>
                   {t("account.checkin")}
                 </Button>
                 {view.browser_held && (
@@ -712,6 +768,7 @@ const STATUS_KEYS = new Set([
 async function startBrowser(
   providerId: string,
   accountId: string,
+  provider: Provider,
   maintenance: Maintenance,
   notify: ReturnType<typeof useToast>,
   t: (key: TKey, params?: Record<string, string | number>) => string,
@@ -720,9 +777,10 @@ async function startBrowser(
     notify("error", t("account.not_enabled"));
     return;
   }
-  const missing = !maintenance.checkin_path?.trim()
+  const requirement = browserCheckinMissing(provider, maintenance);
+  const missing = requirement === "path"
     ? t("account.need_path")
-    : !maintenance.checkin_trigger_selector?.trim()
+    : requirement === "selector"
       ? t("account.need_selector")
       : null;
   if (missing) {
