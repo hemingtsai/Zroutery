@@ -40,6 +40,7 @@ opencode.jsonc.openchamber.backup
 .vscode/
 .idea/
 .cursor/
+.arts/
 
 # Coverage and profiler output. Both are per-run artefacts that a gate can
 # leave behind, and neither is source: a dirty tree after `cargo llvm-cov` or a

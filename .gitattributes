@@ -1,0 +1,8 @@
+# Normalize all text files to LF, both in the index and the working tree.
+# The repo is edited on Windows and Unix; CRLF once leaked into twelve
+# modified files and inflated every diff to whole-file noise. Git detects
+# text files automatically; the icon set is marked binary explicitly.
+* text=auto eol=lf
+*.png binary
+*.ico binary
+*.icns binary
