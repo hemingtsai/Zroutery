@@ -9,7 +9,11 @@ import { applyTheme, loadThemePref } from "./theme";
 const initialSkin = loadSkin();
 applySkin(initialSkin);
 applyTheme(loadThemePref());
-import "@fontsource/ibm-plex-mono/400.css";
+// The UI text is Latin script; the mono face carries no CJK glyphs either way.
+// Shipping only the Latin subsets keeps the Cyrillic, Greek and Vietnamese
+// @font-face rules — about two fifths of the vendor CSS — out of the bundle.
+import "@fontsource/ibm-plex-mono/latin-400.css";
+import "@fontsource/ibm-plex-mono/latin-ext-400.css";
 import "./styles.css";
 import "virtual:zroutery-bundled-themes.css";
 
