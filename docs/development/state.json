@@ -1,6 +1,6 @@
 {
   "as_of": "2026-11-22",
-  "head": "da341c0",
+  "head": "389869e",
   "branch": "dev",
   "gates": [
     {
@@ -9,8 +9,8 @@
       "source": "recorded",
       "command": "python3 -B scripts/docs_contracts.py",
       "detail": "all non-range documentation gates",
-      "ran_at": "2026-11-21T22:30:32+00:00",
-      "commit": "0c90cf0"
+      "ran_at": "2026-11-21T22:47:52+00:00",
+      "commit": "5147cb9"
     },
     {
       "name": "fmt",
@@ -66,72 +66,72 @@
       "name": "documentation sources",
       "status": "pass",
       "command": "python3 -B scripts/docs_sources.py --check",
-      "detail": "docs-sources: 1249 anchor(s) resolved in 36 active document(s) (0c90cf0)",
-      "ran_at": "2026-11-21T22:30:32+00:00",
-      "commit": "0c90cf0",
+      "detail": "docs-sources: 1249 anchor(s) resolved in 36 active document(s) (5147cb9)",
+      "ran_at": "2026-11-21T22:47:52+00:00",
+      "commit": "5147cb9",
       "source": "recorded"
     },
     {
       "name": "markdown structure",
       "status": "pass",
       "command": "python3 -B scripts/markdown_check.py",
-      "detail": "markdown-check: fenced blocks and tables are well formed (0c90cf0)",
-      "ran_at": "2026-11-21T22:30:32+00:00",
-      "commit": "0c90cf0",
+      "detail": "markdown-check: fenced blocks and tables are well formed (5147cb9)",
+      "ran_at": "2026-11-21T22:47:52+00:00",
+      "commit": "5147cb9",
       "source": "recorded"
     },
     {
       "name": "documentation check",
       "status": "pass",
       "command": "python3 -B scripts/docs_check.py",
-      "detail": "docs-check: 48 active document(s), 0 pending, 0 warning(s), all checks passed (0c90cf0)",
-      "ran_at": "2026-11-21T22:30:32+00:00",
-      "commit": "0c90cf0",
+      "detail": "docs-check: 48 active document(s), 0 pending, 0 warning(s), all checks passed (5147cb9)",
+      "ran_at": "2026-11-21T22:47:52+00:00",
+      "commit": "5147cb9",
       "source": "recorded"
     },
     {
       "name": "documentation parity",
       "status": "pass",
       "command": "python3 -B scripts/docs_parity.py --check",
-      "detail": "docs-parity: the three READMEs have matching headings, fences, images and source anchors (0c90cf0)",
-      "ran_at": "2026-11-21T22:30:32+00:00",
-      "commit": "0c90cf0",
+      "detail": "docs-parity: the three READMEs have matching headings, fences, images and source anchors (5147cb9)",
+      "ran_at": "2026-11-21T22:47:52+00:00",
+      "commit": "5147cb9",
       "source": "recorded"
     },
     {
       "name": "module coverage",
       "status": "pass",
       "command": "python3 -B scripts/coverage_check.py",
-      "detail": "coverage-check: 38 top-level modules (36 owned, 1 covered elsewhere, 1 unowned) (0c90cf0)",
-      "ran_at": "2026-11-21T22:30:32+00:00",
-      "commit": "0c90cf0",
+      "detail": "coverage-check: 38 top-level modules (36 owned, 1 covered elsewhere, 1 unowned) (5147cb9)",
+      "ran_at": "2026-11-21T22:47:52+00:00",
+      "commit": "5147cb9",
       "source": "recorded"
     },
     {
       "name": "rendered state",
       "status": "pass",
       "command": "python3 -B scripts/current_state.py --check",
-      "detail": "current-state: clean (0c90cf0)",
-      "ran_at": "2026-11-21T22:30:32+00:00",
-      "commit": "0c90cf0",
+      "detail": "current-state: clean (5147cb9)",
+      "ran_at": "2026-11-21T22:47:52+00:00",
+      "commit": "5147cb9",
       "source": "recorded"
     },
     {
       "name": "invariant evidence",
       "status": "pass",
       "command": "python3 -B scripts/invariant_check.py",
-      "detail": "invariant-check: 15 invariants, 14 with test anchors, 1 explicitly untested (0c90cf0)",
-      "ran_at": "2026-11-21T22:30:32+00:00",
-      "commit": "0c90cf0",
+      "detail": "invariant-check: 15 invariants, 14 with test anchors, 1 explicitly untested (5147cb9)",
+      "ran_at": "2026-11-21T22:47:52+00:00",
+      "commit": "5147cb9",
       "source": "recorded"
     },
     {
       "name": "state schema",
       "status": "pass",
       "command": "python3 -B scripts/state_check.py",
-      "detail": "state-check: 27 gates (13 recorded, 14 asserted), 4 blockers; schema and blockers valid (0c90cf0)",
-      "ran_at": "2026-11-21T22:30:32+00:00",
-      "commit": "0c90cf0",
+      "detail": "state-check: 27 gates (13 recorded, 14 asserted), 4 blockers; schema and blockers valid (5147cb9)",
+      "ran_at": "2026-11-21T22:47:52+00:00",
+      "commit": "5147cb9",
       "source": "recorded"
     },
     {
@@ -206,36 +206,36 @@
       "name": "freshness",
       "command": "python3 -B scripts/freshness_report.py --check",
       "status": "pass",
-      "detail": "freshness: 32 documents; every post-review source change is covered by a same-change document edit (0c90cf0)",
-      "ran_at": "2026-11-21T22:30:32+00:00",
-      "commit": "0c90cf0",
+      "detail": "freshness: 32 documents; every post-review source change is covered by a same-change document edit (5147cb9)",
+      "ran_at": "2026-11-21T22:47:52+00:00",
+      "commit": "5147cb9",
       "source": "recorded"
     },
     {
       "name": "rules registry",
       "command": "python3 -B scripts/docs_rules.py",
       "status": "pass",
-      "detail": "docs-rules: 17 rules; 16 machine, 13 executed gates covered (0c90cf0)",
-      "ran_at": "2026-11-21T22:30:32+00:00",
-      "commit": "0c90cf0",
+      "detail": "docs-rules: 17 rules; 16 machine, 13 executed gates covered (5147cb9)",
+      "ran_at": "2026-11-21T22:47:52+00:00",
+      "commit": "5147cb9",
       "source": "recorded"
     },
     {
       "name": "verified ledger",
       "command": "python3 -B scripts/docs_verified.py --check",
       "status": "pass",
-      "detail": "docs-verified: ledger covers 32 document(s) (0c90cf0)",
-      "ran_at": "2026-11-21T22:30:32+00:00",
-      "commit": "0c90cf0",
+      "detail": "docs-verified: ledger covers 32 document(s) (5147cb9)",
+      "ran_at": "2026-11-21T22:47:52+00:00",
+      "commit": "5147cb9",
       "source": "recorded"
     },
     {
       "name": "review evidence",
       "command": "python3 -B scripts/docs_review.py --check",
       "status": "pass",
-      "detail": "docs-review: 32 document(s) have recorded review evidence (0c90cf0)",
-      "ran_at": "2026-11-21T22:30:32+00:00",
-      "commit": "0c90cf0",
+      "detail": "docs-review: 32 document(s) have recorded review evidence (5147cb9)",
+      "ran_at": "2026-11-21T22:47:52+00:00",
+      "commit": "5147cb9",
       "source": "recorded"
     }
   ],
