@@ -1,14 +1,12 @@
 # Repository guidance
 
-> Authority: normative · Owner: docs · Last verified: 2026-11-15 · Verified by: `scripts/docs_check.py`
+> Authority: normative · Owner: docs · Last verified: 2026-11-21 · Verified by: `scripts/docs_check.py`
 
 Read [state.json](docs/development/state.json) first: it is the recorded truth,
 validated by `state.schema.json`; each gate says whether it is `recorded` by a
 run or `asserted` by hand. [current-state.md](docs/development/current-state.md)
 is its rendered view. If this file and the state disagree, the state wins for
 facts; this file wins for permission and process.
-
-## How to use this documentation
 
 - Start with [state.json](docs/development/state.json) and
   [current-state.md](docs/development/current-state.md); they are the current facts.
@@ -85,7 +83,9 @@ reported as unverified. Never weaken a gate or use `--no-verify`.
 
 [reference/implementation-contracts.md](docs/development/reference/implementation-contracts.md)
 owns the IPC, lifecycle, takeover, platform and UI boundaries. This entry does
-not restate them.
+not restate them; plugin capability grants
+(`src-tauri/capabilities/default.json`) must stay equal to the
+`generate_handler!` list (`scripts/command_surface_test.py`).
 
 ## Documentation is part of the change
 

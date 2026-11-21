@@ -224,6 +224,15 @@ export interface ProviderDescriptor {
   readonly credentials: readonly CredentialSlotDeclaration[];
   /** Host executes fixed profile rules; this is never chosen by a request hook. */
   readonly transport_profile?: string;
+  /**
+   * Static, non-secret identity headers merged into every request this
+   * provider sends: client-look headers only (`user-agent`, `accept`, the
+   * gateway's `x-client-*` family). Names come from the host's published
+   * allowlist — the same closed set transport profiles use — so auth and
+   * framing names (`authorization`, `x-api-key`, `content-type`, …) can
+   * never travel through it. Values are bounded text.
+   */
+  readonly extra_headers?: Readonly<Record<string, string>>;
 }
 
 export interface CredentialSlotDeclaration {
@@ -368,7 +377,42 @@ export type ColorExpr =
   | { readonly hex: string }
   | { readonly role: string }
   | { readonly system: "accent" | "accent_foreground"; readonly fallback: ColorExpr }
+  | {
+      /**
+       * MD3 dynamic color: keeps the OS accent's hue and takes the given
+       * OKLCH lightness and chroma ceiling, so a pack declares the baseline
+       * role's tone while the hue follows the platform accent. `fallback`
+       * doubles as the no-accent seed and the literal color an engine
+       * without relative-color syntax falls back to.
+       */
+      readonly tonal: {
+        readonly of: "accent" | "accent_foreground";
+        readonly lightness: number;
+        readonly chroma: number;
+        readonly fallback: ColorExpr;
+      };
+    }
   | { readonly mix: readonly [ColorExpr, ColorExpr]; readonly first_fraction: number };
+
+/**
+ * Host motion tokens a skin may retune: the three duration slots every host
+ * transition reads (`--t-fast/--t-page/--t-drawer`) and the shared easing
+ * curve (`--ease`), chosen by name from the host's closed curve set. Absent
+ * keeps the industrial defaults.
+ */
+export interface ThemeMotion {
+  readonly fast_ms: number;
+  readonly page_ms: number;
+  readonly drawer_ms: number;
+  readonly ease:
+    | "standard"
+    | "emphasized_accelerate"
+    | "emphasized_decelerate"
+    | "easy_ease"
+    | "decelerate_max"
+    | "accelerate_max"
+    | "expo_out";
+}
 
 export interface ShadowValue {
   readonly x: number;
@@ -415,8 +459,8 @@ export interface ComponentRecipe {
   readonly radius?: number;
   readonly shadow?: readonly ShadowValue[];
   readonly focus_rings?: readonly { readonly width: number; readonly offset: number; readonly color: ColorExpr }[];
-  readonly decoration?: "none" | "underline" | "leading_indicator" | "state_layer" | "inherit_ink" | "plain_title" | "circle" | "indicator_anchor";
-  readonly layout?: "flat" | "filled_section" | "flatten_nested" | "card_stack";
+  readonly decoration?: "none" | "underline" | "leading_indicator" | "state_layer" | "inherit_ink" | "plain_title" | "circle" | "indicator_anchor" | "nav_indicator_morph";
+  readonly layout?: "flat" | "filled_section" | "flatten_nested" | "card_stack" | "nav_rail";
   readonly material?: { readonly kind: "solid" | "acrylic"; readonly opacity: number; readonly blur: number; readonly saturation?: number };
   readonly stroke_edge?: "all" | "start" | "end" | "bottom";
   /** Each part has its own published bounds; these cannot position an overlay. */
@@ -455,6 +499,7 @@ export interface ThemeV1 {
     readonly switch_width: number;
     readonly switch_height: number;
   };
+  readonly motion?: ThemeMotion;
 }
 
 export interface PluginHooksV1 {

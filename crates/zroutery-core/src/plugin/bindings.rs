@@ -187,7 +187,7 @@ impl PluginBinding {
                     _ => return false,
                 };
                 let mut prefix = base.path().trim_end_matches('/').to_string();
-                if !prefix.ends_with("/v1") {
+                if !crate::config::versioned_suffix(&prefix) && !prefix.ends_with("/v1") {
                     prefix.push_str("/v1");
                 }
                 parsed.path() == format!("{prefix}{suffix}")

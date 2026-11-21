@@ -6,6 +6,9 @@
 node_modules
 ui/dist
 
+# Packed plugin artifacts (rebuilt from source via `python plugins/pack.py`).
+plugins/*/dist/
+
 # Tauri codegen
 src-tauri/gen
 

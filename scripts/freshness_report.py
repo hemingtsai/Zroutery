@@ -212,7 +212,7 @@ def main(argv: list[str] | None = None) -> int:
         print(f"freshness: STALE {item}")
     if errors or (args.check and stale):
         return 1
-    count = len(json.loads((ROOT / VERIFIED).read_text()))
+    count = len(json.loads((ROOT / VERIFIED).read_text(encoding="utf-8")))
     print(summary(count, same_change))
     return 0
 

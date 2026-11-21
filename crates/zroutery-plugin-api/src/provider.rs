@@ -80,6 +80,14 @@ pub struct ProviderDescriptor {
     pub credentials: Vec<CredentialSlotDeclaration>,
     #[serde(default)]
     pub transport_profile: Option<String>,
+    /// Static, non-secret identity headers merged into every request this
+    /// provider sends: client-look headers (`user-agent`, `accept`, the
+    /// gateway's `x-client-*` family), never auth or framing. Values are
+    /// bounded text; names come from the host's published allowlist
+    /// (`transport::allowed_header`), the same closed set transport profiles
+    /// use, so auth/framing names can never travel through it.
+    #[serde(default)]
+    pub extra_headers: std::collections::BTreeMap<String, String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

@@ -1,6 +1,6 @@
 # Rectifier Reference
 
-> Authority: reference · Owner: backend · Last verified: 2026-11-15 · Verified by: `cargo test --workspace --all-features --locked`
+> Authority: reference · Owner: backend · Last verified: 2026-11-21 · Verified by: `cargo test --workspace --all-features --locked`
 
 A rectifier repairs a request the upstream refused, before the gateway gives up
 on that provider. It is not a retry of the same bytes: it changes the request

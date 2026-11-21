@@ -156,15 +156,39 @@ every member is a decision endpoint
 | CC Switch import finds nothing | wrong database or no usage rows | check the source path and range |
 | re-import duplicates rows | source identity missing | use the source constant and entity id |
 
+## Relay plugins: version bases, identity headers, catalog
+
+A community relay (the WorkBuddy package is the shipped example) declares its
+upstream with the relay's own version segment, and the host keeps it:
+`chat_url`, `models_url` and the plugin path authorization all accept a base
+whose final segment is `v<digits>` and never grow a second one
+(`crates/zroutery-core/src/config/registry.rs::versioned_suffix`,
+`crates/zroutery-core/src/plugin/bindings.rs::PluginBinding::operation_for_url`).
+
+The manifest may carry static identity headers for the provider
+(`ProviderDescriptor.extra_headers`, names from the same closed allowlist the
+transport profiles use — client-look names only, auth and framing denied);
+synthesis copies them onto the provider and `build_headers_for_identity`
+merges them under the same precedence as native `extra_headers`
+(`crates/zroutery-plugin-api/src/provider.rs::ProviderDescriptor`,
+`crates/zroutery-core/src/plugin/registry.rs::provider`,
+`crates/zroutery-core/src/upstream/headers.rs::build_headers_for_identity`).
+
 ## Not implemented
 
 - No claim that a real NewAPI panel accepts the adapter; loopback fixtures are
   not a production acceptance.
 - No generic upstream support for a provider kind outside the table.
 - No write path to the CC Switch database.
-- No plugin TLS transport profile, no plugin account probing and no models.dev
-  enrichment for plugin providers (`src-tauri/src/plugins/bindings.rs`,
-  `crates/zroutery-core/src/upstream/json.rs`).
+- No plugin TLS transport profile and no models.dev enrichment for plugin
+  providers (`src-tauri/src/plugins/bindings.rs`,
+  `crates/zroutery-core/src/upstream/json.rs`). Plugin account probing
+  (multi-account, quota, check-in) stays behind the scoped account transport
+  gate (`src-tauri/src/plugins/bindings.rs`).
+- Plugin secrets ride a chunked keyring layout (`plugin:<uuid>` marker +
+  `plugin:<uuid>.<i>` chunks) because one Windows Credential Manager entry
+  caps at 2560 bytes and a real JWT access token exceeds it
+  (`src-tauri/src/secrets.rs::set_keyring_plugin`).
 
 ## Sources
 

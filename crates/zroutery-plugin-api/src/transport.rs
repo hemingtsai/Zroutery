@@ -75,7 +75,16 @@ pub struct H2Setting {
 pub fn allowed_header(name: &str) -> bool {
     matches!(
         name,
-        "user-agent" | "accept" | "accept-language" | "accept-encoding"
+        "user-agent"
+            | "accept"
+            | "accept-language"
+            | "accept-encoding"
+            | "x-ide-version"
+            | "x-client-version"
+            | "x-client-platform"
+            | "x-client-product"
+            | "x-requested-with"
+            | "x-no-user-id"
     )
 }
 impl TransportProfileV1 {

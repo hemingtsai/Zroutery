@@ -1,6 +1,6 @@
 # Security Reference
 
-> Authority: reference · Owner: backend · Last verified: 2026-11-15 · Verified by: `cargo test --workspace --all-features --locked`
+> Authority: reference · Owner: backend · Last verified: 2026-11-21 · Verified by: `cargo test --workspace --all-features --locked`
 
 This page describes the local trust boundary: who may call the gateway, where
 secrets live, what the desktop exposes to the webview, and what is deliberately
@@ -59,6 +59,19 @@ That is the model; hiding the token from the same user is not a goal.
   the snapshot clears plugin credential references
   (`src-tauri/src/plugins/scoped_secrets.rs::verify_slot`,
   `src-tauri/src/secrets.rs::KeychainSecrets`).
+- Plugin slot secrets ride a chunked keyring layout — the marker entry holds
+  the chunk count and each chunk stays inside the platform's per-credential
+  blob cap, because a real JWT access token exceeds it
+  (`src-tauri/src/secrets.rs::set_keyring_plugin`,
+  `src-tauri/src/plugins/scoped_secrets.rs::store_plugin_slot`).
+- Every worker launch runs under a fresh AppContainer profile that is deleted
+  when the worker exits; profiles whose deletion raced the exit stay ledgered
+  and are swept by the plugin reload command
+  (`src-tauri/src/plugins/commands.rs::run_sandboxed_process`,
+  `crates/zroutery-plugin-host/src/sandbox/windows.rs::delete_app_container_profile`).
+- The dashboard can re-run the startup plugin wiring without restarting the
+  app: worker discovery, a fresh sandbox attestation and the ledger sweep
+  (`src-tauri/src/plugins/commands.rs::reload_plugins`).
 
 ## Webview surface
 
@@ -178,7 +191,7 @@ permissions and filesystem/network containment remain separate boundaries
 - `crates/zroutery-core/src/upstream/http.rs::configure`
 - `crates/zroutery-core/src/error.rs::safe_message`
 - `src-tauri/src/plugins/scoped_secrets.rs::verify_slot`
-- `src-tauri/src/secrets.rs::KeychainSecrets::keyring_only`
+- `src-tauri/src/secrets.rs::KeychainSecrets::get_keyring_plugin`
 - `crates/zroutery-core/src/upstream/transport.rs::request_for`
 - `crates/zroutery-plugin-host/src/sandbox.rs::probe`
 - `src-tauri/src/plugins/commands.rs`

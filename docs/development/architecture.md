@@ -132,7 +132,10 @@ test; the evidence table below marks the two that are source-only.
     `crates/zroutery-core/src/server/handlers.rs::constant_time_eq`).
 13. **Secrets live in the credential store.** Configuration carries a `key_ref`,
     not a key (`crates/zroutery-core/src/config/registry.rs::ProviderConfig`,
-    `src-tauri/src/secrets.rs::KeychainSecrets`).
+    `src-tauri/src/secrets.rs::KeychainSecrets`); a plugin slot whose secret
+    exceeds the platform's per-credential blob cap rides a chunked layout the
+    scoped path reassembles transparently
+    (`src-tauri/src/secrets.rs::set_keyring_plugin`).
 14. **A local persistence failure does not replay an upstream action.** A failed
     local write is a terminal failure for that request, not a reason to re-send a
     request the provider already executed

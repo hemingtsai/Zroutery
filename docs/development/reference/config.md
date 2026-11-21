@@ -1,6 +1,6 @@
 # Configuration Reference
 
-> Authority: reference · Owner: backend · Last verified: 2026-11-15 · Verified by: `cargo test --workspace --all-features --locked`
+> Authority: reference · Owner: backend · Last verified: 2026-11-21 · Verified by: `cargo test --workspace --all-features --locked`
 
 This page describes the configuration document: defaults, validation,
 normalisation, persistence and the secret boundary. It is not a settings guide;
@@ -22,7 +22,10 @@ the UI is the editing surface.
 Provider entries carry a `key_ref`, not a key
 (`crates/zroutery-core/src/config/registry.rs::ProviderConfig`). A model entry
 carries pricing, tier, capabilities and aliases
-(`crates/zroutery-core/src/config/registry.rs::ModelEntry`).
+(`crates/zroutery-core/src/config/registry.rs::ModelEntry`). For the chat,
+models and plugin paths, a provider base URL that already ends in a version
+segment (`/v1`, or a relay's own `/v2`) is kept as declared and never grows a
+second one (`crates/zroutery-core/src/config/registry.rs::versioned_suffix`).
 
 ## Defaults
 

@@ -1,15 +1,30 @@
 import { useCallback, useEffect, useState } from "react";
-import { api, errorText, type PluginInspection, type PluginInstallation } from "../api";
+import { api, errorText, type PluginInspection, type PluginInstallation, type PluginReload } from "../api";
 import { Button, ConfirmDialog, Section, type ConfirmRequest } from "../components";
 import { useI18n } from "../i18n";
 import { applyThemeRef, registerTheme, setThemeEnabled } from "../themes/registry";
 import { loadThemeRef } from "../themes/preferences";
 import { PluginPanel } from "./renderer";
 
+/** A permission's manifest attributes as key/value fact pairs — `reason` and
+    `capability` are rendered by the caller; arrays join into one value. */
+function permissionFacts(permission: object): [string, string][] {
+  return Object.entries(permission)
+    .filter(([key]) => key !== "reason" && key !== "capability")
+    .map(([key, value]) => [key, Array.isArray(value) ? value.join(", ") : String(value)]);
+}
+
+function PermissionFacts({ permission }: { permission: object }) {
+  return <div className="plugin-permission-facts">
+    {permissionFacts(permission).map(([key, value]) => <span className="plugin-permission-fact" key={key}>{key} <code>{value}</code></span>)}
+  </div>;
+}
+
 export default function PluginManager() {
   const { t, lang } = useI18n();
   const [plugins, setPlugins] = useState<PluginInstallation[]>([]);
   const [inspection, setInspection] = useState<PluginInspection | null>(null);
+  const [reloadState, setReloadState] = useState<PluginReload | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [confirm, setConfirm] = useState<ConfirmRequest | null>(null);
@@ -36,8 +51,10 @@ export default function PluginManager() {
     <Section title={t("plugins.title")} hint={t("plugins.hint")}>
       <div className="plugin-manager-actions">
         <Button disabled={busy} onClick={() => void run(async () => setInspection(await api.inspectPlugin()))}>{t("plugins.inspect")}</Button>
+        <Button kind="ghost" disabled={busy} onClick={() => void run(async () => setReloadState(await api.reloadPlugins()))}>{t("plugins.reload")}</Button>
         <Button kind="ghost" disabled={busy} onClick={() => void run(api.safeAppearance)}>{t("plugins.safe_appearance")}</Button>
       </div>
+      {reloadState && <p className="field-hint">{t("plugins.reload_done", { sandbox: reloadState.sandbox, cleaned: reloadState.cleaned_profiles })}{!reloadState.worker_found ? ` — ${t("plugins.reload_no_worker")}` : ""}</p>}
       {error && <p role="alert" className="warn-text">{error}</p>}
       {inspection && <div data-host-security="true" className="plugin-stack">
         <strong>{inspection.manifest.name[locale]} · {inspection.manifest.version}</strong>
@@ -45,7 +62,7 @@ export default function PluginManager() {
         <p>{t("plugins.declaration_not_grant")}</p>
         <ul className="plugin-permissions">{inspection.manifest.permissions.map((permission, index) => <li key={index}>
           <code>{permission.capability}</code> — {permission.reason[locale]}
-          <div className="field-hint">{JSON.stringify(Object.fromEntries(Object.entries(permission).filter(([key]) => key !== "reason")))}</div>
+          <PermissionFacts permission={permission} />
         </li>)}</ul>
         <div className="plugin-manager-actions">
           <Button disabled={busy} onClick={() => void run(async () => {
@@ -65,7 +82,7 @@ export default function PluginManager() {
         <div className="plugin-manager-actions">
           <Button disabled={busy || (!!plugin.manifest.runtime && !plugin.sandbox_available && !(plugin.manifest.contributions.providers?.length || plugin.manifest.contributions.clients?.length || plugin.manifest.contributions.themes?.length))} onClick={() => plugin.enabled
             ? void run(() => api.disablePlugin(plugin.installation_id))
-            : setConfirm({ title: t("plugins.grant_title"), body: <div><p>{t("plugins.declaration_not_grant")}</p><ul className="plugin-permissions">{plugin.manifest.permissions.map((p, index) => <li key={index}><code>{p.capability}</code> — {p.reason[locale]}<div>{JSON.stringify(Object.fromEntries(Object.entries(p).filter(([key]) => key !== "reason")))}</div></li>)}</ul></div>, confirmLabel: t("plugins.grant_enable"), onConfirm: () => void run(() => api.activatePlugin(plugin.installation_id, plugin.package_digest, [...plugin.manifest.permissions])) })}>
+            : setConfirm({ title: t("plugins.grant_title"), body: <div><p>{t("plugins.declaration_not_grant")}</p><ul className="plugin-permissions">{plugin.manifest.permissions.map((p, index) => <li key={index}><code>{p.capability}</code> — {p.reason[locale]}<PermissionFacts permission={p} /></li>)}</ul></div>, confirmLabel: t("plugins.grant_enable"), onConfirm: () => void run(() => api.activatePlugin(plugin.installation_id, plugin.package_digest, [...plugin.manifest.permissions])) })}>
             {plugin.enabled ? t("plugins.disable") : t("plugins.enable")}
           </Button>
           {plugin.previous_digest && <Button kind="ghost" disabled={busy} onClick={() => void run(() => api.rollbackPlugin(plugin.installation_id))}>{t("plugins.rollback")}</Button>}

@@ -1,6 +1,6 @@
 # File Transactions Reference
 
-> Authority: reference · Owner: backend · Last verified: 2026-11-15 · Verified by: `cargo test --workspace --all-features --locked`
+> Authority: reference · Owner: backend · Last verified: 2026-11-21 · Verified by: `cargo test --workspace --all-features --locked`
 
 A file transaction replaces a small set of files with crash recovery. It is used
 where a multi-file write must either finish or leave a readable journal, notably

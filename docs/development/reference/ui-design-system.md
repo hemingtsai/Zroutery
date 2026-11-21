@@ -1,6 +1,6 @@
 # UI Design System Reference
 
-> Authority: reference · Owner: frontend · Last verified: 2026-11-15 · Verified by: `pnpm --dir ui build && pnpm --dir ui test`
+> Authority: reference · Owner: frontend · Last verified: 2026-11-21 · Verified by: `pnpm --dir ui build && pnpm --dir ui test`
 
 This page covers the tokens, skins, primitives and gates of the dashboard. It is
 a reference, not a pixel specification; the shipped values are in the stylesheet.
@@ -67,6 +67,10 @@ interaction coverage saves both settings without changing the model pool
 - A host without the restricted process answers a plugin worker call with
   `sandbox_unavailable`; the call is never run unsandboxed
   (`src-tauri/src/plugins/commands.rs::run_sandboxed_process`).
+- Every worker launch runs under a fresh AppContainer profile deleted at exit;
+  the reload command re-runs worker discovery, the sandbox probe and one
+  ledger sweep without a restart
+  (`src-tauri/src/plugins/commands.rs::reload_plugins`).
 
 ## Gates
 

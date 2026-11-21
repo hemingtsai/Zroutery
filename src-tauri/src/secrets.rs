@@ -98,6 +98,11 @@ fn backend_error(error: keyring::Error) -> StoreError {
     }
 }
 
+/// The per-chunk char count for plugin secrets: 600 chars encode to at most
+/// 1200 UTF-16 units = 2400 bytes, inside the Windows Credential Manager's
+/// 2560-byte blob cap even when every char is on an astral plane.
+const PLUGIN_CHUNK_CHARS: usize = 600;
+
 pub struct KeychainSecrets {
     backend: Box<dyn CredentialBackend>,
     fallback: Option<Fallback>,
@@ -212,15 +217,63 @@ impl KeychainSecrets {
     /// Plugin operations use the same backend/service, but NEVER the legacy
     /// headless environment fallback or an unscoped native cache entry.
     /// Ownership and grant revision must have been checked before calling this.
-    pub(crate) fn keyring_only(&self, key_ref: &str) -> Result<String, StoreError> {
-        self.backend.get(key_ref)
+    ///
+    /// Plugin secrets ride a chunked keyring layout. The Windows Credential
+    /// Manager caps one credential's blob at 2560 bytes and the backend
+    /// encodes passwords as UTF-16 — a real JWT access token exceeds both the
+    /// byte cap and any fixed char count that ignores astral planes. Chunks
+    /// are 600 chars (worst case 1200 UTF-16 units = 2400 bytes), the marker
+    /// entry under `key_ref` holds the chunk count, and each chunk lives under
+    /// `key_ref.<i>`. The scoped plugin path is the only user, and it always
+    /// writes through these methods, so the marker is always a count.
+    pub(crate) fn set_keyring_plugin(&self, key_ref: &str, secret: &str) -> Result<(), StoreError> {
+        let chars: Vec<char> = secret.chars().collect();
+        let count = chars.len().div_ceil(PLUGIN_CHUNK_CHARS);
+        for index in 0..count {
+            let piece: String = chars
+                [index * PLUGIN_CHUNK_CHARS..((index + 1) * PLUGIN_CHUNK_CHARS).min(chars.len())]
+                .iter()
+                .collect();
+            match self.backend.set(&format!("{key_ref}.{index}"), &piece) {
+                Ok(()) => {}
+                Err(error) => {
+                    // A partial set must not survive: roll back every chunk
+                    // written so far, so a retry starts from nothing.
+                    for rollback in 0..index {
+                        let _ = self.backend.delete(&format!("{key_ref}.{rollback}"));
+                    }
+                    return Err(error);
+                }
+            }
+        }
+        self.backend.set(key_ref, &count.to_string())
     }
 
-    pub(crate) fn set_keyring_only(&self, key_ref: &str, secret: &str) -> Result<(), StoreError> {
-        self.backend.set(key_ref, secret)
+    pub(crate) fn get_keyring_plugin(&self, key_ref: &str) -> Result<String, StoreError> {
+        let marker = self.backend.get(key_ref)?;
+        let count: usize = marker
+            .parse()
+            .map_err(|_| StoreError::Backend("plugin secret marker is not a chunk count".into()))?;
+        let mut secret = String::new();
+        for index in 0..count {
+            secret.push_str(&self.backend.get(&format!("{key_ref}.{index}"))?);
+        }
+        Ok(secret)
     }
 
-    pub(crate) fn delete_keyring_only(&self, key_ref: &str) -> Result<(), StoreError> {
+    pub(crate) fn delete_keyring_plugin(&self, key_ref: &str) -> Result<(), StoreError> {
+        let marker = match self.backend.get(key_ref) {
+            Ok(marker) => marker,
+            Err(StoreError::NoEntry) => return Ok(()),
+            Err(error) => return Err(error),
+        };
+        let count: usize = marker.parse().unwrap_or(1);
+        for index in 0..count.saturating_add(1) {
+            match self.backend.delete(&format!("{key_ref}.{index}")) {
+                Ok(()) | Err(StoreError::NoEntry) => {}
+                Err(error) => return Err(error),
+            }
+        }
         match self.backend.delete(key_ref) {
             Ok(()) | Err(StoreError::NoEntry) => Ok(()),
             Err(error) => Err(error),

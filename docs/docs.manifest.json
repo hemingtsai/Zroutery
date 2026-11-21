@@ -550,7 +550,13 @@
     "node_modules/**",
     "target/**",
     "docs/archive/**",
-    ".zcode/**"
+    ".zcode/**",
+    "plugins/workbuddy/README.md",
+    "plugins/theme-md3/DESIGN.md",
+    "plugins/theme-fluent/DESIGN.md",
+    "ui/DESIGN.md",
+    ".arts/**",
+    ".codeartsdoer/**"
   ],
   "triggers": {
     ".github/workflows/**": [

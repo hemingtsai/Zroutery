@@ -63,3 +63,40 @@ fn two_local_grants_cannot_be_cross_stitched_into_a_new_operation_origin_slot() 
         scope
     )));
 }
+
+#[test]
+fn provider_extra_headers_carry_identity_and_never_auth() {
+    let mut panel = provider();
+    panel["contributions"]["providers"][0]["extra_headers"] = serde_json::json!({
+        "user-agent": "WorkBuddy/5.11.3 WorkBuddy/5.11.3 CLI/2.176.0",
+        "accept": "application/json",
+        "x-ide-version": "5.11.3",
+        "x-requested-with": "XMLHttpRequest"
+    });
+    PluginManifestV1::decode(&serde_json::to_vec(&panel).unwrap()).unwrap();
+
+    // Auth and framing names can never travel through the identity header map.
+    for name in [
+        "authorization",
+        "x-api-key",
+        "cookie",
+        "content-type",
+        "x-unknown-custom",
+    ] {
+        let mut rejected = panel.clone();
+        rejected["contributions"]["providers"][0]["extra_headers"] =
+            serde_json::json!({ name: "value" });
+        assert!(
+            PluginManifestV1::decode(&serde_json::to_vec(&rejected).unwrap()).is_err(),
+            "{name}"
+        );
+    }
+    // The map is bounded (8 entries) and its values are bounded text.
+    let mut overflow = panel.clone();
+    overflow["contributions"]["providers"][0]["extra_headers"] = serde_json::json!({
+        "user-agent": "a", "accept": "a", "accept-language": "a",
+        "accept-encoding": "a", "x-ide-version": "a", "x-client-version": "a",
+        "x-client-platform": "a", "x-client-product": "a", "x-requested-with": "a"
+    });
+    assert!(PluginManifestV1::decode(&serde_json::to_vec(&overflow).unwrap()).is_err());
+}

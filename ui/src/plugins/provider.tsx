@@ -47,7 +47,7 @@ export function PluginProviderDrawer({ id, installationId, contributionId, name,
     {descriptor?.operations.map((operation) => <div className="kv-row" key={operation.id}><code>{operation.service.id}</code><span className="kv-val mono">{operation.base_url}</span></div>)}
     <div data-host-security="true" className="plugin-stack">
       {descriptor?.credentials.filter((slot) => slot.scope === "provider_instance").map((slot) => <div key={slot.id} className="plugin-stack">
-        <label className="field">{slot.name[locale]}<input type="password" autoComplete="off" value={drafts[slot.id] ?? ""} onChange={(e) => setDrafts((current) => ({ ...current, [slot.id]: e.currentTarget.value }))} /></label>
+        <label className="field">{slot.name[locale]}<input type="password" autoComplete="off" value={drafts[slot.id] ?? ""} onChange={(e) => { const next = e.currentTarget.value; setDrafts((current) => ({ ...current, [slot.id]: next })); }} /></label>
         <div className="plugin-manager-actions"><Button disabled={!drafts[slot.id]?.trim()} onClick={async () => {
           const revision = snapshot.config.__config_revision;
           if (!revision) return;
@@ -60,6 +60,6 @@ export function PluginProviderDrawer({ id, installationId, contributionId, name,
       </div>)}
     </div>
     {descriptor?.credentials.some((slot) => slot.scope === "account") && <p>{t("plugins.account_unavailable")}</p>}
-    <Button onClick={() => void run(() => api.setProviderEnabled(id, !(snapshot.config.providers.find((p) => p.id === id)?.enabled ?? false)))}>{t("common.enabled")}</Button>
+    <Button onClick={() => void run(() => api.setProviderEnabled(id, !(snapshot.config.providers.find((p) => p.id === id)?.enabled ?? false)))}>{snapshot.config.providers.find((p) => p.id === id)?.enabled ? t("plugins.disable") : t("plugins.enable")}</Button>
   </Drawer>;
 }

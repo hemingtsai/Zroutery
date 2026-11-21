@@ -1,6 +1,6 @@
 # Client Attribution Reference
 
-> Authority: reference · Owner: backend · Last verified: 2026-11-15 · Verified by: `cargo test --workspace --all-features --locked`
+> Authority: reference · Owner: backend · Last verified: 2026-11-21 · Verified by: `cargo test --workspace --all-features --locked`
 
 Client attribution answers "which application sent this?" for reporting. It is
 not the routing identity: routing decides which upstream identity a request

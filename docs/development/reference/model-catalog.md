@@ -1,6 +1,6 @@
 # Model Catalog Reference
 
-> Authority: reference · Owner: backend · Last verified: 2026-11-15 · Verified by: `cargo test --workspace --all-features --locked`
+> Authority: reference · Owner: backend · Last verified: 2026-11-21 · Verified by: `cargo test --workspace --all-features --locked`
 
 models.dev supplies the capabilities a provider's own `/models` route rarely
 answers: context window, max output, vision/audio/video/file support, tools,
@@ -35,6 +35,13 @@ configuration stays authoritative.
 | `reasoning` | `capabilities.thinking` |
 | `structured_output` | `capabilities.structured_output` |
 | `reasoning_options` type `effort` | `effort_levels`, filtered to `EFFORT_LEVELS` |
+
+The accepted vocabulary includes Codex's native `ultra` value. It is exposed for
+a model only when that model explicitly declares it; it is preserved as a native
+effort rather than assigned an invented token budget
+(`crates/zroutery-core/src/ir/reasoning.rs::NATIVE_EFFORTS`,
+`crates/zroutery-core/src/config/model.rs::normalize_effort_levels`,
+`crates/zroutery-core/src/agent_takeover/catalogue.rs::codex_catalogue`).
 
 A model that does not declare reasoning has no effort levels. A toggle-only
 model has none either; only the effort options contribute
@@ -93,6 +100,9 @@ the backend never merges into configured entries
 - `crates/zroutery-core/src/models_dev.rs::CatalogModel`
 - `crates/zroutery-core/src/models_dev.rs::catalog_model`
 - `crates/zroutery-core/src/models_dev.rs::effort_levels`
+- `crates/zroutery-core/src/ir/reasoning.rs::NATIVE_EFFORTS`
+- `crates/zroutery-core/src/config/model.rs::normalize_effort_levels`
+- `crates/zroutery-core/src/agent_takeover/catalogue.rs::codex_catalogue`
 - `crates/zroutery-core/src/models_dev.rs::Catalog::lookup`
 - `crates/zroutery-core/src/models_dev.rs::enrich`
 - `crates/zroutery-core/src/models_dev.rs::enrich_from`

@@ -55,6 +55,10 @@ provider's `ApiSurface` selects which OpenAI surface it answers
 `encode_request` dispatches on the resulting `Dialect`
 (`crates/zroutery-core/src/protocol/mod.rs::encode_request`). Gemini is a client
 entry protocol only (`crates/zroutery-core/src/config/provider.rs::ProviderKind`).
+For the chat, models and plugin paths, a provider base URL that already ends
+in a version segment (`/v1`, or a relay's own `/v2`) is kept as declared and
+never grows a second one
+(`crates/zroutery-core/src/config/registry.rs::versioned_suffix`).
 
 The dialect and the client identity are separate choices. Which surface the
 request is encoded for is `ApiSurface`; which name the upstream sees is the

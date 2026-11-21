@@ -53,6 +53,7 @@ pub fn provider(
     if operation.service.id == "host.protocol.openai_responses" {
         provider.api_surface = crate::config::ApiSurface::Responses;
     }
+    provider.extra_headers = descriptor.extra_headers.clone();
     provider.key_ref.clear();
     provider.plugin_binding = Some(binding);
     Ok(provider)

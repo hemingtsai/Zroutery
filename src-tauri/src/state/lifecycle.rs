@@ -216,7 +216,7 @@ impl Desktop {
         lock(&self.warning).clone()
     }
 
-    fn discover_plugin_worker() -> Option<PathBuf> {
+    pub fn discover_plugin_worker() -> Option<PathBuf> {
         std::env::var_os("ZROUTERY_PLUGIN_WORKER")
             .map(PathBuf::from)
             .or_else(|| {

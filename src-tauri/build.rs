@@ -51,6 +51,7 @@ const APP_COMMANDS: &[&str] = &[
     "get_plugin_themes",
     "render_plugin_ui",
     "invoke_plugin_ui_action",
+    "reload_plugins",
     "enter_safe_appearance",
     "instantiate_plugin_provider",
     "store_plugin_credential",

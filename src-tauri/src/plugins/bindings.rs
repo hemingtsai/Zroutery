@@ -105,7 +105,7 @@ impl PluginPort for HostBindings {
                 scope,
                 || {
                     self.secrets
-                        .keyring_only(&slot.key_ref)
+                        .get_keyring_plugin(&slot.key_ref)
                         .map(Some)
                         .map_err(|_| zroutery_plugin_api::PluginError::CredentialUnavailable)
                 },

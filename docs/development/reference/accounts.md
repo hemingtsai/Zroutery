@@ -1,6 +1,6 @@
 # Accounts Reference
 
-> Authority: reference · Owner: backend · Last verified: 2026-11-15 · Verified by: `cargo test --workspace --all-features --locked`
+> Authority: reference · Owner: backend · Last verified: 2026-11-21 · Verified by: `cargo test --workspace --all-features --locked`
 
 This page describes account declarations, panel-token binding, inference-key
 pools, browser check-in and token capture. It does not claim real-panel
@@ -9,7 +9,11 @@ acceptance; current status is in [current-state.md](../current-state.md).
 ## Declaration
 
 An account is a declaration on a provider
-(`crates/zroutery-core/src/config/registry.rs::AccountConfig`):
+(`crates/zroutery-core/src/config/registry.rs::AccountConfig`); plugin
+instances host their own account declarations, but the scoped account
+transport gate keeps them out of native reconciliation until the adapter
+surface is wired
+(`src-tauri/src/plugins/bindings.rs`):
 
 - `account_id` names the panel account;
 - `key_ref` is the **panel token** used to probe balances and sign in;

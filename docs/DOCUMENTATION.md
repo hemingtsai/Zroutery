@@ -1,6 +1,6 @@
 # Documentation Standard
 
-> Authority: normative · Owner: docs · Last verified: 2026-11-15 · Verified by: `scripts/docs_check.py`
+> Authority: normative · Owner: docs · Last verified: 2026-11-21 · Verified by: `scripts/docs_check.py`
 
 This file is the rulebook for every Markdown document in this repository. It is
 short on purpose: a rulebook that needs its own rulebook is not a rulebook.

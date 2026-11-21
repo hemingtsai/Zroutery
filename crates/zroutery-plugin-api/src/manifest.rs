@@ -379,6 +379,13 @@ impl PluginManifestV1 {
                     )?;
                 }
             }
+            if p.extra_headers.len() > 8
+                || p.extra_headers.iter().any(|(name, value)| {
+                    !crate::transport::allowed_header(name) || !strict::text(value, 256)
+                })
+            {
+                return Err(PluginError::InvalidManifest);
+            }
             if let Some(profile) = &p.transport_profile {
                 self.require(
                     Capability::TransportProfileUse,

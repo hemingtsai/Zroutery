@@ -10,6 +10,57 @@ use zroutery_plugin_host::{
 };
 
 #[derive(Serialize)]
+pub struct PluginReload {
+    /// Whether a sandboxed worker executable was found beside the app. False
+    /// means executable plugin facets stay denied until one is deployed.
+    pub worker_found: bool,
+    /// The fresh sandbox attestation: `verified` or `unavailable`.
+    pub sandbox: SandboxStatus,
+    /// AppContainer profiles swept from the ledger during this reload.
+    pub cleaned_profiles: usize,
+}
+
+/// The reload path mirrors the startup wiring once: worker discovery, a fresh
+/// sandbox attestation, and one AppContainer profile ledger sweep. The manager
+/// state itself stays in memory — package installs and activations persist and
+/// are re-read through the same manager.
+pub(crate) fn reload_state(desktop: &crate::state::Desktop) -> PluginReload {
+    let worker = crate::state::Desktop::discover_plugin_worker();
+    let worker_found = worker.is_some();
+    let probe_root = desktop.config_dir.join("plugins").join("probe");
+    let sandbox = match &worker {
+        Some(path) => {
+            {
+                let mut path_lock = desktop
+                    .plugins
+                    .worker_path
+                    .lock()
+                    .unwrap_or_else(|error| error.into_inner());
+                *path_lock = Some(path.clone());
+            }
+            zroutery_plugin_host::supervisor::verify_sandbox(path, &probe_root)
+        }
+        None => {
+            {
+                let mut path_lock = desktop
+                    .plugins
+                    .worker_path
+                    .lock()
+                    .unwrap_or_else(|error| error.into_inner());
+                *path_lock = None;
+            }
+            SandboxStatus::Unavailable
+        }
+    };
+    let cleaned_profiles = super::commands::cleanup_profile_ledger(&desktop.config_dir);
+    PluginReload {
+        worker_found,
+        sandbox,
+        cleaned_profiles,
+    }
+}
+
+#[derive(Serialize)]
 pub struct PluginInstallation {
     pub installation_id: String,
     pub plugin_id: String,

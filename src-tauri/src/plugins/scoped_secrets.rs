@@ -197,7 +197,7 @@ impl crate::state::Desktop {
             .map_err(|_| "permission_denied")?;
         // Ownership is checked before backend/cache access; other owners have the
         // same denial whether their slot exists or not.
-        let status = match self.secrets.keyring_only(&slot.key_ref) {
+        let status = match self.secrets.get_keyring_plugin(&slot.key_ref) {
             Ok(value) => super::credentials::CredentialStatus {
                 present: !value.is_empty(),
                 state: "ready",
@@ -277,7 +277,7 @@ impl crate::state::Desktop {
         self.core.set_config(next.clone());
         if !crate::secret_refs::referenced_secrets(&next).contains(&slot.key_ref) {
             self.secrets
-                .delete_keyring_only(&slot.key_ref)
+                .delete_keyring_plugin(&slot.key_ref)
                 .map_err(|_| "credential_unavailable")?;
         }
         Ok(())
@@ -326,7 +326,7 @@ impl crate::state::Desktop {
                 if pending
                     && self
                         .secrets
-                        .delete_keyring_only(&record.slot.key_ref)
+                        .delete_keyring_plugin(&record.slot.key_ref)
                         .is_ok()
                 {
                     runtime.discard_inference_publication(&record.slot.key_ref)?;
@@ -349,8 +349,14 @@ impl crate::state::Desktop {
         if crate::state::config_revision(&before) != expected_revision {
             return Err("stale_revision".into());
         }
-        if secret.is_empty() || secret.len() > 4096 || secret.contains('\0') {
-            return Err("credential_unavailable".into());
+        if secret.is_empty() {
+            return Err("credential_unavailable: empty secret".into());
+        }
+        if secret.len() > 4096 {
+            return Err("credential_unavailable: secret exceeds 4096 bytes".into());
+        }
+        if secret.contains('\0') {
+            return Err("credential_unavailable: secret contains a NUL byte".into());
         }
         let mut next = (*before).clone();
         let instance = next
@@ -477,12 +483,11 @@ impl crate::state::Desktop {
         let reference = staged.key_ref.clone();
         let secret = secret.to_string();
         let stored = tauri::async_runtime::spawn_blocking(move || {
-            secrets.set_keyring_only(&reference, &secret)
+            secrets.set_keyring_plugin(&reference, &secret)
         })
         .await
-        .map_err(|_| "credential_unavailable")?
-        .map_err(|_| "credential_unavailable");
-        stored.map_err(str::to_string)?;
+        .map_err(|_| "credential_unavailable: worker pool join failed".to_string())?;
+        stored.map_err(|error| format!("credential_unavailable: {error}"))?;
         instance.credentials.retain(|s| {
             !(s.slot_id == slot_id && s.account_generation == staged.account_generation)
         });
@@ -508,7 +513,7 @@ impl crate::state::Desktop {
         if let Err(error) = crate::store::save(&self.config_dir, &next) {
             // Save failure cannot replay an external auth action. This path only
             // stored user input, so compensate exactly its own staging UUID.
-            if self.secrets.delete_keyring_only(&staged.key_ref).is_ok() {
+            if self.secrets.delete_keyring_plugin(&staged.key_ref).is_ok() {
                 runtime.discard_inference_publication(&staged.key_ref)?;
             }
             return Err(error);

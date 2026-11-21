@@ -100,6 +100,7 @@ pub fn run() {
             commands::get_activity,
             commands::get_system_accent,
             plugins::commands::list_plugins,
+            plugins::commands::reload_plugins,
             plugins::commands::inspect_plugin_package,
             plugins::commands::install_plugin_package,
             plugins::commands::activate_plugin,

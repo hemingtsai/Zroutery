@@ -1,6 +1,6 @@
 # Implementation Contracts Reference
 
-> Authority: reference · Owner: backend · Last verified: 2026-11-15 · Verified by: `cargo test --workspace --all-features --locked`
+> Authority: reference · Owner: backend · Last verified: 2026-11-21 · Verified by: `cargo test --workspace --all-features --locked`
 
 These are the boundaries a change must preserve. `AGENTS.md` routes here; it does
 not restate them.
@@ -19,7 +19,10 @@ not restate them.
 - Configuration is declaration; runtime observations, credentials and historical
   accounting have separate owners (`crates/zroutery-core/src/config/app.rs::AppConfig`,
   `crates/zroutery-core/src/observation.rs::ObservationStore`,
-  `src-tauri/src/secrets.rs::KeychainSecrets`).
+  `src-tauri/src/secrets.rs::KeychainSecrets`). A plugin slot secret whose
+  encoded form exceeds the platform's per-credential blob cap rides the chunked
+  layout the scoped path reassembles
+  (`src-tauri/src/secrets.rs::set_keyring_plugin`).
 
 ## IPC
 

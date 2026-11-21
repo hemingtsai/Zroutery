@@ -275,6 +275,81 @@ fn worker_bootstrap(
     })
 }
 
+/// The AppContainer profile ledger: every per-launch worker profile this
+/// installation created, so a deletion that raced a live worker is swept by
+/// the plugin reload command instead of accumulating forever.
+/// Bounded, best-effort JSON beside the manager state.
+fn profile_ledger_path(config_dir: &std::path::Path) -> std::path::PathBuf {
+    config_dir.join("plugins").join("profile-ledger.json")
+}
+
+#[derive(serde::Serialize, serde::Deserialize)]
+struct ProfileLedger {
+    profiles: Vec<String>,
+}
+
+const PROFILE_LEDGER_CAP: usize = 64;
+
+fn load_profile_ledger(config_dir: &std::path::Path) -> Vec<String> {
+    let Ok(bytes) = std::fs::read(profile_ledger_path(config_dir)) else {
+        return Vec::new();
+    };
+    serde_json::from_slice::<ProfileLedger>(&bytes)
+        .map(|ledger| ledger.profiles)
+        .unwrap_or_default()
+}
+
+fn save_profile_ledger(config_dir: &std::path::Path, profiles: &[String]) {
+    if let Ok(bytes) = serde_json::to_vec(&ProfileLedger {
+        profiles: profiles.to_vec(),
+    }) {
+        let _ = zroutery_plugin_host::lifecycle::atomic_write(
+            config_dir,
+            "plugins/profile-ledger.json",
+            &bytes,
+        );
+    }
+}
+
+/// Best-effort deletion of every ledgered profile. A deletion fails while a
+/// worker still runs under it; those names stay ledgered for the next sweep.
+pub(crate) fn cleanup_profile_ledger(config_dir: &std::path::Path) -> usize {
+    let names = load_profile_ledger(config_dir);
+    let mut kept = Vec::new();
+    let mut cleaned = 0usize;
+    for name in names {
+        if zroutery_plugin_host::sandbox::delete_app_container_profile(&name) {
+            cleaned += 1;
+        } else {
+            kept.push(name);
+        }
+    }
+    if cleaned > 0 {
+        save_profile_ledger(config_dir, &kept);
+    }
+    cleaned
+}
+
+fn record_profile_ledger(config_dir: &std::path::Path, profile_name: &str) {
+    let mut profiles = load_profile_ledger(config_dir);
+    profiles.push(profile_name.to_string());
+    // A ledger that outgrows its cap has stopped being a cleanup list: the
+    // oldest entries are the ones whose workers died longest ago, so they are
+    // also the safest to forget.
+    if profiles.len() > PROFILE_LEDGER_CAP {
+        profiles.drain(0..profiles.len() - PROFILE_LEDGER_CAP);
+    }
+    save_profile_ledger(config_dir, &profiles);
+}
+
+fn forget_profile_ledger(config_dir: &std::path::Path, profile_name: &str) {
+    let mut profiles = load_profile_ledger(config_dir);
+    if let Some(position) = profiles.iter().position(|name| name == profile_name) {
+        profiles.remove(position);
+        save_profile_ledger(config_dir, &profiles);
+    }
+}
+
 fn run_worker_call(
     desktop: &Desktop,
     package: &Package,
@@ -347,6 +422,7 @@ fn run_worker_call(
         &expected_epoch,
         &expected_generation,
         limits.wall_ms,
+        &desktop.config_dir,
     );
     let _ = std::fs::remove_dir_all(&work);
     result
@@ -354,6 +430,9 @@ fn run_worker_call(
 
 /// The restricted process and its private pipes exist for Windows builds.
 #[cfg(target_os = "windows")]
+// Every parameter is consumed on every call; grouping them would only rename
+// the same eight facts. Mirrors the allow on the verified binding constructor.
+#[allow(clippy::too_many_arguments)]
 fn run_sandboxed_process(
     worker: &std::path::Path,
     work: &std::path::Path,
@@ -362,9 +441,11 @@ fn run_sandboxed_process(
     expected_epoch: &str,
     expected_generation: &str,
     wall_ms: u64,
+    config_dir: &std::path::Path,
 ) -> std::result::Result<WorkerReply, String> {
     (|| {
         let mut process = sandbox::launch(worker, work, "").map_err(|e| e.to_string())?;
+        record_profile_ledger(config_dir, process.profile_name.as_str());
         // A wedged worker is terminated at the declared wall budget. The killed
         // job closes the private pipe, so the read below fails instead of
         // hanging a broker thread forever; the caller then reports a timeout.
@@ -384,6 +465,14 @@ fn run_sandboxed_process(
         })();
         let fired = watchdog.stand_down();
         let _ = process.wait(wall_ms.min(5000) as u32);
+        // The worker is gone (or the job was terminated); its per-launch
+        // AppContainer profile must not outlive it. A deletion that fails
+        // because the exit raced the call stays ledgered for the next sweep.
+        if zroutery_plugin_host::sandbox::delete_app_container_profile(
+            process.profile_name.as_str(),
+        ) {
+            forget_profile_ledger(config_dir, process.profile_name.as_str());
+        }
         // A terminated job surfaces as a broken pipe, which the IPC layer
         // reports as a crash; when the watchdog fired, the real breach was the
         // wall clock and the reply says so.
@@ -405,6 +494,7 @@ fn run_sandboxed_process(
     _expected_epoch: &str,
     _expected_generation: &str,
     _wall_ms: u64,
+    _config_dir: &std::path::Path,
 ) -> std::result::Result<WorkerReply, String> {
     Err("sandbox_unavailable".into())
 }
@@ -857,6 +947,16 @@ pub fn recover_appearance(app: &AppHandle) {
         let _ = window.eval("document.documentElement.dataset.safeAppearance='true';document.getElementById('zroutery-plugin-theme')?.remove();delete document.documentElement.dataset.pluginTheme;");
     }
     let _ = app.emit("zroutery://safe-appearance", ());
+}
+
+#[tauri::command]
+pub async fn reload_plugins(
+    desktop: State<'_, Arc<Desktop>>,
+) -> Result<crate::plugins::views::PluginReload, String> {
+    let desktop = desktop.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || Ok(crate::plugins::views::reload_state(&desktop)))
+        .await
+        .map_err(|_| "plugin_crashed".to_string())?
 }
 
 #[tauri::command]

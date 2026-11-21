@@ -1,6 +1,6 @@
 # Failure Reference
 
-> Authority: reference · Owner: backend · Last verified: 2026-11-15 · Verified by: `cargo test --workspace --all-features --locked`
+> Authority: reference · Owner: backend · Last verified: 2026-11-21 · Verified by: `cargo test --workspace --all-features --locked`
 
 This page describes how an error becomes a classification, a retry decision and
 a terminal state. It does not describe accounting; a failed attempt's known cost

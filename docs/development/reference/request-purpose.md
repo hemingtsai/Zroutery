@@ -1,6 +1,6 @@
 # Request Purpose Reference
 
-> Authority: reference · Owner: backend · Last verified: 2026-11-15 · Verified by: `cargo test --workspace --all-features --locked`
+> Authority: reference · Owner: backend · Last verified: 2026-11-21 · Verified by: `cargo test --workspace --all-features --locked`
 
 A request has two independent dimensions: which model it asks for
 (`Resolution`) and why it exists (`RequestKind`). This page covers the second.

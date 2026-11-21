@@ -1,0 +1,126 @@
+{
+  "manifest_version": 1,
+  "id": "dev.zroutery.workbuddy",
+  "version": "0.2.0",
+  "name": {
+    "en": "WorkBuddy (CodeBuddy)",
+    "zh-CN": "WorkBuddy（CodeBuddy）",
+    "zh-TW": "WorkBuddy（CodeBuddy）"
+  },
+  "host_api": { "major": 1, "min_minor": 0 },
+  "runtime": { "engine": "quickjs", "entries": { "ui": "ui.mjs" } },
+  "requires": [
+    { "service": "host.protocol.openai_chat", "api": { "major": 1, "min_minor": 0 } },
+    { "service": "host.auth.bearer", "api": { "major": 1, "min_minor": 0 } }
+  ],
+  "permissions": [
+    {
+      "capability": "provider.register",
+      "principal": "host_binding",
+      "contributions": ["workbuddy"],
+      "reason": {
+        "en": "Register the WorkBuddy (CodeBuddy) relay provider",
+        "zh-CN": "注册 WorkBuddy（CodeBuddy）中继提供方",
+        "zh-TW": "註冊 WorkBuddy（CodeBuddy）中繼提供方"
+      }
+    },
+    {
+      "capability": "host.operation.bind",
+      "principal": "host_binding",
+      "contributions": ["workbuddy"],
+      "operations": ["chat", "models"],
+      "origins": ["https://www.workbuddy.cn"],
+      "reason": {
+        "en": "Send chat traffic to the WorkBuddy chat endpoint",
+        "zh-CN": "向 WorkBuddy 聊天端点发送对话流量",
+        "zh-TW": "向 WorkBuddy 聊天端點傳送對話流量"
+      }
+    },
+    {
+      "capability": "credential.store",
+      "principal": "host_binding",
+      "contributions": ["workbuddy"],
+      "credential_slots": ["access_token"],
+      "reason": {
+        "en": "Store the WorkBuddy access token in the system keyring",
+        "zh-CN": "把 WorkBuddy 访问令牌存入系统 keyring",
+        "zh-TW": "把 WorkBuddy 存取權杖存入系統 keyring"
+      }
+    },
+    {
+      "capability": "credential.use",
+      "principal": "host_binding",
+      "contributions": ["workbuddy"],
+      "credential_slots": ["access_token"],
+      "operations": ["chat", "models"],
+      "origins": ["https://www.workbuddy.cn"],
+      "reason": {
+        "en": "Authenticate chat and model-catalog requests with the stored access token",
+        "zh-CN": "用已存的访问令牌鉴权对话与模型目录请求",
+        "zh-TW": "用已存的存取權杖鑑權對話與模型目錄請求"
+      }
+    },
+    {
+      "capability": "ui.contribute",
+      "principal": "ui",
+      "contributions": ["status"],
+      "reason": {
+        "en": "Show the relay status card on the settings page",
+        "zh-CN": "在设置页显示中继状态卡片",
+        "zh-TW": "在設定頁顯示中繼狀態卡片"
+      }
+    }
+  ],
+  "contributions": {
+    "providers": [
+      {
+        "id": "workbuddy",
+        "name": { "en": "WorkBuddy", "zh-CN": "WorkBuddy", "zh-TW": "WorkBuddy" },
+        "operations": [
+          {
+            "id": "chat",
+            "service": { "id": "host.protocol.openai_chat", "api": { "major": 1, "min_minor": 0 } },
+            "base_url": "https://www.workbuddy.cn/v2",
+            "credential_slots": ["access_token"],
+            "service_options": { "bearer_auth": true }
+          },
+          {
+            "id": "models",
+            "service": { "id": "host.catalog.openai", "api": { "major": 1, "min_minor": 0 } },
+            "base_url": "https://www.workbuddy.cn/v2",
+            "credential_slots": ["access_token"]
+          }
+        ],
+        "credentials": [
+          {
+            "id": "access_token",
+            "name": { "en": "Access token", "zh-CN": "访问令牌", "zh-TW": "存取權杖" },
+            "kind": "api_key",
+            "scope": "provider_instance",
+            "storage": "host_keyring",
+            "acquisition": { "kind": "host_secret_form" },
+            "auth_service": { "id": "host.auth.bearer", "api": { "major": 1, "min_minor": 0 } }
+          }
+        ],
+        "extra_headers": {
+          "user-agent": "WorkBuddy/5.11.3 WorkBuddy/5.11.3 CLI/2.176.0",
+          "accept": "application/json",
+          "x-ide-version": "5.11.3",
+          "x-client-version": "5.11.3",
+          "x-client-platform": "windows",
+          "x-client-product": "WorkBuddy",
+          "x-requested-with": "XMLHttpRequest",
+          "x-no-user-id": "true"
+        }
+      }
+    ],
+    "ui": [
+      {
+        "id": "status",
+        "slot": "settings.extension",
+        "title": { "en": "WorkBuddy relay", "zh-CN": "WorkBuddy 中继", "zh-TW": "WorkBuddy 中繼" },
+        "render_hook": "card"
+      }
+    ]
+  }
+}

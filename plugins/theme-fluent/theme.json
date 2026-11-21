@@ -302,7 +302,7 @@
           },
           "focus_rings": [
             {
-              "width": 1.0,
+              "width": 2.0,
               "offset": 0.0,
               "color": {
                 "role": "text"
@@ -314,19 +314,11 @@
               "x": 0.0,
               "y": 0.0,
               "blur": 0.0,
-              "spread": 2.0,
+              "spread": 1.0,
               "color": {
                 "role": "surface"
-              }
-            },
-            {
-              "x": 0.0,
-              "y": 0.0,
-              "blur": 0.0,
-              "spread": 4.0,
-              "color": {
-                "role": "primary"
-              }
+              },
+              "inset": true
             }
           ]
         },
@@ -1305,38 +1297,22 @@
               }
             },
             {
-              "hex": "#ffffff"
+              "hex": "#000000"
             }
           ],
-          "first_fraction": 0.45
+          "first_fraction": 0.85
         },
         "primary-hover": {
-          "mix": [
-            {
-              "system": "accent",
-              "fallback": {
-                "hex": "#0f6cbd"
-              }
-            },
-            {
-              "hex": "#ffffff"
-            }
-          ],
-          "first_fraction": 0.4
+          "system": "accent",
+          "fallback": {
+            "hex": "#0f6cbd"
+          }
         },
         "on-primary": {
-          "mix": [
-            {
-              "system": "accent",
-              "fallback": {
-                "hex": "#0f6cbd"
-              }
-            },
-            {
-              "hex": "#202020"
-            }
-          ],
-          "first_fraction": 0.15
+          "system": "accent_foreground",
+          "fallback": {
+            "hex": "#ffffff"
+          }
         },
         "ok": {
           "hex": "#54b054"
@@ -1506,7 +1482,7 @@
           },
           "focus_rings": [
             {
-              "width": 1.0,
+              "width": 2.0,
               "offset": 0.0,
               "color": {
                 "role": "text"
@@ -1518,19 +1494,11 @@
               "x": 0.0,
               "y": 0.0,
               "blur": 0.0,
-              "spread": 2.0,
+              "spread": 1.0,
               "color": {
-                "role": "surface"
-              }
-            },
-            {
-              "x": 0.0,
-              "y": 0.0,
-              "blur": 0.0,
-              "spread": 4.0,
-              "color": {
-                "role": "primary"
-              }
+                "hex": "#000000"
+              },
+              "inset": true
             }
           ]
         },

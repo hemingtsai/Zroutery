@@ -1,6 +1,6 @@
 # Verification
 
-> Authority: normative · Owner: backend · Last verified: 2026-11-15 · Verified by: `scripts/docs_check.py`
+> Authority: normative · Owner: backend · Last verified: 2026-11-21 · Verified by: `scripts/docs_check.py`
 
 This is the only document that defines the toolchain and the gates. Other
 documents point here; they do not restate a command. Current pass/fail status

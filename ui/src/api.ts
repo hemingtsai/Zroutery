@@ -21,6 +21,14 @@ export interface PluginInstallation {
   previous_digest: string | null;
   diagnostic: string | null;
 }
+export interface PluginReload {
+  /** False means no sandboxed worker executable was found beside the app. */
+  worker_found: boolean;
+  /** The fresh sandbox attestation: `verified` or `unavailable`. */
+  sandbox: "verified" | "unavailable";
+  /** AppContainer profiles swept from the ledger during this reload. */
+  cleaned_profiles: number;
+}
 export interface PluginInspection {
   stage_id: string;
   package_digest: string;
@@ -2148,6 +2156,7 @@ export const api = {
     invoke<Snapshot>("clear_plugin_credential", { instanceId: instance_id, slotId: slot_id, expectedRevision: expected_revision, accountId: account_id ?? null }),
   pluginCredentialStatus: (instance_id: string, slot_id: string, account_id?: string) =>
     invoke<PluginCredentialState>("get_plugin_credential_status", { instanceId: instance_id, slotId: slot_id, accountId: account_id ?? null }),
+  reloadPlugins: () => invoke<PluginReload>("reload_plugins"),
   plugins: () => invoke<PluginInstallation[]>("list_plugins"),
   inspectPlugin: () => invoke<PluginInspection | null>("inspect_plugin_package"),
   installPlugin: (stage_id: string, package_digest: string) =>

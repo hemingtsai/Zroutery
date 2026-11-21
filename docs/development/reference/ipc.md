@@ -1,6 +1,6 @@
 # IPC Reference
 
-> Authority: reference · Owner: frontend · Last verified: 2026-11-15 · Verified by: `scripts/command_surface_test.py`
+> Authority: reference · Owner: frontend · Last verified: 2026-11-21 · Verified by: `scripts/command_surface_test.py`
 
 The webview talks to Rust through Tauri commands. This page describes that
 boundary; it does not list every command signature, because the contract is the
@@ -70,7 +70,7 @@ pair of files below and the command-surface gate.
 | Accounts | `reconcile_accounts`, `set_account_key`, `set_account_inference_key` | feature `account`; panel token and inference keys are separate |
 | Check-in and token capture | `start_checkin`, `start_token_capture`, `complete_token_capture` | check-in needs `account-maint`; `api_checkin` also needs `newapi`; token capture needs `account-maint` + `account`; browser-driven |
 | Migration and takeover | `migration_previews`, `migration_apply`, `takeover_adopt` | file-writing; preview and fingerprint required |
-| Plugins | `list_plugins`, `inspect_plugin_package`, `install_plugin_package`, `activate_plugin`, `disable_plugin`, `remove_plugin`, `update_plugin`, `rollback_plugin`, `get_plugin_themes`, `render_plugin_ui`, `invoke_plugin_ui_action`, `enter_safe_appearance`, `instantiate_plugin_provider`, `store_plugin_credential`, `clear_plugin_credential`, `get_plugin_credential_status` | registered and granted unconditionally; lifecycle commands work without the `plugin` feature; the instance and credential commands in `credentials.rs` answer `unsupported_host_service` in that build (`src-tauri/src/plugins/credentials.rs`) |
+| Plugins | `list_plugins`, `reload_plugins`, `inspect_plugin_package`, `install_plugin_package`, `activate_plugin`, `disable_plugin`, `remove_plugin`, `update_plugin`, `rollback_plugin`, `get_plugin_themes`, `render_plugin_ui`, `invoke_plugin_ui_action`, `enter_safe_appearance`, `instantiate_plugin_provider`, `store_plugin_credential`, `clear_plugin_credential`, `get_plugin_credential_status` | registered and granted unconditionally; lifecycle commands work without the `plugin` feature; the instance and credential commands in `credentials.rs` answer `unsupported_host_service` in that build; `reload_plugins` re-runs worker discovery, the sandbox probe and one AppContainer ledger sweep in-process (`src-tauri/src/plugins/views.rs::reload_state`) |
 | Tray panel | `get_tray_snapshot`, `tray_set_gateway_running` | second capability file, minimal surface |
 
 Auto server review adds no command or window capability: configuration uses

@@ -177,8 +177,11 @@ pub fn bundled_themes() -> Result<Vec<Package>> {
         .collect()
 }
 
+#[cfg(all(test, feature = "plugin"))]
+mod install_tests;
 #[cfg(test)]
 mod tests {
+
     use super::*;
     use std::sync::atomic::{AtomicUsize, Ordering};
 

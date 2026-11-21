@@ -390,6 +390,17 @@ impl MaintenanceConfig {
     }
 }
 
+/// Whether a base URL's final path segment is already a version (`/v1`, a
+/// relay's `/v2`): such bases are kept as declared instead of growing `/v1`.
+/// Mirrored by the plugin operation path schema in `plugin::bindings`.
+pub fn versioned_suffix(base: &str) -> bool {
+    base.rsplit('/').next().is_some_and(|segment| {
+        segment.len() > 1
+            && segment.starts_with('v')
+            && segment[1..].bytes().all(|b| b.is_ascii_digit())
+    })
+}
+
 impl ProviderConfig {
     pub fn new(id: impl Into<String>, name: impl Into<String>, kind: ProviderKind) -> Self {
         let id = id.into();
@@ -484,10 +495,11 @@ impl ProviderConfig {
     /// paths such as a balance endpoint.
     ///
     /// This mirrors the `/v1` normalisation in [`ProviderConfig::chat_url`]: a
-    /// base that already ends in `/v1` is versioned, anything else is treated as
-    /// the API root so balance paths can add the version themselves.
+    /// base that already ends in a version segment (`/v1`, or a relay's own
+    /// `/v2`) is versioned, anything else is treated as the API root so
+    /// balance paths can add the version themselves.
     pub fn base_depth(&self) -> BaseDepth {
-        if self.base_url.trim_end_matches('/').ends_with("/v1") {
+        if versioned_suffix(self.base_url.trim_end_matches('/')) {
             BaseDepth::Versioned
         } else {
             BaseDepth::ApiRoot
@@ -517,10 +529,11 @@ impl ProviderConfig {
     /// Full URL for the chat endpoint of this provider.
     pub fn chat_url(&self) -> String {
         let base = self.base_url.trim_end_matches('/');
-        // Base URLs that already end in /v1 (ps.air-outer.com style) must not
-        // grow a second /v1, and bare OpenAI-compatible hosts (Ollama) need
-        // one. Mirrors the tolerance of `models_url`.
-        let with_v1 = if base.ends_with("/v1") {
+        // Base URLs that already carry a version segment (`/v1`, or a relay's
+        // own `/v2`) must not grow a second one, and bare OpenAI-compatible
+        // hosts (Ollama) need `/v1`. Mirrors the tolerance of `models_url` and
+        // of the plugin operation path schema.
+        let with_v1 = if versioned_suffix(base) {
             base.to_string()
         } else {
             format!("{base}/v1")
@@ -544,7 +557,9 @@ impl ProviderConfig {
         let base = self.base_url.trim_end_matches('/');
         match self.kind {
             ProviderKind::Anthropic => {
-                if base.ends_with("/v1") {
+                // Same tolerance as the OpenAI family: a base that already
+                // carries a version segment keeps it.
+                if versioned_suffix(base) || base.ends_with("/v1") {
                     format!("{base}/models")
                 } else {
                     format!("{base}/v1/models")
@@ -556,7 +571,9 @@ impl ProviderConfig {
                 // Standard OpenAI gateways serve models at /v1/models.
                 // If the base_url already ends with /v1, just append /models;
                 // otherwise append /v1/models so gateways like ps.air-outer.com work.
-                if base.ends_with("/v1") {
+                // A relay's own version segment (/v2) is kept as declared, the
+                // same tolerance chat_url and the plugin path schema apply.
+                if versioned_suffix(base) || base.ends_with("/v1") {
                     format!("{base}/models")
                 } else {
                     format!("{base}/v1/models")

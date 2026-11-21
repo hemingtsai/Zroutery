@@ -19,6 +19,7 @@
     "allow-get-plugin-themes",
     "allow-render-plugin-ui",
     "allow-invoke-plugin-ui-action",
+    "allow-reload-plugins",
     "allow-enter-safe-appearance",
     "allow-instantiate-plugin-provider",
     "allow-store-plugin-credential",
