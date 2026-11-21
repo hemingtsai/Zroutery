@@ -1,6 +1,6 @@
 # Observability Reference
 
-> Authority: reference · Owner: backend · Last verified: 2026-11-21 · Verified by: `cargo test --workspace --all-features --locked`
+> Authority: reference · Owner: backend · Last verified: 2026-11-22 · Verified by: `cargo test --workspace --all-features --locked`
 
 This page describes the request log, the health view, the activity projection and
 the sessions kept in memory. It does not describe accounting; spend is durable
@@ -44,8 +44,10 @@ recent view but not the usage history
 - `StatsStore` holds the EWMA, percentile rings and per-provider/model failure
   counts (`crates/zroutery-core/src/stats_ext.rs::StatsStore`).
 - `Ewma` smooths latency; `PercentileEstimator` keeps a bounded distribution
+  and ranks its samples with the `total_cmp` total order rather than
+  `partial_cmp`, so a NaN sample sorts instead of panicking a routing-path read
   (`crates/zroutery-core/src/stats_ext.rs::Ewma`,
-  `crates/zroutery-core/src/stats_ext.rs::PercentileEstimator`).
+  `crates/zroutery-core/src/stats_ext.rs::PercentileEstimator::percentile`).
 - `ObservationStore` holds the runtime observations the router reads
   (`crates/zroutery-core/src/observation.rs::ObservationStore`,
   `crates/zroutery-core/src/observation.rs::RuntimeObservation`,

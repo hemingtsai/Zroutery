@@ -113,7 +113,9 @@ impl PercentileEstimator {
             return None;
         }
         let mut sorted: Vec<f64> = self.samples.clone();
-        sorted.sort_by(|a, b| a.partial_cmp(b).unwrap());
+        // total_cmp, not partial_cmp: a NaN sample must sort instead of
+        // panicking a routing-path read (same discipline as decision_engine).
+        sorted.sort_by(|a, b| a.total_cmp(b));
         let idx = ((sorted.len() - 1) as f64 * p).round() as usize;
         sorted.get(idx).copied()
     }
@@ -488,6 +490,20 @@ mod tests {
         assert_eq!(est.min(), Some(10.0));
         assert_eq!(est.max(), Some(30.0));
         assert_eq!(est.len(), 3);
+    }
+
+    #[test]
+    fn percentile_nan_sample_sorts_instead_of_panicking() {
+        // The routing path reads percentiles from live latency samples; a NaN
+        // that slips in must take the total order (it sorts last) rather than
+        // panic the read.
+        let mut est = PercentileEstimator::new(10);
+        est.record(30.0);
+        est.record(f64::NAN);
+        est.record(10.0);
+        assert_eq!(est.percentile(0.0), Some(10.0));
+        assert_eq!(est.percentile(0.5), Some(30.0));
+        assert!(matches!(est.percentile(1.0), Some(v) if v.is_nan()));
     }
 
     #[test]
