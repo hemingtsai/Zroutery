@@ -1,6 +1,6 @@
 # ML Routing Reference
 
-> Authority: reference · Owner: backend · Last verified: 2026-11-21 · Verified by: `cargo test --workspace --all-features --locked`
+> Authority: reference · Owner: backend · Last verified: 2026-11-22 · Verified by: `cargo test --workspace --all-features --locked`
 
 This page describes how a learned model can change a route. It is a mechanism
 reference, not a claim that a model has earned promotion; current status is in
@@ -85,7 +85,11 @@ configuration identity, so a decision can be re-derived rather than trusted
   endpoints; installation and rollback are explicit calls, not a background
   loop (`crates/zroutery-core/src/server/handlers.rs::ml_promote`). A build
   without `ml` registers the same routes, but they are inert stubs
-  (`crates/zroutery-core/src/server/handlers.rs::ml_status`).
+  (`crates/zroutery-core/src/server/handlers.rs::ml_status`). These endpoints
+  sit behind the same handler conventions as the rest of the surface: a fault
+  serializing stored data answers as a typed error response rather than
+  panicking the request task
+  (`crates/zroutery-core/src/server/handlers.rs::stored_response_body`).
 
 ## Failure modes
 

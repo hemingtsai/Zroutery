@@ -708,12 +708,25 @@ fn model_json(info: &crate::registry::ModelInfo) -> Value {
     })
 }
 
+/// A stored response is JSON by construction; a serialization failure would be
+/// a server fault, so it maps to a typed error response instead of panicking
+/// the request task mid-flight.
+fn stored_response_body<T: serde::Serialize>(resp: &T) -> Response {
+    match serde_json::to_value(resp) {
+        Ok(value) => Json(value).into_response(),
+        Err(error) => error_response(
+            Dialect::OpenAIResponses,
+            &Error::internal(format!("stored response serialization failed: {error}")),
+        ),
+    }
+}
+
 async fn get_response(
     State(state): State<Arc<AppState>>,
     Path(response_id): Path<String>,
 ) -> Response {
     match state.response_store.get(&response_id) {
-        Some(resp) => Json(serde_json::to_value(&resp).unwrap()).into_response(),
+        Some(resp) => stored_response_body(&resp),
         None => error_response(
             Dialect::OpenAIResponses,
             &Error::invalid("response not found"),
@@ -745,7 +758,7 @@ async fn cancel_response(
     if state.response_store.cancel(&response_id, "unknown") {
         // Return the cancelled response.
         match state.response_store.get(&response_id) {
-            Some(resp) => Json(serde_json::to_value(&resp).unwrap()).into_response(),
+            Some(resp) => stored_response_body(&resp),
             None => Json(json!({
                 "id": response_id, "object": "response", "status": "cancelled"
             }))
@@ -754,7 +767,7 @@ async fn cancel_response(
     } else {
         // Not in-flight — check if it is a completed response.
         match state.response_store.get(&response_id) {
-            Some(resp) => Json(serde_json::to_value(&resp).unwrap()).into_response(),
+            Some(resp) => stored_response_body(&resp),
             None => error_response(
                 Dialect::OpenAIResponses,
                 &Error::invalid("response not found"),

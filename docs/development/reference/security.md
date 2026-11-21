@@ -123,6 +123,10 @@ That is the model; hiding the token from the same user is not a goal.
   `crates/zroutery-core/src/upstream/stream.rs::Upstream::stream_with_identity_policy`).
 - Request and response bodies are not persisted; records carry metadata and
   traces carry features and outcomes.
+- Handler responses are assembled from stored data with typed error mapping: a
+  fault serializing a stored response answers as a server error instead of
+  panicking the request task
+  (`crates/zroutery-core/src/server/handlers.rs::stored_response_body`).
 - Plugin traffic has its own egress path: https-only, no query or userinfo,
   public-IP-only SSRF filter, DNS pinned per operation and retry, no proxy and no
   redirects; a declared TLS transport profile is refused

@@ -1,6 +1,6 @@
 # Architecture
 
-> Authority: normative · Owner: backend · Last verified: 2026-11-21 · Verified by: `scripts/docs_check.py`
+> Authority: normative · Owner: backend · Last verified: 2026-11-22 · Verified by: `scripts/docs_check.py`
 
 This document describes the current boundaries and the invariants a change must
 preserve. It does not track pass/fail status (`current-state.md`), command
@@ -54,6 +54,10 @@ ingress handler
 
 - The route table is built in `crates/zroutery-core/src/server/handlers.rs::build_app`;
   each dialect has its own entry point but shares the pipeline.
+- Handlers answer from stored data with typed error responses rather than
+  unwrapping: a stored `/v1/responses` document that fails to serialize reports
+  a server fault instead of panicking the request task
+  (`crates/zroutery-core/src/server/handlers.rs::stored_response_body`).
 - Decoding is dialect-specific and returns the canonical request
   (`crates/zroutery-core/src/protocol/mod.rs::decode_request`,
   `crates/zroutery-core/src/ir/mod.rs::ChatRequest`).
