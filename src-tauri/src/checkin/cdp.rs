@@ -74,6 +74,8 @@ pub struct BrowserSession {
     port: u16,
     next_id: u64,
     profile_dir: PathBuf,
+    active_page: Option<PageBinding>,
+    pub(crate) login_attempt: Option<super::agentrouter::Attempt>,
 }
 
 impl std::fmt::Debug for BrowserSession {
@@ -242,6 +244,10 @@ pub async fn launch(
         });
     }
 
+    // Remove a dead launch's breadcrumb before spawning: deleting it after
+    // spawn can remove the fresh endpoint a fast browser has already written.
+    let _ = tokio::fs::remove_file(profile_dir.join(profile::DEVTOOLS_PORT_FILE)).await;
+
     let child = tokio::process::Command::new(executable)
         .args(build_args(profile_dir, start_url))
         // A browser's own standard streams are not ours to read, and inheriting
@@ -253,12 +259,6 @@ pub async fn launch(
         .kill_on_drop(false)
         .spawn()?;
 
-    // A `DevToolsActivePort` left behind by a browser that was killed rather than
-    // closed would otherwise be read as this browser's, and the connect would fail
-    // against a port nobody is listening on. Deleting it first makes "the file
-    // exists" mean "this launch wrote it".
-    let _ = tokio::fs::remove_file(profile_dir.join(profile::DEVTOOLS_PORT_FILE)).await;
-
     let endpoint = wait_for_endpoint(profile_dir).await?;
     let port = port_of(&endpoint).unwrap_or(0);
     let socket = connect(&endpoint).await?;
@@ -269,6 +269,8 @@ pub async fn launch(
         port,
         next_id: 0,
         profile_dir: profile_dir.to_path_buf(),
+        active_page: None,
+        login_attempt: None,
     })
 }
 
@@ -636,7 +638,156 @@ impl BrowserSession {
         if needs_navigate {
             self.navigate(&page, url).await?;
         }
+        self.active_page = Some(page.clone());
         Ok(page)
+    }
+
+    /// Reattach only to the held panel page or to its own OAuth popup. Never
+    /// navigate an unrelated tab merely because it is first in the target list.
+    pub async fn resume_page(
+        &mut self,
+        panel_url: &str,
+    ) -> Result<Option<PageBinding>, BrowserError> {
+        let infos = self.target_infos().await?;
+        let preferred = self
+            .active_page
+            .as_ref()
+            .map(|page| page.target_id.as_str());
+        let popup = self
+            .login_attempt
+            .as_ref()
+            .and_then(|attempt| attempt.popup_target.as_deref());
+        let target = resume_target(&infos, preferred, popup, panel_url);
+        let Some(target) = target else {
+            return Ok(None);
+        };
+        let page = self.attach(target).await?;
+        self.active_page = Some(page.clone());
+        Ok(Some(page))
+    }
+
+    pub async fn target_infos(&mut self) -> Result<Vec<Value>, BrowserError> {
+        let infos = self
+            .call("Target.getTargets", json!({}))
+            .await?
+            .get("targetInfos")
+            .and_then(Value::as_array)
+            .cloned()
+            .unwrap_or_default();
+        // Ownership needs origin/path and opaque target ids, never OAuth query
+        // tickets, page titles or arbitrary target metadata in the caller.
+        Ok(infos.iter().map(|info| json!({
+            "targetId":info.get("targetId"), "type":info.get("type"),
+            "openerId":info.get("openerId"),
+            "url":target_location(info.get("url").and_then(Value::as_str).unwrap_or_default()),
+        })).collect())
+    }
+
+    /// Adopt a page already known to belong to this attempt.
+    pub async fn bind_page(&mut self, target_id: String) -> Result<PageBinding, BrowserError> {
+        let page = self.attach(target_id).await?;
+        self.active_page = Some(page.clone());
+        Ok(page)
+    }
+
+    /// Close this flow's pages, not every page on the isolated profile. Returns
+    /// whether unrelated tabs remain; in that case the browser is left to its
+    /// user rather than closed as a side effect of check-in completion/cancel.
+    pub async fn close_owned_pages(&mut self, owned: &[String]) -> Result<bool, BrowserError> {
+        let infos = match self.target_infos().await {
+            Ok(infos) => infos,
+            Err(_) if !self.is_running().await => return Ok(false),
+            Err(error) => return Err(error),
+        };
+        for info in &infos {
+            let Some((target, _)) = page_target(info) else {
+                continue;
+            };
+            if owned.iter().any(|id| id == target) {
+                // Another close can win between listing and acting. Continue
+                // closing other owned pages, then verify what is still open.
+                let _ = self
+                    .call("Target.closeTarget", json!({"targetId":target}))
+                    .await;
+            }
+        }
+        let remaining = match self.target_infos().await {
+            Ok(infos) => infos,
+            Err(_) if !self.is_running().await => return Ok(false),
+            Err(error) => return Err(error),
+        };
+        if remaining
+            .iter()
+            .filter_map(page_target)
+            .any(|(target, _)| owned.iter().any(|id| id == target))
+        {
+            return Err(BrowserError::Protocol {
+                method: "Target.closeTarget".into(),
+                message: "an owned check-in page is still open".into(),
+            });
+        }
+        Ok(remaining
+            .iter()
+            .filter_map(page_target)
+            .any(|(target, _)| !owned.iter().any(|id| id == target)))
+    }
+
+    /// Local protocol fixture for the real driver. The fixture's child exits
+    /// immediately; it never launches or attaches to a user's browser profile.
+    #[cfg(test)]
+    pub(crate) async fn test_connection(
+        endpoint: &str,
+        page: PageBinding,
+        attempt: super::agentrouter::Attempt,
+    ) -> Result<Self, BrowserError> {
+        #[cfg(windows)]
+        let mut child_command = {
+            let mut command = tokio::process::Command::new("cmd.exe");
+            command.args(["/c", "exit", "0"]);
+            command
+        };
+        #[cfg(not(windows))]
+        let mut child_command = tokio::process::Command::new("true");
+        let mut child = child_command
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()?;
+        child.wait().await?;
+        Ok(Self {
+            child,
+            socket: connect(endpoint).await?,
+            // The fixture listens on this port so `is_running` answers like a
+            // real browser; its `Browser.close` handler stops the listener,
+            // which is what makes `shutdown` observe the close.
+            port: port_of(endpoint).unwrap(),
+            next_id: 0,
+            profile_dir: PathBuf::new(),
+            active_page: Some(page),
+            login_attempt: Some(attempt),
+        })
+    }
+
+    /// One cleanup boundary for completion, explicit cancel and shutdown.
+    ///
+    /// This flow launched the browser itself, on an isolated profile it owns, so
+    /// a terminal attempt closes the whole window. Closing only the pages it
+    /// owned used to leave the window behind whenever any other tab existed —
+    /// which kept the profile locked and made the next day's attempt fail with a
+    /// profile-in-use refusal. The page close is kept as a best effort so the
+    /// last visible state is not a login page, but a failure there no longer
+    /// keeps the window alive.
+    pub async fn close_checkin(mut self) -> Result<(), BrowserError> {
+        if let Some(attempt) = self.login_attempt.take() {
+            let owned: Vec<String> = attempt
+                .login_target
+                .iter()
+                .chain(attempt.popup_target.iter())
+                .cloned()
+                .collect();
+            let _ = self.close_owned_pages(&owned).await;
+        }
+        self.shutdown().await
     }
 
     /// The target id out of one `Target.getTargets` info entry.
@@ -710,6 +861,28 @@ impl BrowserSession {
                     "expression": expression,
                     "returnByValue": true,
                     "awaitPromise": true,
+                }),
+            )
+            .await?;
+        evaluate_value(&result)
+    }
+
+    /// The panel opens OAuth from a user activation. This permits its popup,
+    /// without typing a password, accepting consent or solving a challenge.
+    pub async fn evaluate_user_action(
+        &mut self,
+        page: &PageBinding,
+        expression: &str,
+    ) -> Result<Value, BrowserError> {
+        let result = self
+            .call_page(
+                page,
+                "Runtime.evaluate",
+                json!({
+                    "expression": expression,
+                    "returnByValue": true,
+                    "awaitPromise": true,
+                    "userGesture": true,
                 }),
             )
             .await?;
@@ -959,9 +1132,173 @@ impl BrowserSession {
     }
 }
 
+fn page_target(info: &Value) -> Option<(&str, &str)> {
+    if info.get("type").and_then(Value::as_str) != Some("page") {
+        return None;
+    }
+    Some((info.get("targetId")?.as_str()?, info.get("url")?.as_str()?))
+}
+
+fn target_location(location: &str) -> String {
+    match url::Url::parse(location) {
+        Ok(url) if matches!(url.scheme(), "http" | "https") => {
+            format!("{}{}", url.origin().ascii_serialization(), url.path())
+        }
+        Ok(url) if url.scheme() == "about" => "about:blank".into(),
+        _ => String::new(),
+    }
+}
+
+/// Selection is pure so reversed target ordering and lookalike origins are
+/// regression-tested without opening any real browser or OAuth session.
+fn resume_target(
+    infos: &[Value],
+    preferred: Option<&str>,
+    popup: Option<&str>,
+    panel_url: &str,
+) -> Option<String> {
+    let panel = url::Url::parse(panel_url).ok()?;
+    let on_panel =
+        |location: &str| url::Url::parse(location).is_ok_and(|url| url.origin() == panel.origin());
+    let known = |id: &str| {
+        infos
+            .iter()
+            .filter_map(page_target)
+            .find(|(target, _)| *target == id)
+    };
+    // A callback may already have become /console/token by the time it is read.
+    if let Some((target, _)) = popup.and_then(known).filter(|(_, url)| on_panel(url)) {
+        return Some(target.to_string());
+    }
+    if let Some((target, _)) = preferred.and_then(known).filter(|(_, url)| on_panel(url)) {
+        return Some(target.to_string());
+    }
+    None
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn target_selection_does_not_return_oauth_tickets_or_page_content() {
+        assert_eq!(
+            target_location("https://agentrouter.org/oauth/github?code=once&state=once#token"),
+            "https://agentrouter.org/oauth/github"
+        );
+        assert_eq!(target_location("data:text/html,private-page-content"), "");
+        assert_eq!(target_location("about:blank"), "about:blank");
+    }
+
+    fn target(id: &str, url: &str) -> Value {
+        json!({"targetId":id, "type":"page", "url":url})
+    }
+
+    #[tokio::test]
+    async fn resume_rebinds_the_held_target_instead_of_the_first_tab() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let server = tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.unwrap();
+            let mut socket = tokio_tungstenite::accept_async(stream).await.unwrap();
+            for method in [
+                "Target.getTargets",
+                "Target.attachToTarget",
+                "Runtime.enable",
+            ] {
+                let Message::Text(text) = socket.next().await.unwrap().unwrap() else {
+                    panic!("text command")
+                };
+                let command: Value = serde_json::from_str(&text).unwrap();
+                assert_eq!(command["method"], method);
+                let result = match method {
+                    "Target.getTargets" => json!({"targetInfos":[
+                        target("unrelated", "https://other.example/"),
+                        target("login", "https://agentrouter.org/login"),
+                        target("callback", "https://agentrouter.org/console/token")
+                    ]}),
+                    "Target.attachToTarget" => {
+                        assert_eq!(command["params"]["targetId"], "callback");
+                        json!({"sessionId":"fresh-session"})
+                    }
+                    _ => {
+                        assert_eq!(command["sessionId"], "fresh-session");
+                        json!({})
+                    }
+                };
+                socket
+                    .send(Message::Text(
+                        json!({"id":command["id"],"result":result})
+                            .to_string()
+                            .into(),
+                    ))
+                    .await
+                    .unwrap();
+            }
+        });
+        let socket = connect(&format!("ws://127.0.0.1:{port}")).await.unwrap();
+        #[cfg(windows)]
+        let child = tokio::process::Command::new("cmd.exe")
+            .args(["/c", "exit", "0"])
+            .spawn()
+            .unwrap();
+        #[cfg(not(windows))]
+        let child = tokio::process::Command::new("true").spawn().unwrap();
+        let mut attempt = super::super::agentrouter::Attempt::new(100, "test:1".into(), "7".into());
+        attempt.popup_target = Some("callback".into());
+        let mut browser = BrowserSession {
+            child,
+            socket,
+            port,
+            next_id: 0,
+            profile_dir: PathBuf::new(),
+            active_page: Some(PageBinding {
+                target_id: "login".into(),
+                session_id: "old-session".into(),
+            }),
+            login_attempt: Some(attempt),
+        };
+        let binding = browser
+            .resume_page("https://agentrouter.org")
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(binding.target_id, "callback");
+        assert_eq!(binding.session_id, "fresh-session");
+        server.await.unwrap();
+        browser.child.wait().await.unwrap();
+    }
+
+    #[test]
+    fn resume_prefers_the_owned_callback_even_after_it_changed_route() {
+        let infos = vec![
+            target("unrelated", "https://other.example/"),
+            target("login", "https://agentrouter.org/login"),
+            target("callback", "https://agentrouter.org/console/token"),
+        ];
+        assert_eq!(
+            resume_target(
+                &infos,
+                Some("login"),
+                Some("callback"),
+                super::super::agentrouter::ORIGIN
+            ),
+            Some("callback".into())
+        );
+    }
+
+    #[test]
+    fn resume_does_not_adopt_an_arbitrary_same_origin_or_external_tab() {
+        let panel = "https://agentrouter.org/console";
+        let infos = vec![
+            target("external", "https://github.com/login"),
+            target("stale", "https://agentrouter.org/oauth/github?code=old"),
+            target("lookalike", "https://agentrouter.org.evil.test/console"),
+        ];
+        assert_eq!(resume_target(&infos, Some("missing"), None, panel), None);
+        assert_eq!(resume_target(&infos, Some("external"), None, panel), None);
+        assert_eq!(resume_target(&infos, Some("lookalike"), None, panel), None);
+    }
 
     #[test]
     fn an_evaluated_value_is_read_out_of_the_result() {

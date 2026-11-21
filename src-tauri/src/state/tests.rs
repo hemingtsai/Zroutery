@@ -1470,14 +1470,14 @@ fn the_gateway_target_publishes_the_common_intersection_of_member_effort_levels(
         ],
         "models": [
             {"provider_id": "p", "upstream_model": "m-a", "tier": "fast",
-             "effort_levels": ["low", "high", "medium"]},
+             "effort_levels": ["low", "high", "medium", "ultra"]},
             {"provider_id": "p", "upstream_model": "m-b", "tier": "fast",
              "effort_levels": ["high", "max", "ultra"]},
             {"provider_id": "off", "upstream_model": "m-c", "tier": "fast",
              "effort_levels": ["medium"]},
             {"provider_id": "p", "upstream_model": "m-empty", "tier": "standard"},
             {"provider_id": "p", "upstream_model": "m-unknown", "tier": "standard",
-             "effort_levels": ["ultra"]},
+             "effort_levels": ["turbo"]},
             {"provider_id": "p", "upstream_model": "m-all", "tier": "reasoning",
              "effort_levels": ["minimal", "low", "medium", "high"]}
         ]
@@ -1493,9 +1493,9 @@ fn the_gateway_target_publishes_the_common_intersection_of_member_effort_levels(
         .expect("the fast class");
     assert_eq!(
         fast.effort_levels,
-        ["high"],
+        ["high", "ultra"],
         "an effort is published only when every usable member supports it: `low` and `medium` \
-         fail on m-b, `max` fails on m-a, unknown `ultra` is not encodable; canonical order is \
+         fail on m-b, `max` fails on m-a, unknown `turbo` is not encodable; canonical order is \
          retained and the disabled provider does not contribute `medium`"
     );
     assert_eq!(
@@ -1520,7 +1520,7 @@ fn the_gateway_target_publishes_the_common_intersection_of_member_effort_levels(
     };
     assert_eq!(
         published_efforts("fast-class"),
-        ["high"],
+        ["high", "ultra"],
         "the Codex catalogue publishes the same common intersection"
     );
     let standard = target

@@ -37,10 +37,10 @@ impl Desktop {
     pub async fn checkin_view(&self, provider_id: &str, account_id: &str) -> Option<CheckinView> {
         let key = (provider_id.to_string(), account_id.to_string());
         let stored = lock(&self.checkin_reports).get(&key).cloned();
-        let held = self
-            .checkin
-            .is_browser_held(&crate::checkin::SessionKey::new(provider_id, account_id))
-            .await;
+        let key = crate::checkin::SessionKey::new(provider_id, account_id);
+        let held = self.checkin.purpose(&key).await
+            == Some(crate::checkin::SessionPurpose::Checkin)
+            && self.checkin.holds_browser(&key).await;
         let awaiting = self
             .checkin
             .phase(&crate::checkin::SessionKey::new(provider_id, account_id))
@@ -69,6 +69,12 @@ impl Desktop {
     pub fn record_checkin_view(&self, view: CheckinView) {
         lock(&self.checkin_reports)
             .insert((view.provider_id.clone(), view.account_id.clone()), view);
+    }
+
+    /// A changed binding must not inherit the previous binding's live report.
+    #[cfg(feature = "account-maint")]
+    pub(crate) fn forget_checkin_view(&self, provider_id: &str, account_id: &str) {
+        lock(&self.checkin_reports).remove(&(provider_id.to_string(), account_id.to_string()));
     }
 
     /// The maintenance declaration for one account, if it is declared.
@@ -175,7 +181,9 @@ impl Desktop {
         // this view and the launch loop cannot drift: due with no executor reads
         // `not_applicable`, and a fresh account with a credential reads due —
         // both in the panel and in the scan.
-        let decision = crate::checkin::scheduler::executor_decision(
+        let decision = crate::checkin::scheduler::account_executor_decision(
+            self,
+            &crate::checkin::SessionKey::new(provider_id, account_id),
             &maintenance,
             zroutery_core::account::checkin::decide_api(&maintenance, last_settled_at, now),
             self.has_account_credential(provider_id, account_id),

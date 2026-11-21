@@ -17,6 +17,7 @@
 //! | confirmation | effect | what that claims |
 //! |---|---|---|
 //! | `Confirmed` | `Credited` | a structured surface established this amount |
+//! | `Completed` | `Unobserved` | completion was verified, but no amount was established |
 //! | `AlreadyCompleted` | `NoChange` | the provider established that nothing settled |
 //! | `ObservationPending` | `Unobserved` | it may have been granted; nothing says so |
 //! | failure, cancellation | *no event* | nothing about the balance is established at all |

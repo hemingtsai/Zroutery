@@ -32,6 +32,7 @@ use tauri::State;
 use zroutery_core::account::adapters::newapi::checkin::{CheckinAttempt, CheckinContext};
 use zroutery_core::account::{CheckinFailure, CheckinPhase, CheckinReport, RewardSource};
 
+use crate::checkin::agentrouter;
 use crate::checkin::cdp::{self, BrowserSession};
 use crate::checkin::state::{Event, State as Phase};
 use crate::checkin::waf;
@@ -117,6 +118,11 @@ pub(crate) async fn api_checkin_once(
     provider_id: &str,
     account_id: &str,
 ) -> Result<CheckinView, String> {
+    // This panel grants check-in while signing in, not by posting NewAPI's
+    // independent check-in endpoint. Manual and scheduled calls use one driver.
+    if agentrouter::is_panel(&panel_root(desktop, provider_id, account_id)?) {
+        return launch_attempt(desktop, provider_id, account_id).await;
+    }
     let (adapter, _rate) = desktop.panel_adapter(provider_id, account_id)?;
     let account = zroutery_core::account::AccountId(account_id.to_string());
     let report = match adapter.checkin_observed(&account).await {
@@ -173,7 +179,11 @@ pub(crate) async fn launch_attempt(
     let Some(maintenance) = desktop.maintenance_for(provider_id, account_id) else {
         return Err(format!("no account {account_id} on provider {provider_id}"));
     };
-    if !maintenance.is_browser_checkin_configured() {
+    let root = panel_root(desktop, provider_id, account_id)?;
+    let login_settled = agentrouter::is_panel(&root);
+    if !maintenance.checkin_enabled
+        || (!login_settled && !maintenance.is_browser_checkin_configured())
+    {
         // Said as configuration rather than as a runtime failure, because the fix
         // is a line in the config file and not anything the user retries. All
         // three settings are named because "not configured" without saying which
@@ -190,66 +200,100 @@ pub(crate) async fn launch_attempt(
                 .unwrap_or("unset"),
         ));
     }
-    let path = maintenance
-        .checkin_path
-        .as_deref()
-        .map(str::trim)
-        .filter(|p| !p.is_empty())
-        .expect("is_browser_checkin_configured requires a non-empty path");
+    let path = if login_settled {
+        "/login"
+    } else {
+        maintenance
+            .checkin_path
+            .as_deref()
+            .map(str::trim)
+            .filter(|p| !p.is_empty())
+            .expect("is_browser_checkin_configured requires a non-empty path")
+    };
     // Resolved before the browser opens, so a malformed panel address is a
     // configuration error returned to the caller rather than a window that
     // appears and cannot be used.
     let url = checkin_url(desktop, provider_id, account_id, path)?;
+    let selector = maintenance
+        .checkin_selector()
+        .unwrap_or_default()
+        .to_string();
+    let login_attempt = if login_settled {
+        Some(agentrouter::Attempt::new(
+            chrono::Utc::now().timestamp(),
+            checkin_binding_version(desktop, provider_id, account_id)?,
+            agentrouter_user(desktop, provider_id, account_id)?,
+        ))
+    } else {
+        None
+    };
+    let executable = cdp::find_browser(&maintenance.browser_executable)
+        .ok_or_else(|| cdp::BrowserError::NotFound.to_string())?;
 
     desktop
         .checkin
         .begin(key.clone())
         .await
         .map_err(|e| e.to_string())?;
-
-    let executable = cdp::find_browser(&maintenance.browser_executable)
-        .ok_or_else(|| cdp::BrowserError::NotFound.to_string())?;
+    desktop
+        .checkin
+        .advance(&key, Event::Start)
+        .await
+        .map_err(|e| e.to_string())?;
     let profile_dir = desktop.checkin.profile_dir(&key);
 
-    let mut browser = cdp::launch(&executable, &profile_dir, &url)
-        .await
-        .map_err(|e| {
-            // The session is released so a failed start does not leave the key
-            // occupied: otherwise the user's next attempt would be refused as a
-            // duplicate of an attempt that never ran.
-            release(desktop.checkin.clone(), &key);
-            e.to_string()
-        })?;
+    if !desktop.checkin.reserve_browser_launch(&key).await {
+        return Err("the browser launch was cancelled".into());
+    }
+
+    let mut browser = match cdp::launch(&executable, &profile_dir, &url).await {
+        Ok(browser) => browser,
+        Err(error) => {
+            desktop.checkin.end_driving(&key).await;
+            desktop.checkin.finish(&key).await;
+            return Err(error.to_string());
+        }
+    };
+    browser.login_attempt = login_attempt;
+    if let Err(error) = desktop.checkin.advance(&key, Event::BrowserStarted).await {
+        let _ = browser.shutdown().await;
+        desktop.checkin.end_driving(&key).await;
+        desktop.checkin.finish(&key).await;
+        return Err(error.to_string());
+    }
 
     let binding = match browser.open_page(&url).await {
         Ok(binding) => binding,
         Err(e) => {
             let _ = browser.shutdown().await;
-            release(desktop.checkin.clone(), &key);
+            desktop.checkin.end_driving(&key).await;
+            desktop.checkin.finish(&key).await;
             return Err(e.to_string());
         }
     };
-    desktop.checkin.attach(&key, browser).await.map_err(|e| {
-        release(desktop.checkin.clone(), &key);
-        e.to_string()
-    })?;
-
+    if let Some(attempt) = browser.login_attempt.as_mut() {
+        attempt.login_target = Some(binding.target_id.clone());
+    }
+    if let Err(error) = desktop.checkin.advance(&key, Event::Navigated).await {
+        let _ = browser.close_checkin().await;
+        desktop.checkin.end_driving(&key).await;
+        desktop.checkin.finish(&key).await;
+        return Err(error.to_string());
+    }
     let runtime = desktop.checkin.clone();
     let task_key = key.clone();
     let desktop_for_task = Arc::clone(desktop);
-    // Resolved before the browser opens, so a missing selector is a configuration
-    // error returned to the caller rather than something a background task
-    // discovers after a window has already appeared.
-    let Some(selector) = maintenance.checkin_selector().map(str::to_string) else {
-        release(desktop.checkin.clone(), &key);
-        return Err(
-            "checkin_trigger_selector is not set for this account, so there is no control \
-             to activate"
-                .to_string(),
-        );
-    };
+    desktop.record_checkin_view(running_view(provider_id, account_id));
     tauri::async_runtime::spawn(async move {
-        drive(runtime, desktop_for_task, task_key, binding, selector).await;
+        drive_owned(
+            runtime,
+            desktop_for_task,
+            task_key,
+            browser,
+            binding,
+            selector,
+        )
+        .await;
     });
 
     desktop
@@ -278,9 +322,10 @@ pub(crate) fn settle_api_handoff(desktop: &Arc<Desktop>, provider_id: &str, acco
 
 /// Continue a check-in that is waiting on a human-verification challenge.
 ///
-/// This resumes the **same** browser, on the same page, with the same session.
-/// It does not navigate, does not sign in and does not start anything new — the
-/// operation picks up where it stopped. A call that arrives while nothing is
+/// This resumes the same browser and session, including a popup owned by its
+/// login attempt. A generic panel may return to its configured check-in route;
+/// a login-settled callback must not be replaced. Nothing launches again.
+/// A call that arrives while nothing is
 /// paused is refused rather than quietly starting a new attempt, because a
 /// button labelled "continue" that silently begins a fresh login is the exact
 /// behaviour the pause design exists to prevent.
@@ -291,6 +336,21 @@ pub async fn resume_checkin(
     account_id: String,
 ) -> Cmd<CheckinView> {
     let key = SessionKey::new(&provider_id, &account_id);
+    let maintenance = desktop
+        .maintenance_for(&provider_id, &account_id)
+        .ok_or_else(|| "the account was removed while check-in was paused".to_string())?;
+    let root = panel_root(&desktop, &provider_id, &account_id)?;
+    let login_settled = agentrouter::is_panel(&root);
+    let selector = if login_settled {
+        String::new()
+    } else {
+        maintenance
+            .checkin_selector()
+            .ok_or_else(|| {
+                "checkin_trigger_selector is not set; correct it before resuming".to_string()
+            })?
+            .to_string()
+    };
     match desktop.checkin.phase(&key).await {
         Some(Phase::WaitingForUser) | Some(Phase::BlockedByWaf) => {}
         Some(other) => {
@@ -307,17 +367,19 @@ pub async fn resume_checkin(
         .await
         .map_err(|e| e.to_string())?;
 
-    let Some(browser) = desktop.checkin.take_browser(&key).await else {
+    let Some(mut browser) = desktop.checkin.take_browser(&key).await else {
         return Err("the browser for this check-in is gone; start a new one".to_string());
     };
     // The session id belongs to the browser, not to this layer, so it is asked for
     // again rather than kept: that is what makes the resume talk to the page the
     // user just solved the challenge in, and what makes a resume impossible if
     // that page is gone.
-    let (browser, binding) = match rebind(browser).await {
-        Some(pair) => pair,
-        None => {
-            release(desktop.checkin.clone(), &key);
+    let binding = match browser.resume_page(&root).await {
+        Ok(Some(binding)) => binding,
+        Ok(None) | Err(_) => {
+            let _ = browser.close_checkin().await;
+            desktop.checkin.end_driving(&key).await;
+            desktop.checkin.finish(&key).await;
             return Err("the page this check-in was using is gone".to_string());
         }
     };
@@ -334,7 +396,7 @@ pub async fn resume_checkin(
                         .filter(|path| !path.is_empty())
                         .map(str::to_string)
                 });
-        if let Some(path) = target_path {
+        if let Some(path) = target_path.filter(|_| !login_settled) {
             if let Ok(target) = checkin_url(&desktop, &provider_id, &account_id, &path) {
                 let current = browser
                     .page_evidence(&binding)
@@ -359,30 +421,23 @@ pub async fn resume_checkin(
         }
         browser
     };
-    desktop
-        .checkin
-        .attach(&key, browser)
-        .await
-        .map_err(|e| e.to_string())?;
-
     let runtime = desktop.checkin.clone();
     let task_key = key.clone();
     let desktop_for_task = Arc::clone(&desktop);
     // Taken from the live configuration rather than from whatever was declared
     // when the session opened, so an operator who corrected the selector while the
     // challenge was pending gets the corrected one.
-    let Some(selector) = desktop
-        .maintenance_for(&provider_id, &account_id)
-        .and_then(|m| m.checkin_selector().map(str::to_string))
-    else {
-        return Err(
-            "checkin_trigger_selector is not set for this account, so there is no control \
-             to activate"
-                .to_string(),
-        );
-    };
+    desktop.record_checkin_view(running_view(&provider_id, &account_id));
     tauri::async_runtime::spawn(async move {
-        drive(runtime, desktop_for_task, task_key, binding, selector).await;
+        drive_owned(
+            runtime,
+            desktop_for_task,
+            task_key,
+            browser,
+            binding,
+            selector,
+        )
+        .await;
     });
 
     desktop
@@ -404,6 +459,17 @@ pub async fn cancel_checkin(
     account_id: String,
 ) -> Cmd<CheckinView> {
     let key = SessionKey::new(&provider_id, &account_id);
+    if desktop
+        .checkin
+        .phase(&key)
+        .await
+        .is_some_and(|phase| phase.is_terminal())
+    {
+        return desktop
+            .checkin_view(&provider_id, &account_id)
+            .await
+            .ok_or_else(|| format!("no account {account_id} on provider {provider_id}"));
+    }
     // The state machine has no terminal state that accepts an event, so this is
     // guarded on being live: cancelling something already finished is a no-op the
     // panel can render as "done", not an error.
@@ -431,6 +497,7 @@ pub async fn cancel_checkin(
     if view.phase == "running" || view.phase == "waiting_for_user" {
         view.phase = "cancelled".to_string();
     }
+    desktop.record_checkin_view(view.clone());
     Ok(view)
 }
 
@@ -452,44 +519,6 @@ pub async fn get_checkin_status(
         .ok_or_else(|| format!("no account {account_id} on provider {provider_id}"))
 }
 
-/// Ask the runtime for the current page's session again.
-///
-/// The session id is not stored by the desktop layer — it belongs to the browser
-/// — so a resumed operation re-derives it from the browser's own target list.
-/// Returning `None` means the page the challenge was being solved on is gone,
-/// which is a real answer rather than a reason to navigate somewhere.
-async fn rebind(mut browser: BrowserSession) -> Option<(BrowserSession, cdp::PageBinding)> {
-    let listed = browser
-        .call("Target.getTargets", serde_json::json!({}))
-        .await
-        .ok()?;
-    let info = listed
-        .get("targetInfos")?
-        .as_array()?
-        .iter()
-        .find(|t| t.get("type").and_then(|v| v.as_str()) == Some("page"))?;
-    let target_id = info.get("targetId")?.as_str()?.to_string();
-    let session_id = browser
-        .call(
-            "Target.attachToTarget",
-            serde_json::json!({ "targetId": target_id, "flatten": true }),
-        )
-        .await
-        .ok()?
-        .get("sessionId")?
-        .as_str()?
-        .to_string();
-    let binding = cdp::PageBinding {
-        target_id,
-        session_id,
-    };
-    browser
-        .call_page(&binding, "Runtime.enable", serde_json::json!({}))
-        .await
-        .ok()?;
-    Some((browser, binding))
-}
-
 /// The absolute page a browser check-in opens.
 ///
 /// The relay endpoint usually ends in `/v1`; a panel path such as
@@ -502,6 +531,15 @@ fn checkin_url(
     account_id: &str,
     path: &str,
 ) -> Result<String, String> {
+    let root = panel_root(desktop, provider_id, account_id)?;
+    panel_page_url(&root, path)
+}
+
+pub(crate) fn panel_root(
+    desktop: &Desktop,
+    provider_id: &str,
+    account_id: &str,
+) -> Result<String, String> {
     let config = desktop.core.config();
     let provider = config
         .provider(provider_id)
@@ -511,19 +549,128 @@ fn checkin_url(
         .iter()
         .find(|account| account.account_id == account_id)
         .ok_or_else(|| format!("no account {account_id} on provider {provider_id}"))?;
-    let panel_base = account
+    if !provider.enabled || !account.enabled {
+        return Err("check-in is disabled for this provider or account".into());
+    }
+    #[cfg(feature = "plugin")]
+    if provider.plugin_binding.is_some() {
+        return Err("native browser check-in is not available to plugin accounts".into());
+    }
+    Ok(zroutery_core::config::account_panel_root(
+        &provider.base_url,
+        account.maintenance.panel_override(),
+    ))
+}
+
+fn panel_page_url(root: &str, path: &str) -> Result<String, String> {
+    let root =
+        url::Url::parse(root).map_err(|_| "the panel root is not a valid URL".to_string())?;
+    if !matches!(root.scheme(), "http" | "https")
+        || root.host_str().is_none()
+        || !root.username().is_empty()
+        || root.password().is_some()
+        || !path.starts_with('/')
+        || path.starts_with("//")
+        || path.contains(['?', '\\'])
+    {
+        return Err("check-in needs an http(s) panel root and a relative page path without credentials or query parameters".into());
+    }
+    Ok(format!("{}{}", root.origin().ascii_serialization(), path))
+}
+
+/// The scheduler and its status projection share the same executor boundary.
+pub(crate) fn browser_checkin_configured(
+    desktop: &Desktop,
+    provider_id: &str,
+    account_id: &str,
+) -> bool {
+    let Some(maintenance) = desktop.maintenance_for(provider_id, account_id) else {
+        return false;
+    };
+    let Ok(root) = panel_root(desktop, provider_id, account_id) else {
+        return false;
+    };
+    maintenance.checkin_enabled
+        && if agentrouter::is_panel(&root) {
+            agentrouter_user(desktop, provider_id, account_id).is_ok()
+        } else {
+            maintenance.is_browser_checkin_configured()
+        }
+}
+
+fn agentrouter_user(
+    desktop: &Desktop,
+    provider_id: &str,
+    account_id: &str,
+) -> Result<String, String> {
+    let config = desktop.core.config();
+    let account = config
+        .provider(provider_id)
+        .and_then(|provider| {
+            provider
+                .accounts
+                .iter()
+                .find(|a| a.account_id == account_id)
+        })
+        .ok_or_else(|| "the account no longer exists".to_string())?;
+    let bound = account
+        .binding
+        .as_ref()
+        .and_then(|binding| binding.identity.as_ref())
+        .filter(|identity| agentrouter::is_panel(&identity.panel_root))
+        .map(|identity| identity.user_id.as_str());
+    let declared = account
         .maintenance
-        .panel_url
+        .new_api_user
         .as_deref()
         .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .unwrap_or(&provider.base_url);
-    let origin = url::Url::parse(panel_base)
-        .ok()
-        .map(|value| value.origin().ascii_serialization())
-        .filter(|value| value != "null")
-        .unwrap_or_else(|| panel_base.trim_end_matches('/').to_string());
-    Ok(format!("{}/{}", origin, path.trim_start_matches('/')))
+        .filter(|user| !user.is_empty());
+    if matches!((bound, declared), (Some(bound), Some(declared)) if bound != declared) {
+        return Err(
+            "the panel user id disagrees with the account binding; verify it before signing in"
+                .into(),
+        );
+    }
+    bound.or(declared).filter(|user| user.parse::<u64>().is_ok_and(|id| id > 0))
+        .map(str::to_string)
+        .ok_or_else(|| "AgentRouter check-in needs the bound panel user id; capture and verify its panel token first".to_string())
+}
+
+/// The account module owns publication; maintenance also needs a read-only
+/// version in `account-maint` builds that intentionally omit `account`.
+pub(crate) fn checkin_binding_version(
+    desktop: &Desktop,
+    provider_id: &str,
+    account_id: &str,
+) -> Result<String, String> {
+    let config = desktop.core.config();
+    let account = config
+        .provider(provider_id)
+        .and_then(|provider| {
+            provider
+                .accounts
+                .iter()
+                .find(|account| account.account_id == account_id)
+        })
+        .ok_or_else(|| format!("unknown account `{account_id}` on provider `{provider_id}`"))?;
+    Ok(account
+        .binding
+        .as_ref()
+        .map(|binding| binding.version())
+        .unwrap_or_else(|| {
+            format!(
+                "legacy:{}:{}",
+                account.key_ref,
+                account.maintenance.new_api_user.as_deref().unwrap_or("")
+            )
+        }))
+}
+
+fn running_view(provider_id: &str, account_id: &str) -> CheckinView {
+    let mut view = CheckinView::idle(provider_id, account_id);
+    view.phase = "running".into();
+    view.browser_held = true;
+    view
 }
 
 /// Whether a page is the panel's sign-in screen rather than a check-in page.
@@ -574,14 +721,6 @@ fn resume_needs_navigation(current: Option<&str>, target: &str) -> bool {
     }
 }
 
-/// Release a session key whose attempt could not start.
-fn release(runtime: crate::checkin::CheckinRuntime, key: &SessionKey) {
-    let key = key.clone();
-    tauri::async_runtime::spawn(async move {
-        runtime.finish(&key).await;
-    });
-}
-
 /// Watch the page and record what the attempt did.
 ///
 /// # The policy, in full
@@ -605,25 +744,31 @@ fn release(runtime: crate::checkin::CheckinRuntime, key: &SessionKey) {
 /// carries no reward. A figure could only be produced by the observation half,
 /// and inventing one in a function that has never spoken to the panel would be
 /// exactly the fabrication the rest of the design refuses.
-async fn drive(
+async fn drive_owned(
     runtime: crate::checkin::CheckinRuntime,
     desktop: Arc<Desktop>,
     key: SessionKey,
+    mut browser: BrowserSession,
     binding: cdp::PageBinding,
     selector: String,
 ) {
     let started_at = chrono::Utc::now().timestamp();
-    if runtime.advance(&key, Event::Start).await.is_err()
-        || runtime.advance(&key, Event::BrowserStarted).await.is_err()
-        || runtime.advance(&key, Event::Navigated).await.is_err()
+    // Running -> Running for an initial drive; UserContinued -> Running for
+    // resume. Replaying Start here made every resumed attempt stop silently.
+    if runtime
+        .advance(&key, Event::OperationRunning)
+        .await
+        .is_err()
     {
+        let _ = browser.close_checkin().await;
+        runtime.end_driving(&key).await;
+        runtime.finish(&key).await;
         return;
     }
-
-    let Some(mut browser) = runtime.take_browser(&key).await else {
+    if browser.login_attempt.is_some() {
+        agentrouter::drive(runtime, desktop, key, browser, binding).await;
         return;
-    };
-    runtime.advance(&key, Event::OperationRunning).await.ok();
+    }
 
     let deadline = std::time::Instant::now() + SETTLE_TIMEOUT;
     let mut paused = false;
@@ -984,6 +1129,7 @@ pub fn view_from_report(
         CheckinPhase::ProviderAccepted => "running",
         CheckinPhase::ObservationPending => "running",
         CheckinPhase::Confirmed => "succeeded",
+        CheckinPhase::Completed => "succeeded",
         CheckinPhase::AlreadyCompleted => "already_completed",
         CheckinPhase::NotSupported => "not_supported",
         CheckinPhase::BlockedByWaf => "waiting_for_user",
@@ -1054,6 +1200,50 @@ mod tests {
     use super::*;
     use zroutery_core::account::{CheckinConfirmation, CheckinReward, ResourceAmount};
 
+    #[tokio::test]
+    async fn the_driver_resumes_running_without_replaying_browser_startup() {
+        let runtime = crate::checkin::CheckinRuntime::new(std::env::temp_dir());
+        let key = SessionKey::new("driver-test", "resume");
+        runtime.begin(key.clone()).await.unwrap();
+        for event in [
+            Event::Start,
+            Event::BrowserStarted,
+            Event::Navigated,
+            Event::WafBlocked,
+            Event::AwaitingUser,
+            Event::UserResumed,
+        ] {
+            runtime.advance(&key, event).await.unwrap();
+        }
+        assert_eq!(
+            runtime.advance(&key, Event::OperationRunning).await,
+            Ok(Phase::Running)
+        );
+        assert!(runtime.advance(&key, Event::Start).await.is_err());
+        runtime.finish(&key).await;
+    }
+
+    #[test]
+    fn browser_page_urls_cannot_escape_the_panel_or_carry_oauth_tickets() {
+        assert_eq!(
+            panel_page_url("https://panel.example/v1", "/console/personal").unwrap(),
+            "https://panel.example/console/personal"
+        );
+        for path in [
+            "//other.example/login",
+            "/oauth/github?code=secret",
+            "login",
+            "/\\other.example",
+        ] {
+            assert!(
+                panel_page_url("https://panel.example", path).is_err(),
+                "{path}"
+            );
+        }
+        assert!(panel_page_url("file:///secret", "/login").is_err());
+        assert!(panel_page_url("https://user:secret@panel.example", "/login").is_err());
+    }
+
     fn report(phase: CheckinPhase) -> CheckinReport {
         let mut report =
             CheckinReport::requested("relay", zroutery_core::account::AccountId("main".into()), 1);
@@ -1069,6 +1259,7 @@ mod tests {
             CheckinPhase::ProviderAccepted,
             CheckinPhase::ObservationPending,
             CheckinPhase::Confirmed,
+            CheckinPhase::Completed,
             CheckinPhase::AlreadyCompleted,
             CheckinPhase::NotSupported,
             CheckinPhase::BlockedByWaf,
@@ -1229,6 +1420,7 @@ mod tests {
     fn a_terminal_phase_settles_and_a_waiting_one_does_not() {
         for phase in [
             CheckinPhase::Confirmed,
+            CheckinPhase::Completed,
             CheckinPhase::AlreadyCompleted,
             CheckinPhase::NotSupported,
             CheckinPhase::Failed,

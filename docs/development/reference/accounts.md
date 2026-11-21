@@ -1,6 +1,6 @@
 # Accounts Reference
 
-> Authority: reference · Owner: backend · Last verified: 2026-11-21 · Verified by: `cargo test --workspace --all-features --locked`
+> Authority: reference · Owner: backend · Last verified: 2026-11-22 · Verified by: `cargo test --workspace --all-features --locked`
 
 This page describes account declarations, panel-token binding, inference-key
 pools, browser check-in and token capture. It does not claim real-panel
@@ -83,9 +83,25 @@ Two paths exist, and they are not the same claim:
   `src-tauri/src/checkin/cdp.rs::launch`,
   `src-tauri/src/checkin/cdp.rs::build_args`,
   `src-tauri/src/checkin/profile.rs::profile_dir`,
-  `src-tauri/src/checkin/profile.rs::devtools_port_file`).
+  `src-tauri/src/checkin/profile.rs::devtools_port_file`). Reattaching to a
+  parked browser goes back to the held panel page or the attempt's own OAuth
+  popup, never to whatever tab happens to be first in the target list
+  (`src-tauri/src/checkin/cdp.rs::resume_page`).
 - **HTTP check-in** performs the panel's own API call without a browser
   (`src-tauri/src/checkin_commands.rs::api_checkin`).
+- **Relay panels that grant at sign-in** are driven by one executor for the
+  manual command and the scheduler alike: the driver detects the relay's panel
+  root, walks the panel's own sign-in flow in the account's browser session,
+  and reads the settlement back from the page probe. The reward is granted
+  while signing in, not by posting a separate check-in endpoint
+  (`src-tauri/src/checkin_commands.rs::launch_attempt`,
+  `src-tauri/src/checkin/agentrouter.rs::is_panel`).
+- The relay page probe re-derives the state from the panel's own storage and
+  API inside the page and returns only an amount-bearing result: the account's
+  password, the panel token and every other response field stay in the page,
+  and a login older than the attempt's start is never accepted as a new reward
+  (`src-tauri/src/checkin/agentrouter.rs::observe_expression`,
+  `src-tauri/src/checkin/agentrouter.rs::parse`).
 
 A browser check-in reports its phase and a readable failure; it never logs the
 panel credential.
@@ -140,6 +156,9 @@ only the minted durable token is stored.
 - `src-tauri/src/checkin_commands.rs::cancel_checkin`
 - `src-tauri/src/checkin_commands.rs::get_checkin_status`
 - `src-tauri/src/checkin_commands.rs::api_checkin`
+- `src-tauri/src/checkin/agentrouter.rs::is_panel`
+- `src-tauri/src/checkin/agentrouter.rs::parse`
+- `src-tauri/src/checkin/cdp.rs::resume_page`
 - `src-tauri/src/token_capture/mod.rs::CapturePhase`
 - `src-tauri/src/token_capture/mod.rs::start_token_capture`
 - `src-tauri/src/token_capture/mod.rs::complete_token_capture`

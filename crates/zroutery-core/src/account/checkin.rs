@@ -68,6 +68,9 @@ pub enum CheckinPhase {
     ObservationPending,
     /// A resource effect was observed and attributed to this check-in.
     Confirmed,
+    /// The provider confirmed completion without a structured reward amount.
+    /// Terminal, but never a measured credit or a reason to invent a figure.
+    Completed,
     /// The period's check-in was already done.
     ///
     /// A success state, not an error: no new reward is the correct outcome of
@@ -96,6 +99,7 @@ impl CheckinPhase {
         matches!(
             self,
             Self::Confirmed
+                | Self::Completed
                 | Self::AlreadyCompleted
                 | Self::NotSupported
                 | Self::Failed
@@ -244,6 +248,8 @@ pub struct CheckinReward {
 pub enum CheckinConfirmation {
     /// A reward was observed and attributed to this check-in.
     Confirmed { reward: CheckinReward },
+    /// Completion was verified; no amount was established by this evidence.
+    Completed { source: RewardSource },
     /// The provider accepted the operation and no observation contradicts it,
     /// but nothing observed establishes the effect yet.
     ///
@@ -272,6 +278,7 @@ pub enum CheckinConfirmation {
 /// | confirmation | effect | why not something stronger |
 /// |---|---|---|
 /// | `Confirmed` | `Credited` with the amount | a structured surface established it |
+/// | `Completed` | `Unobserved` | completion was verified, but no amount was established |
 /// | `AlreadyCompleted` | `NoChange` | the provider says nothing settled; that is a *finding*, not missing information |
 /// | `ObservationPending` | `Unobserved` | the operation may have been granted; nothing observed says so |
 /// | any non-terminal or failure | *nothing* | an attempt that did not end established nothing about the balance |
@@ -308,6 +315,7 @@ pub fn as_resource_event(report: &CheckinReport) -> Option<ObservedResourceEvent
         // honest answer is carried rather than replaced by a figure from the report.
         CheckinConfirmation::ObservationPending => ResourceEventSource::AccountState,
         CheckinConfirmation::Confirmed { reward } => source_for(reward.source),
+        CheckinConfirmation::Completed { source } => source_for(*source),
         CheckinConfirmation::AlreadyCompleted { .. } => ResourceEventSource::AccountLog,
     };
 
@@ -317,6 +325,7 @@ pub fn as_resource_event(report: &CheckinReport) -> Option<ObservedResourceEvent
         },
         CheckinConfirmation::AlreadyCompleted { .. } => ResourceEffect::NoChange,
         CheckinConfirmation::ObservationPending => ResourceEffect::Unobserved,
+        CheckinConfirmation::Completed { .. } => ResourceEffect::Unobserved,
     };
 
     let mut metadata = std::collections::BTreeMap::new();
@@ -379,6 +388,9 @@ fn reward_source_name(source: RewardSource) -> &'static str {
 fn description_for(report: &CheckinReport) -> String {
     match report.confirmation.as_ref() {
         Some(CheckinConfirmation::Confirmed { .. }) => "account check-in granted a reward",
+        Some(CheckinConfirmation::Completed { .. }) => {
+            "account check-in completed; its reward amount was not established"
+        }
         Some(CheckinConfirmation::AlreadyCompleted { .. }) => {
             "account check-in had already been completed for this period"
         }
@@ -396,7 +408,7 @@ impl CheckinConfirmation {
         match self {
             Self::Confirmed { reward } => Some(reward),
             Self::AlreadyCompleted { reward } => reward.as_ref(),
-            Self::ObservationPending => None,
+            Self::ObservationPending | Self::Completed { .. } => None,
         }
     }
 }
@@ -679,6 +691,24 @@ fn timing_decision(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_completed_login_without_an_amount_is_terminal_but_not_measured_credit() {
+        let mut report = CheckinReport::requested("p", AccountId("a".into()), 1)
+            .settle(CheckinPhase::Completed, 2);
+        report.confirmation = Some(CheckinConfirmation::Completed {
+            source: RewardSource::ProviderRecord,
+        });
+        assert!(report.phase.is_terminal());
+        assert!(!report.phase.is_confirmed());
+        assert!(report.reward().is_none());
+        let event = as_resource_event(&report).expect("completion is observed");
+        assert_eq!(
+            event.resource_effect,
+            super::super::resource::ResourceEffect::Unobserved
+        );
+        assert!(event.resource_effect.amount().is_none());
+    }
 
     #[test]
     fn only_confirmed_claims_a_resource_effect() {

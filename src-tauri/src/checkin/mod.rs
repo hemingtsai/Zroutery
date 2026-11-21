@@ -32,6 +32,7 @@
 //! lock-order bug in a type whose job is serialising browser sessions would be
 //! found in production.
 
+pub mod agentrouter;
 pub mod cdp;
 pub mod profile;
 pub mod schedule;
@@ -42,6 +43,7 @@ pub mod waf;
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 use tokio::sync::Mutex;
 
@@ -265,9 +267,12 @@ impl CheckinRuntime {
         // directory, so the request is recorded and the driver performs it instead.
         // This is the fix for the corrupted-profile report: the key is never
         // released while something owns it.
-        if session.lock().await.driving {
-            session.lock().await.cancel_requested = true;
-            return FinishOutcome::DeferredToDriver;
+        {
+            let mut guard = session.lock().await;
+            guard.cancel_requested = true;
+            if guard.driving {
+                return FinishOutcome::DeferredToDriver;
+            }
         }
 
         // Removed only if it is still the *same* session, so a `begin` that raced
@@ -284,7 +289,7 @@ impl CheckinRuntime {
         }
         let browser = session.lock().await.browser.take();
         if let Some(browser) = browser {
-            if let Err(e) = browser.shutdown().await {
+            if let Err(e) = browser.close_checkin().await {
                 tracing::debug!(?e, %key.provider_id, %key.account_id, "browser close failed");
             }
         }
@@ -303,6 +308,10 @@ impl CheckinRuntime {
             return Err(AttachError::AlreadyAttached);
         }
         session.browser = Some(browser);
+        if session.state == State::WaitingForUser {
+            session.paused_at = Some(Instant::now());
+            session.login_pause = false;
+        }
         Ok(())
     }
 
@@ -319,11 +328,73 @@ impl CheckinRuntime {
         // second caller, so this check is not what prevents that — it is what lets
         // `finish` tell "the browser is out with a task" from "there is no browser",
         // which is the defect this flag exists for.
-        if guard.driving {
+        if guard.driving || guard.cancel_requested {
             return None;
         }
+        let browser = guard.browser.take()?;
         guard.driving = true;
-        guard.browser.take()
+        guard.paused_at = None;
+        guard.login_pause = false;
+        Some(browser)
+    }
+
+    /// A launched process may already own the profile before CDP attaches.
+    /// Keep the key reserved through that interval, including cancellation.
+    pub async fn reserve_browser_launch(&self, key: &SessionKey) -> bool {
+        let Some(session) = self.session(key).await else {
+            return false;
+        };
+        let mut guard = session.lock().await;
+        if guard.cancel_requested
+            || guard.driving
+            || guard.browser.is_some()
+            || guard.state != State::StartingBrowser
+        {
+            return false;
+        }
+        guard.driving = true;
+        true
+    }
+
+    /// Decide terminal completion against cancellation in one session lock,
+    /// retaining driver ownership until its final report is published.
+    pub async fn conclude_driver(&self, key: &SessionKey, outcome: Event) -> bool {
+        let Some(session) = self.session(key).await else {
+            return true;
+        };
+        let mut guard = session.lock().await;
+        let cancelled = guard.cancel_requested || guard.state == State::Cancelled;
+        if guard.state.is_terminal() {
+            return cancelled;
+        }
+        let event = if cancelled { Event::Cancelled } else { outcome };
+        match state::transition(guard.state, event) {
+            Ok(next) => guard.state = next,
+            Err(_) => return true,
+        }
+        cancelled
+    }
+
+    /// Put a paused browser back atomically. A racing cancel/shutdown returns
+    /// ownership to the driver, which must close it before releasing the key.
+    pub async fn park_browser(
+        &self,
+        key: &SessionKey,
+        browser: cdp::BrowserSession,
+    ) -> Result<(), Box<cdp::BrowserSession>> {
+        let registry = self.registry.lock().await;
+        let Some(session) = registry.get(key) else {
+            return Err(Box::new(browser));
+        };
+        let mut guard = session.lock().await;
+        if guard.cancel_requested || guard.state.is_terminal() || guard.browser.is_some() {
+            return Err(Box::new(browser));
+        }
+        guard.browser = Some(browser);
+        guard.driving = false;
+        guard.paused_at = Some(Instant::now());
+        guard.login_pause = true;
+        Ok(())
     }
 
     /// Whether a task is currently driving this account's browser.
@@ -339,6 +410,27 @@ impl CheckinRuntime {
         };
         let driving = session.lock().await.driving;
         driving
+    }
+
+    /// Whether a login pause has waited past `limit` for a person.
+    ///
+    /// A parked AgentRouter login holds its browser and therefore its profile.
+    /// With nobody at the keyboard it would hold both indefinitely — the
+    /// "check-in hangs and leaves the browser open" report — so the scheduler
+    /// reaps these, records the attempt as ended, and lets the next interval
+    /// try again. A generic WAF pause is deliberately not covered: a human
+    /// solving a challenge may legitimately take longer.
+    pub async fn login_pause_expired(&self, key: &SessionKey, limit: Duration) -> bool {
+        let Some(session) = self.session(key).await else {
+            return false;
+        };
+        let guard = session.lock().await;
+        guard.purpose == SessionPurpose::Checkin
+            && guard.login_pause
+            && !guard.driving
+            && guard
+                .paused_at
+                .is_some_and(|paused| paused.elapsed() >= limit)
     }
 
     /// The browser was put down; give the key back.
@@ -374,7 +466,7 @@ impl CheckinRuntime {
         for (key, session) in sessions {
             let browser = session.lock().await.browser.take();
             if let Some(browser) = browser {
-                if let Err(e) = browser.shutdown().await {
+                if let Err(e) = browser.close_checkin().await {
                     tracing::debug!(
                         ?e,
                         provider = %key.provider_id,
@@ -419,6 +511,15 @@ struct LiveSession {
     driving: bool,
     /// A cancel arrived while the browser was being driven.
     cancel_requested: bool,
+    /// When this session last parked its browser to wait for a person.
+    ///
+    /// A pause with no one watching must not hold a profile forever; the
+    /// scheduler asks [`CheckinRuntime::login_pause_expired`] whether this has
+    /// waited past its limit. `None` while the browser is out with a driver.
+    paused_at: Option<Instant>,
+    /// The pause is AgentRouter's GitHub sign-in, whose human step is bounded.
+    /// A generic WAF pause is not reaped by that limit.
+    login_pause: bool,
 }
 
 impl LiveSession {
@@ -429,6 +530,8 @@ impl LiveSession {
             browser: None,
             driving: false,
             cancel_requested: false,
+            paused_at: None,
+            login_pause: false,
         }
     }
 }
@@ -540,6 +643,32 @@ mod tests {
 
     fn key() -> SessionKey {
         SessionKey::new("relay", "main")
+    }
+
+    #[tokio::test]
+    async fn taking_an_absent_browser_does_not_leave_a_phantom_driver() {
+        let runtime = runtime();
+        runtime.begin(key()).await.unwrap();
+        assert!(runtime.take_browser(&key()).await.is_none());
+        assert!(!runtime.is_being_driven(&key()).await);
+        assert_eq!(runtime.finish(&key()).await, FinishOutcome::ClosedNow);
+    }
+
+    #[tokio::test]
+    async fn cancellation_during_launch_holds_the_profile_until_the_launcher_returns() {
+        let runtime = runtime();
+        runtime.begin(key()).await.unwrap();
+        runtime.advance(&key(), Event::Start).await.unwrap();
+        assert!(runtime.reserve_browser_launch(&key()).await);
+        assert_eq!(
+            runtime.finish(&key()).await,
+            FinishOutcome::DeferredToDriver
+        );
+        assert!(runtime.begin(key()).await.is_err());
+        assert!(runtime.is_cancel_requested(&key()).await);
+        assert!(runtime.end_driving(&key()).await);
+        assert_eq!(runtime.finish(&key()).await, FinishOutcome::ClosedNow);
+        runtime.begin(key()).await.unwrap();
     }
 
     #[tokio::test]

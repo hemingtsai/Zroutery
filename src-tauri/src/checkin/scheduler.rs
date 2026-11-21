@@ -44,12 +44,13 @@
 
 use std::collections::BTreeMap;
 use std::sync::Arc;
+use std::time::Duration;
 
 use zroutery_core::account::checkin::{decide_api, MaintenanceDecision};
 use zroutery_core::config::MaintenanceConfig;
 
-use crate::checkin::SessionKey;
-use crate::state::Desktop;
+use crate::checkin::{FinishOutcome, SessionKey};
+use crate::state::{CheckinView, Desktop};
 
 /// How often the scheduler looks for accounts that are due.
 ///
@@ -127,6 +128,45 @@ pub(crate) fn executor_decision(
     }
 }
 
+/// Login-settled panels have no independent check-in selector. Use the same
+/// account-aware browser availability in the scan and the status projection.
+pub(crate) fn account_executor_decision(
+    desktop: &Desktop,
+    key: &SessionKey,
+    maintenance: &MaintenanceConfig,
+    timing: MaintenanceDecision,
+    has_credential: bool,
+) -> MaintenanceDecision {
+    let Ok(root) = crate::checkin_commands::panel_root(desktop, &key.provider_id, &key.account_id)
+    else {
+        return MaintenanceDecision::NotApplicable;
+    };
+    if super::agentrouter::is_panel(&root)
+        && !crate::checkin_commands::browser_checkin_configured(
+            desktop,
+            &key.provider_id,
+            &key.account_id,
+        )
+    {
+        return if maintenance.checkin_enabled {
+            MaintenanceDecision::NotApplicable
+        } else {
+            MaintenanceDecision::Disabled
+        };
+    }
+    if matches!(timing, MaintenanceDecision::Due { .. })
+        && crate::checkin_commands::browser_checkin_configured(
+            desktop,
+            &key.provider_id,
+            &key.account_id,
+        )
+    {
+        timing
+    } else {
+        executor_decision(maintenance, timing, has_credential)
+    }
+}
+
 /// Decide which accounts are due, and open nothing.
 ///
 /// Free of side effects beyond reading the configuration and the durable schedule,
@@ -170,7 +210,9 @@ pub async fn scan(desktop: &Arc<Desktop>, now: i64) -> ScanPlan {
         // account is due is a scheduling question, and *how* it would run is the
         // next question, not part of this one. The executor adjustment is shared
         // with the panel so what is rendered is what would run.
-        if !executor_decision(
+        if !account_executor_decision(
+            desktop,
+            &SessionKey::new(&provider_id, &account_id),
             &maintenance,
             decide_api(
                 &maintenance,
@@ -191,7 +233,7 @@ pub async fn scan(desktop: &Arc<Desktop>, now: i64) -> ScanPlan {
         // it due would make the scan refuse it on every tick — counted forever,
         // explained nowhere. The panel sees `not_applicable` for exactly these,
         // from the same rule in `schedule_view`.
-        if maintenance.is_browser_checkin_configured()
+        if crate::checkin_commands::browser_checkin_configured(desktop, &provider_id, &account_id)
             || desktop.has_account_credential(&provider_id, &account_id)
         {
             plan.due.push(SessionKey::new(&provider_id, &account_id));
@@ -207,6 +249,13 @@ pub async fn scan(desktop: &Arc<Desktop>, now: i64) -> ScanPlan {
 /// The only part of this module that opens anything, and it is the only part that
 /// needs a browser to exist on the machine.
 pub async fn run(desktop: &Arc<Desktop>, now: i64) -> ScanOutcome {
+    // A parked login that nobody came back to must not hold a browser (and its
+    // profile) until the application restarts. Reaping is bounded and records
+    // the attempt as ended, so it is not retried on the next tick.
+    let expired = expire_login_pauses(desktop, now, super::agentrouter::HUMAN_TIMEOUT).await;
+    if expired > 0 {
+        tracing::info!(expired, "closed login pauses that were left unattended");
+    }
     let plan = scan(desktop, now).await;
     let mut outcome = ScanOutcome {
         considered: plan.considered,
@@ -218,14 +267,18 @@ pub async fn run(desktop: &Arc<Desktop>, now: i64) -> ScanOutcome {
         // The guard that keeps a WAF pause from becoming a spawn loop. Asked about
         // the live runtime, never inferred from a stored report: a report written
         // before a pause must not be read as "nothing is running".
-        if desktop.checkin.phase(&key).await.is_some() {
+        if desktop.checkin.purpose(&key).await.is_some() {
             outcome.skipped_busy += 1;
             continue;
         }
-        let browser_configured = desktop
-            .maintenance_for(&key.provider_id, &key.account_id)
-            .map(|m| m.is_browser_checkin_configured())
-            .unwrap_or(false);
+        let browser_configured = crate::checkin_commands::browser_checkin_configured(
+            desktop,
+            &key.provider_id,
+            &key.account_id,
+        );
+        let login_settled =
+            crate::checkin_commands::panel_root(desktop, &key.provider_id, &key.account_id)
+                .is_ok_and(|root| super::agentrouter::is_panel(&root));
 
         // The HTTP path first, wherever a credential makes it possible. It costs
         // no window and no person, and it is the only executor an unattended
@@ -233,7 +286,7 @@ pub async fn run(desktop: &Arc<Desktop>, now: i64) -> ScanOutcome {
         // panel itself reserves for a human — a challenge it wants solved in a
         // real page.
         #[cfg(feature = "newapi")]
-        if desktop.has_account_credential(&key.provider_id, &key.account_id) {
+        if !login_settled && desktop.has_account_credential(&key.provider_id, &key.account_id) {
             match crate::checkin_commands::api_checkin_once(
                 desktop,
                 &key.provider_id,
@@ -294,6 +347,9 @@ pub async fn run(desktop: &Arc<Desktop>, now: i64) -> ScanOutcome {
                 );
             }
             Err(e) => {
+                if login_settled {
+                    record_settlement(desktop, &key.provider_id, &key.account_id, now);
+                }
                 // Counted, not asserted. A scan that refused to launch because one
                 // account is busy must still try the others, so this is recorded and
                 // the walk continues.
@@ -329,6 +385,44 @@ pub struct ScanOutcome {
     pub skipped_busy: usize,
     /// Attempts the launch refused, most often because a session appeared first.
     pub refused: usize,
+}
+
+/// Close login pauses that waited past `limit`, record them as ended, and free
+/// their profiles.
+///
+/// Only an AgentRouter login pause is bounded here: it holds a whole browser
+/// window for a human sign-in, and nobody returning to it used to leave that
+/// window open indefinitely. A generic WAF challenge is left alone because it
+/// may legitimately take a person longer. Recording a failed view *and* a
+/// settlement is what stops the scan from reopening the same window every tick.
+pub(crate) async fn expire_login_pauses(
+    desktop: &Arc<Desktop>,
+    now: i64,
+    limit: Duration,
+) -> usize {
+    let mut expired = 0;
+    for key in desktop.checkin.keys().await {
+        if !desktop.checkin.login_pause_expired(&key, limit).await {
+            continue;
+        }
+        if matches!(
+            desktop.checkin.finish(&key).await,
+            FinishOutcome::AlreadyGone
+        ) {
+            continue;
+        }
+        let mut view = CheckinView::idle(&key.provider_id, &key.account_id);
+        view.phase = "failed".into();
+        view.failure = Some(
+            "the GitHub sign-in window was left open past the check-in's human-time limit, \
+             so it was closed; start the check-in again when you can finish the sign-in"
+                .into(),
+        );
+        desktop.record_checkin_view(view);
+        record_settlement(desktop, &key.provider_id, &key.account_id, now);
+        expired += 1;
+    }
+    expired
 }
 
 /// Record that an account settled, for the scheduler's next decision.
@@ -381,7 +475,9 @@ pub fn decisions_by_kind(
                 // is a declaration that cannot be acted on, and saying "due"
                 // would promise a run the scan will refuse — and a fresh account
                 // with a credential is due now, which the panel must say too.
-                executor_decision(
+                account_executor_decision(
+                    desktop,
+                    &SessionKey::new(&provider.id, &account.account_id),
                     &maintenance,
                     timing,
                     desktop.has_account_credential(&provider.id, &account.account_id),
@@ -486,6 +582,100 @@ mod tests {
 
     fn one_account(interval: Option<u64>) -> (Arc<Desktop>, Scratch) {
         desktop(config_with(vec![account("a", &daily(interval))]))
+    }
+
+    #[tokio::test]
+    async fn a_login_settled_panel_is_due_without_a_nonexistent_checkin_button() {
+        let mut config = config_with(vec![account(
+            "a",
+            &MaintenanceConfig {
+                checkin_enabled: true,
+                checkin_interval_secs: Some(60),
+                panel_url: Some("https://agentrouter.org".into()),
+                new_api_user: Some("7".into()),
+                ..Default::default()
+            },
+        )]);
+        config.providers[0].base_url = "https://ps.air-outer.com/v1".into();
+        let (desktop, _dir) = desktop(config);
+        record_settlement(&desktop, "prov", "a", 100);
+        assert_eq!(
+            scan(&desktop, 160).await.due,
+            vec![SessionKey::new("prov", "a")]
+        );
+        assert_eq!(
+            decisions_by_kind(&desktop, 160).get("due").map(Vec::len),
+            Some(1)
+        );
+    }
+
+    #[tokio::test]
+    async fn a_login_settled_account_without_identity_is_not_retried_on_every_tick() {
+        let maintenance = MaintenanceConfig {
+            checkin_enabled: true,
+            checkin_interval_secs: Some(1),
+            panel_url: Some("https://agentrouter.org".into()),
+            ..Default::default()
+        };
+        let (desktop, _dir) = desktop(config_with(vec![account("a", &maintenance)]));
+        let key = SessionKey::new("prov", "a");
+        assert_eq!(
+            account_executor_decision(
+                &desktop,
+                &key,
+                &maintenance,
+                MaintenanceDecision::Due {
+                    since_last_secs: 10
+                },
+                true
+            ),
+            MaintenanceDecision::NotApplicable
+        );
+        record_settlement(&desktop, "prov", "a", 0);
+        assert!(scan(&desktop, 10).await.due.is_empty());
+    }
+
+    #[tokio::test]
+    async fn a_token_capture_blocks_checkin_before_any_executor_runs() {
+        let (desktop, _dir) = one_account(Some(1));
+        record_settlement(&desktop, "prov", "a", 0);
+        let key = SessionKey::new("prov", "a");
+        desktop
+            .checkin
+            .begin_for(key.clone(), crate::checkin::SessionPurpose::TokenCapture)
+            .await
+            .unwrap();
+        let outcome = run(&desktop, 10).await;
+        assert_eq!(outcome.skipped_busy, 1);
+        assert_eq!(outcome.started + outcome.api_started, 0);
+        desktop.checkin.finish(&key).await;
+    }
+
+    #[tokio::test]
+    async fn a_login_executor_launch_failure_is_settled_once_per_interval() {
+        let maintenance = MaintenanceConfig {
+            checkin_enabled: true,
+            checkin_interval_secs: Some(60),
+            panel_url: Some("https://agentrouter.org".into()),
+            new_api_user: Some("7".into()),
+            browser_executable: "/nonexistent/zroutery-test-browser".into(),
+            ..Default::default()
+        };
+        let (desktop, _dir) = desktop(config_with(vec![account("a", &maintenance)]));
+        record_settlement(&desktop, "prov", "a", 0);
+        let outcome = run(&desktop, 100).await;
+        assert_eq!(outcome.refused, 1);
+        assert_eq!(outcome.started + outcome.api_started, 0);
+        assert_eq!(
+            desktop.checkin_schedule.last_settled_at("prov", "a"),
+            Some(100)
+        );
+        assert!(scan(&desktop, 101).await.due.is_empty());
+        assert!(desktop
+            .checkin
+            .purpose(&SessionKey::new("prov", "a"))
+            .await
+            .is_none());
     }
 
     #[tokio::test]
@@ -853,5 +1043,56 @@ mod tests {
             "a fresh account is not due rather than due-and-refused, so it is not counted \
              as unactionable either"
         );
+    }
+
+    #[tokio::test]
+    async fn two_login_settled_accounts_are_scheduled_and_settled_independently() {
+        // Multi-account check-in is structural: each account owns a distinct
+        // profile and a distinct key. This proves the scan carries both, the run
+        // attempts both, and one account's outcome does not settle or block the
+        // other's.
+        let login = |user: &str| MaintenanceConfig {
+            checkin_enabled: true,
+            checkin_interval_secs: Some(60),
+            panel_url: Some("https://agentrouter.org".into()),
+            new_api_user: Some(user.into()),
+            browser_executable: "/nonexistent/zroutery-test-browser".into(),
+            ..Default::default()
+        };
+        let (desktop, _dir) = desktop(config_with(vec![
+            account("first", &login("7")),
+            account("second", &login("8")),
+        ]));
+        record_settlement(&desktop, "prov", "first", 0);
+        record_settlement(&desktop, "prov", "second", 0);
+
+        let plan = scan(&desktop, 100).await;
+        assert_eq!(
+            plan.due,
+            vec![
+                SessionKey::new("prov", "first"),
+                SessionKey::new("prov", "second")
+            ],
+            "every due account appears once, in declaration order"
+        );
+
+        let outcome = run(&desktop, 100).await;
+        assert_eq!(outcome.due, 2);
+        assert_eq!(outcome.refused, 2, "each launch is attempted, not skipped");
+        for id in ["first", "second"] {
+            assert_eq!(
+                desktop.checkin_schedule.last_settled_at("prov", id),
+                Some(100),
+                "{id} settles its own attempt"
+            );
+            assert!(
+                desktop
+                    .checkin
+                    .purpose(&SessionKey::new("prov", id))
+                    .await
+                    .is_none(),
+                "{id} must not stay held after its attempt ended"
+            );
+        }
     }
 }
