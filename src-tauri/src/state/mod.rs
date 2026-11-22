@@ -32,6 +32,21 @@ use zroutery_core::server::{AppState, ServerHandle};
 
 use crate::secrets::KeychainSecrets;
 
+/// The desktop locks and their one documented ordering.
+///
+/// Every `Desktop` lock is leaf-shaped — acquired alone, never inside another
+/// `Desktop` lock's critical section — with exactly one intentional exception:
+/// the takeover file-work guard [`Self::client_files`] is the outer guard, and
+/// its critical section may take [`Self::takeover_stores`] (to reload each
+/// recovered store) and [`Self::warning`] (to surface a recovery problem), so
+/// the order is `client_files → {takeover_stores, warning}` and nothing else
+/// may ever be held while `client_files` is taken. `server` and `migration`
+/// are tokio `AsyncMutex`es because their guards are deliberately held across
+/// an await (a listener start, a configuration save); everything else is a
+/// std `Mutex` held only across synchronous bounded work, and the `migration`
+/// critical sections reach the core's own config lock, never another
+/// `Desktop` lock. `helpers::lock` recovers a poisoned guard without making
+/// any lock re-entrant, so this ordering is the whole deadlock story.
 pub struct Desktop {
     pub(crate) core: Arc<AppState>,
     pub(crate) secrets: Arc<KeychainSecrets>,
