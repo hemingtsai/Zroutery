@@ -92,6 +92,7 @@ import type {
   UsageAttempt,
   PluginInstallation,
   PluginUiView,
+  TokenCaptureView,
 } from "./src/api";
 import type { PermissionRequest } from "../docs/development/plugin-api-v1";
 
@@ -2134,10 +2135,82 @@ const handlers: Record<string, (args: any) => Json | Promise<Json>> = {
   run_election: () => snapshot(),
   reset_model_health: () => snapshot(),
   ccswitch_import: () => snapshot(),
+  start_token_capture: (args: { providerId?: string; accountId?: string }) => {
+    const key = `${args.providerId ?? ""}\u0000${args.accountId ?? ""}`;
+    const existing = mockCaptures.get(key);
+    if (existing && ["opening", "waiting", "captured"].includes(existing.phase)) {
+      return captureView(args.providerId, args.accountId);
+    }
+    mockCaptures.set(key, { polls: 0, phase: "opening", message: null });
+    return captureView(args.providerId, args.accountId);
+  },
+  get_token_capture_status: (args: { providerId?: string; accountId?: string }) => {
+    const key = `${args.providerId ?? ""}\u0000${args.accountId ?? ""}`;
+    const capture = mockCaptures.get(key);
+    if (capture) {
+      capture.polls += 1;
+      if (capture.phase === "opening") capture.phase = "waiting";
+      else if (capture.phase === "waiting") capture.phase = "captured";
+      else if (capture.phase === "captured") capture.phase = "stored";
+    }
+    return captureView(args.providerId, args.accountId);
+  },
+  cancel_token_capture: (args: { providerId?: string; accountId?: string }) => {
+    const key = `${args.providerId ?? ""}\u0000${args.accountId ?? ""}`;
+    const capture = mockCaptures.get(key);
+    if (capture && capture.phase !== "stored") {
+      capture.phase = "cancelled";
+      capture.message = null;
+    }
+    return captureView(args.providerId, args.accountId);
+  },
+  complete_token_capture: (args: { providerId?: string; accountId?: string; confirmIdentityChange?: boolean }) => {
+    const key = `${args.providerId ?? ""}\u0000${args.accountId ?? ""}`;
+    const capture = mockCaptures.get(key);
+    if (!capture || capture.phase !== "stored") throw new Error("capture_not_stored");
+    const next = structuredClone(currentConfig);
+    next.schema_version = Math.max(next.schema_version ?? 1, 2);
+    const provider = (next.providers ?? []).find((p: { id?: string }) => p.id === args.providerId);
+    const account = provider?.accounts?.find((a: { account_id?: string }) => a.account_id === args.accountId);
+    if (!account) throw new Error("unknown_account");
+    account.key_ref = `zroutery/capture/${args.accountId}`;
+    currentConfig = next;
+    sessionStorage.setItem(CONFIG_STORE_KEY, JSON.stringify(currentConfig));
+    mockCaptures.delete(key);
+    return captureView(args.providerId, args.accountId, "idle");
+  },
 };
 
 const mockPlugins: PluginInstallation[] = [];
 const mockPluginActions = new Map<string, { installationId: string; contributionId: string; revision: string; actionId: string }>();
+
+const mockCaptures = new Map<string, { polls: number; phase: string; message: string | null }>();
+
+/*
+ * One canned capture flow per provider/account pair: each status poll moves it
+ * one step (opening → waiting → captured → stored), so a preview can walk the
+ * Accounts page through every phase it renders without a real browser. The
+ * secret itself never exists anywhere — mirroring the production contract, the
+ * only durable effect is complete_token_capture pointing the account's key_ref
+ * at the credential the "capture" stored.
+ */
+function captureView(
+  providerId: string | undefined,
+  accountId: string | undefined,
+  phase?: string,
+): TokenCaptureView {
+  const key = `${providerId ?? ""}\u0000${accountId ?? ""}`;
+  const capture = mockCaptures.get(key);
+  const current = phase ?? capture?.phase ?? "idle";
+  return {
+    provider_id: providerId ?? "",
+    account_id: accountId ?? "",
+    phase: current,
+    message: capture?.message ?? null,
+    username: current === "captured" || current === "stored" ? "mock-user" : null,
+    browser_held: current === "opening" || current === "waiting" || current === "needs_verification",
+  };
+}
 
 const callbacks = new Map<number, (payload: any) => void>();
 let nextCallback = 1;

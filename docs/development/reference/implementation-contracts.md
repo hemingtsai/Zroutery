@@ -1,6 +1,6 @@
 # Implementation Contracts Reference
 
-> Authority: reference · Owner: backend · Last verified: 2026-11-21 · Verified by: `cargo test --workspace --all-features --locked`
+> Authority: reference · Owner: backend · Last verified: 2026-11-22 · Verified by: `cargo test --workspace --all-features --locked`
 
 These are the boundaries a change must preserve. `AGENTS.md` routes here; it does
 not restate them.
@@ -27,7 +27,8 @@ not restate them.
 ## IPC
 
 - Define the `api.ts` contract, implement Rust, then synchronize
-  `ui/mock-bridge.ts`.
+  `ui/mock-bridge.ts`; its fixtures model the browser token-capture flow as a
+  canned phase timeline (`ui/mock-bridge.ts::captureView`).
 - Register commands in both the handler and the app manifest
   (`src-tauri/src/lib.rs::generate_handler`,
   `src-tauri/build.rs::APP_COMMANDS`).
@@ -90,9 +91,12 @@ not restate them.
   macOS and Linux target boundaries (`src-tauri/Cargo.toml`).
 - UI changes follow the design system
   (`docs/development/reference/ui-design-system.md`); keep English, Simplified
-  Chinese and Traditional Chinese keys synchronized and update layout/interaction
+  Chinese and Traditional Chinese keys — and the placeholder variables each key
+  interpolates — synchronized, with a unit gate over the three dictionaries, and
+  update layout/interaction
   fixtures when structure changes (`ui/src/i18n.tsx`,
-  `ui/src/i18n/en.ts`, `ui/src/i18n/zh.ts`, `ui/src/i18n.zhTW.ts`).
+  `ui/src/i18n/en.ts`, `ui/src/i18n/zh.ts`, `ui/src/i18n.zhTW.ts`,
+  `ui/src/i18n.placeholder.test.ts::variables`).
 
 ## Failure modes
 

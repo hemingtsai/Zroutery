@@ -1,6 +1,6 @@
 # IPC Reference
 
-> Authority: reference · Owner: frontend · Last verified: 2026-11-21 · Verified by: `scripts/command_surface_test.py`
+> Authority: reference · Owner: frontend · Last verified: 2026-11-22 · Verified by: `scripts/command_surface_test.py`
 
 The webview talks to Rust through Tauri commands. This page describes that
 boundary; it does not list every command signature, because the contract is the
@@ -79,7 +79,9 @@ and usage attempts expose optional parent IDs and per-iteration quotes
 (`ui/src/api.ts::ClassifierConfig`, `ui/src/api.ts::UsageAttempt`,
 `ui/src/api.ts::UsageIteration`, `ui/src/api.ts::RateQuote`). The browser mock
 declares the server-review defaults without inventing measured review usage
-(`ui/mock-bridge.ts::appConfig`, `ui/mock-bridge.ts::handlers`).
+(`ui/mock-bridge.ts::appConfig`, `ui/mock-bridge.ts::handlers`), and models the
+browser token-capture flow as a canned phase timeline
+(`ui/mock-bridge.ts::captureView`).
 
 ## Failure modes
 

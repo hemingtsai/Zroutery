@@ -58,7 +58,10 @@ interaction coverage saves both settings without changing the model pool
 
 - English, Simplified Chinese and Traditional Chinese dictionaries are separate
   modules (`ui/src/i18n/en.ts::en`, `ui/src/i18n/zh.ts::zh`,
-  `ui/src/i18n.zhTW.ts::zhTW`).
+  `ui/src/i18n.zhTW.ts::zhTW`). A unit gate reconciles the placeholder
+  variables every key interpolates across the three dictionaries; a missing or
+  extra one renders literal braces to the user
+  (`ui/src/i18n.placeholder.test.ts::variables`).
 - The provider falls back to English for a missing key
   (`ui/src/i18n.tsx::I18nProvider`). A key added to one dictionary must be added
   to the other two; a missing key renders English, which is a silent regression
