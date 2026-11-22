@@ -166,6 +166,21 @@ impl AppConfig {
 
     pub fn validate(&self) -> Vec<ConfigIssue> {
         let mut issues = Vec::new();
+        self.validate_plugin_instances(&mut issues);
+        self.validate_provider_duplicates(&mut issues);
+        self.validate_cors_origins(&mut issues);
+        self.validate_providers(&mut issues);
+        self.validate_models(&mut issues);
+        self.validate_tiers(&mut issues);
+        self.validate_classifier(&mut issues);
+        self.validate_server_exposure(&mut issues);
+        self.validate_budgets(&mut issues);
+        issues
+    }
+
+    /// Plugin instance bindings: unique ids that never shadow a native provider,
+    /// and an installation identity whose uuid and content digest parse.
+    fn validate_plugin_instances(&self, issues: &mut Vec<ConfigIssue>) {
         let mut plugin_ids = std::collections::BTreeSet::new();
         for instance in &self.plugin_instances {
             let collision = self.providers.iter().any(|provider| {
@@ -203,7 +218,11 @@ impl AppConfig {
                 });
             }
         }
-        let mut seen_ids: BTreeMap<String, usize> = BTreeMap::new();
+    }
+
+    /// Provider ids must be unique; duplicates would make every reference to
+    /// the id ambiguous.
+    fn validate_provider_duplicates(&self, issues: &mut Vec<ConfigIssue>) {
         let mut seen_providers: BTreeMap<String, usize> = BTreeMap::new();
 
         for p in &self.providers {
@@ -221,7 +240,10 @@ impl AppConfig {
                 });
             }
         }
+    }
 
+    /// CORS origins must be well-formed before the listener will honour them.
+    fn validate_cors_origins(&self, issues: &mut Vec<ConfigIssue>) {
         if self.server.allow_cors {
             for o in &self.server.cors_origins {
                 let trimmed = o.trim();
@@ -242,7 +264,13 @@ impl AppConfig {
                 }
             }
         }
+    }
 
+    /// Per-provider rules: account ids, inference-key identity and separation
+    /// from panel credentials, the locked OpenCode profile, base URLs, decision
+    /// endpoint settings, timeouts and managed-header overrides. One loop per
+    /// provider keeps the findings in the panel's display order.
+    fn validate_providers(&self, issues: &mut Vec<ConfigIssue>) {
         for p in &self.providers {
             let mut accounts = std::collections::HashSet::new();
             for account in &p.accounts {
@@ -354,7 +382,13 @@ impl AppConfig {
                 }
             }
         }
+    }
 
+    /// Model entries: resolvable providers, present upstream names, reserved
+    /// virtual ids, tier classification, context windows and pricing, plus the
+    /// duplicate-id audit over exposed ids and aliases.
+    fn validate_models(&self, issues: &mut Vec<ConfigIssue>) {
+        let mut seen_ids: BTreeMap<String, usize> = BTreeMap::new();
         for m in &self.models {
             let exposed = m.exposed_id();
             *seen_ids.entry(exposed.clone()).or_insert(0) += 1;
@@ -455,7 +489,11 @@ impl AppConfig {
                 });
             }
         }
+    }
 
+    /// Every routing tier must hold at least one enabled model on an enabled
+    /// provider, or requests aimed at it can only fail.
+    fn validate_tiers(&self, issues: &mut Vec<ConfigIssue>) {
         for tier in ModelTier::ALL {
             let has = self.models.iter().any(|m| {
                 m.enabled
@@ -477,7 +515,11 @@ impl AppConfig {
                 });
             }
         }
+    }
 
+    /// Auto Mode's classifier: review timeout, detection confidence, and every
+    /// candidate's resolvability, enabledness and provider health.
+    fn validate_classifier(&self, issues: &mut Vec<ConfigIssue>) {
         // Classifier candidates reference models by exposed id or alias; a
         // dangling reference is reported so the panel can offer to clean it up,
         // but as a warning: the router skips unknown candidates at routing time,
@@ -577,7 +619,11 @@ impl AppConfig {
                 });
             }
         }
+    }
 
+    /// The listener's exposure: reachable binds, disabled authentication, an
+    /// empty required token, and the dangerous no-auth-plus-reachable pair.
+    fn validate_server_exposure(&self, issues: &mut Vec<ConfigIssue>) {
         if self.server.is_exposed() {
             issues.push(ConfigIssue {
                 severity: IssueSeverity::Warning,
@@ -634,7 +680,11 @@ impl AppConfig {
                 subject: None,
             });
         }
+    }
 
+    /// Budgets: self-consistent limits, a currency something bills in, scopes
+    /// that name real providers, and degrade targets that have a member.
+    fn validate_budgets(&self, issues: &mut Vec<ConfigIssue>) {
         for budget in &self.budgets {
             let subject = format!("{} / {}", budget.scope.label(), budget.period.label());
             for problem in budget.problems() {
@@ -689,7 +739,5 @@ impl AppConfig {
                 }
             }
         }
-
-        issues
     }
 }

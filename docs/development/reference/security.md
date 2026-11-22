@@ -27,7 +27,8 @@ That is the model; hiding the token from the same user is not a goal.
 - The comparison is constant-time and length-independent
   (`crates/zroutery-core/src/server/handlers.rs::constant_time_eq`).
 - An empty configured token with auth on is a validation error, not an open
-  gateway (`crates/zroutery-core/src/config/validate.rs::AppConfig::validate`).
+  gateway (`crates/zroutery-core/src/config/validate.rs::AppConfig::validate`,
+  `crates/zroutery-core/src/config/validate.rs::AppConfig::validate_server_exposure`).
 - The token is not sent to the webview; the snapshot strips it and exposes only a
   hint (`src-tauri/src/state/snapshot.rs::snapshot`). Reveal/copy are explicit
   commands.

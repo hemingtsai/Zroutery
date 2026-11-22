@@ -1,6 +1,6 @@
 # Configuration Reference
 
-> Authority: reference · Owner: backend · Last verified: 2026-11-21 · Verified by: `cargo test --workspace --all-features --locked`
+> Authority: reference · Owner: backend · Last verified: 2026-11-22 · Verified by: `cargo test --workspace --all-features --locked`
 
 This page describes the configuration document: defaults, validation,
 normalisation, persistence and the secret boundary. It is not a settings guide;
@@ -64,7 +64,12 @@ and their data-sharing boundary are editable in the Auto review drawer
 The document's `validate` method returns `ConfigIssue`s with a severity
 (`crates/zroutery-core/src/config/validate.rs::AppConfig::validate`,
 `crates/zroutery-core/src/config/validate.rs::ConfigIssue`,
-`crates/zroutery-core/src/config/validate.rs::IssueSeverity`).
+`crates/zroutery-core/src/config/validate.rs::IssueSeverity`). The rules live in
+one function per rule domain — plugin instances, provider duplicates, CORS
+origins, per-provider accounts and settings, models and tiers, the classifier,
+server exposure and budgets — and `validate` concatenates their findings in that
+order (`crates/zroutery-core/src/config/validate.rs::AppConfig::validate_plugin_instances`,
+`crates/zroutery-core/src/config/validate.rs::AppConfig::validate_budgets`).
 
 - An **error** blocks the save: an empty token with auth on, an impossible price
   or budget, a duplicate or orphan id, a zero timeout, a plugin instance conflict

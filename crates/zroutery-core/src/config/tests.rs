@@ -3,6 +3,8 @@
 use super::app::AppConfig;
 use super::*;
 use crate::billing::BaseDepth;
+use crate::billing::Pricing;
+use crate::budget::{Budget, BudgetPeriod, BudgetScope, OnExceeded};
 use crate::config::provider::ApiSurface;
 use crate::ir::CapabilityState;
 use crate::ir::Dialect;
@@ -873,4 +875,121 @@ fn strict_capability_filter_serde_round_trip() {
 fn strict_capability_filter_absent_in_json_defaults_false() {
     let cfg: RoutingConfig = serde_json::from_str("{}").unwrap();
     assert!(!cfg.strict_capability_filter);
+}
+
+// The three rule domains below had no fixture at all: a refactor of `validate`
+// could silently reword or reorder their findings without failing anything.
+// Each pins the exact codes and severities the rules raise today.
+
+#[test]
+fn a_plugin_instance_that_shadows_or_repeats_is_reported() {
+    let mut cfg = sample();
+    let instance = |id: &str, installation_id: &str, package_digest: &str| PluginInstanceConfig {
+        id: id.into(),
+        name: id.into(),
+        installation_id: installation_id.into(),
+        contribution_id: "provider".into(),
+        package_digest: package_digest.into(),
+        enabled: true,
+        credentials: vec![],
+        accounts: vec![],
+    };
+    let uuid = "00000000-0000-0000-0000-000000000001";
+    let digest = "a".repeat(64);
+    cfg.plugin_instances.push(instance("relay", uuid, &digest));
+    // A second instance with the same id.
+    cfg.plugin_instances.push(instance("relay", uuid, &digest));
+    // An instance id that shadows the native provider from `sample`.
+    cfg.plugin_instances
+        .push(instance("deepseek", uuid, &digest));
+    // An instance whose identity pair cannot be trusted.
+    cfg.plugin_instances
+        .push(instance("bad", "not-a-uuid", "short"));
+    let findings: Vec<(String, String)> = cfg
+        .validate()
+        .into_iter()
+        .map(|issue| (issue.code.clone(), issue.subject.unwrap_or_default()))
+        .collect();
+    assert!(findings.contains(&("plugin.instance_conflict".into(), "relay".into())));
+    assert!(findings.contains(&("plugin.instance_conflict".into(), "deepseek".into())));
+    assert!(findings.contains(&("plugin.invalid_binding".into(), "bad".into())));
+}
+
+#[test]
+fn an_inference_key_colliding_with_a_panel_credential_is_refused() {
+    let mut cfg = sample();
+    let provider = cfg.providers.first_mut().expect("sample has one provider");
+    provider.accounts.push(AccountConfig {
+        account_id: "main".into(),
+        key_ref: "zroutery/panel/main".into(),
+        inference_keys: vec![
+            InferenceKeyConfig {
+                id: "panel-copy".into(),
+                key_ref: "zroutery/panel/main".into(),
+                ..Default::default()
+            },
+            InferenceKeyConfig {
+                id: String::new(),
+                key_ref: "zroutery/inference/other".into(),
+                ..Default::default()
+            },
+        ],
+        ..Default::default()
+    });
+    let findings: Vec<String> = cfg
+        .validate()
+        .into_iter()
+        .map(|issue| issue.code.clone())
+        .collect();
+    assert!(findings.contains(&"account.inference_panel_collision".to_string()));
+    assert!(findings.contains(&"account.invalid_inference_key".to_string()));
+}
+
+#[test]
+fn a_budget_that_counts_an_unbilled_currency_cannot_protect_anything() {
+    let mut cfg = sample();
+    cfg.models[0].pricing = Some(Pricing::new("USD", 1.0, 2.0));
+    // A currency nothing bills in.
+    cfg.budgets.push(Budget::new(
+        BudgetScope::Global,
+        BudgetPeriod::Day,
+        "EUR",
+        10.0,
+    ));
+    // A limit that can never bind.
+    cfg.budgets.push(Budget::new(
+        BudgetScope::Global,
+        BudgetPeriod::Day,
+        "USD",
+        0.0,
+    ));
+    // A provider scope that names no configured provider.
+    cfg.budgets.push(Budget::new(
+        BudgetScope::Provider { id: "ghost".into() },
+        BudgetPeriod::Day,
+        "USD",
+        10.0,
+    ));
+    // A degrade target whose tier has no enabled model.
+    let mut degrade = Budget::new(
+        BudgetScope::Tier {
+            tier: ModelTier::Fast,
+        },
+        BudgetPeriod::Day,
+        "USD",
+        10.0,
+    );
+    degrade.on_exceeded = OnExceeded::Degrade {
+        to: ModelTier::Fast,
+    };
+    cfg.budgets.push(degrade);
+    let findings: Vec<String> = cfg
+        .validate()
+        .into_iter()
+        .map(|issue| issue.code.clone())
+        .collect();
+    assert!(findings.contains(&"budget.unused_currency".to_string()));
+    assert!(findings.contains(&"budget.impossible".to_string()));
+    assert!(findings.contains(&"budget.orphan".to_string()));
+    assert!(findings.contains(&"budget.degrade_nowhere".to_string()));
 }
