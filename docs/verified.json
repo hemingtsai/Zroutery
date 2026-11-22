@@ -94,9 +94,9 @@
     "reviewed_by": "second-reader-glm",
     "reviewed_at": "2026-11-21",
     "sample": [
-      "默认监听地址、端口与请求体上限：`crates/zroutery-core/src/config/server.rs::ServerConfig`。",
-      "默认监听地址、端口与请求体上限：`crates/zroutery-core/src/config/server.rs::ServerConfig`。",
-      "提交信息按 Conventional Commits 书写，CI 会逐条检查。架构决策和各阶段的记录在 `docs/development/`；改代码前先看 `CONTRIBUTING.md` 和 `AGENTS.md`。"
+      "\u9ed8\u8ba4\u76d1\u542c\u5730\u5740\u3001\u7aef\u53e3\u4e0e\u8bf7\u6c42\u4f53\u4e0a\u9650\uff1a`crates/zroutery-core/src/config/server.rs::ServerConfig`\u3002",
+      "\u9ed8\u8ba4\u76d1\u542c\u5730\u5740\u3001\u7aef\u53e3\u4e0e\u8bf7\u6c42\u4f53\u4e0a\u9650\uff1a`crates/zroutery-core/src/config/server.rs::ServerConfig`\u3002",
+      "\u63d0\u4ea4\u4fe1\u606f\u6309 Conventional Commits \u4e66\u5199\uff0cCI \u4f1a\u9010\u6761\u68c0\u67e5\u3002\u67b6\u6784\u51b3\u7b56\u548c\u5404\u9636\u6bb5\u7684\u8bb0\u5f55\u5728 `docs/development/`\uff1b\u6539\u4ee3\u7801\u524d\u5148\u770b `CONTRIBUTING.md` \u548c `AGENTS.md`\u3002"
     ],
     "reviewed_sha": "sha256:b56a1725da0aa013ee81a773dc8497cad735c6122890da2145399a29eba5a46d",
     "reviewed_note": "second-reader: re-review after base_depth/models_url tolerance follow-up"
@@ -338,9 +338,9 @@
     "reviewed_by": "second-reader-glm",
     "reviewed_at": "2026-11-21",
     "sample": [
-      "客戶端用哪種協定都行——Anthropic、OpenAI Chat、OpenAI Responses、Gemini；Claude Code、Codex、Chatbox 或任意 SDK 指向 `http://127.0.0.1:8787` 即可使用，請求失敗會自動切換到下一個模型。macOS 和 Windows 上是常駐選單列 / 系統匣的桌面應用，也可以不開介面，只跑代理程序。",
-      "客戶端用哪種協定都行——Anthropic、OpenAI Chat、OpenAI Responses、Gemini；Claude Code、Codex、Chatbox 或任意 SDK 指向 `http://127.0.0.1:8787` 即可使用，請求失敗會自動切換到下一個模型。macOS 和 Windows 上是常駐選單列 / 系統匣的桌面應用，也可以不開介面，只跑代理程序。",
-      "主題與外掛端面：`crates/zroutery-plugin-api/src/capability.rs::Capability`、`crates/zroutery-plugin-api/src/manifest.rs::PluginManifestV1`、`crates/zroutery-plugin-api/src/options.rs::OptionsSchemaV1`、`crates/zroutery-core/src/config/plugin.rs::PluginInstanceConfig`、`ui/src/themes/registry.ts`、`scripts/plugin_theme_test.py`、`scripts/theme_sources/manifest.json`。"
+      "\u5ba2\u6236\u7aef\u7528\u54ea\u7a2e\u5354\u5b9a\u90fd\u884c\u2014\u2014Anthropic\u3001OpenAI Chat\u3001OpenAI Responses\u3001Gemini\uff1bClaude Code\u3001Codex\u3001Chatbox \u6216\u4efb\u610f SDK \u6307\u5411 `http://127.0.0.1:8787` \u5373\u53ef\u4f7f\u7528\uff0c\u8acb\u6c42\u5931\u6557\u6703\u81ea\u52d5\u5207\u63db\u5230\u4e0b\u4e00\u500b\u6a21\u578b\u3002macOS \u548c Windows \u4e0a\u662f\u5e38\u99d0\u9078\u55ae\u5217 / \u7cfb\u7d71\u5323\u7684\u684c\u9762\u61c9\u7528\uff0c\u4e5f\u53ef\u4ee5\u4e0d\u958b\u4ecb\u9762\uff0c\u53ea\u8dd1\u4ee3\u7406\u7a0b\u5e8f\u3002",
+      "\u5ba2\u6236\u7aef\u7528\u54ea\u7a2e\u5354\u5b9a\u90fd\u884c\u2014\u2014Anthropic\u3001OpenAI Chat\u3001OpenAI Responses\u3001Gemini\uff1bClaude Code\u3001Codex\u3001Chatbox \u6216\u4efb\u610f SDK \u6307\u5411 `http://127.0.0.1:8787` \u5373\u53ef\u4f7f\u7528\uff0c\u8acb\u6c42\u5931\u6557\u6703\u81ea\u52d5\u5207\u63db\u5230\u4e0b\u4e00\u500b\u6a21\u578b\u3002macOS \u548c Windows \u4e0a\u662f\u5e38\u99d0\u9078\u55ae\u5217 / \u7cfb\u7d71\u5323\u7684\u684c\u9762\u61c9\u7528\uff0c\u4e5f\u53ef\u4ee5\u4e0d\u958b\u4ecb\u9762\uff0c\u53ea\u8dd1\u4ee3\u7406\u7a0b\u5e8f\u3002",
+      "\u4e3b\u984c\u8207\u5916\u639b\u7aef\u9762\uff1a`crates/zroutery-plugin-api/src/capability.rs::Capability`\u3001`crates/zroutery-plugin-api/src/manifest.rs::PluginManifestV1`\u3001`crates/zroutery-plugin-api/src/options.rs::OptionsSchemaV1`\u3001`crates/zroutery-core/src/config/plugin.rs::PluginInstanceConfig`\u3001`ui/src/themes/registry.ts`\u3001`scripts/plugin_theme_test.py`\u3001`scripts/theme_sources/manifest.json`\u3002"
     ],
     "reviewed_sha": "sha256:681f842960f69f491c2e10630bb1dd797862c9a255d52d0b4e885b696cf175ad",
     "reviewed_note": "second-reader: re-review after base_depth/models_url tolerance follow-up"
@@ -742,18 +742,18 @@
       "src-tauri/src/lib.rs": "sha256:aeb0de3c69d5370a39d22177b25b1b91c7f49b2384130de864bd3a67cc20bd43",
       "src-tauri/src/plugins/views.rs": "sha256:9dfdc0ceca2b1d20dfed2c9cc688ebd12348b81aa0c2a631eb0f27a7ca87a00f",
       "src-tauri/src/state/snapshot.rs": "sha256:bc1e3112e5eb6ab11c0ed3c635c1a18207aa8b160500ebcc918768a26b4e61d3",
-      "ui/mock-bridge.ts": "sha256:18a36ac69f5dd5e15773d4ca21dd8af62b8bfb5ca1904e7cd75fac3cca560ae3",
+      "ui/mock-bridge.ts": "sha256:aeb8ac29f613eacdf4be30b3241aef2bc0131a319d5f6ea256079e5fcfa71da3",
       "ui/src/api.ts": "sha256:5dade8c1ddb8c3bf98570e5f35da428f2ee023240831a2ae1b0095fc77710498"
     },
-    "verified_at": "2026-11-21",
+    "verified_at": "2026-11-22",
     "reviewed_by": "second-reader-glm",
-    "reviewed_at": "2026-11-21",
-    "reviewed_note": "second-reader: independent session review of plugin feature docs",
-    "reviewed_sha": "sha256:2b6b961e5b8e765ae541c3c900a72afc1ca6a083f6fcbb3d99b30c4eadd64acc",
+    "reviewed_at": "2026-11-22",
+    "reviewed_note": "second-reader: round-4 pass for the validate domain split, token-capture mock fixtures and the i18n placeholder parity gate; citations verified against sources in an independent session",
+    "reviewed_sha": "sha256:080d8e085f56a92b77d4d6b69999a34fba27ae11c0e9b0c688ee7af2582f4ed1",
     "sample": [
       "`unsupported_host_service` in that build, and per-installation availability",
       "stale (`src-tauri/capabilities/default.json::permissions`).",
-      "build-time app manifest (`src-tauri/build.rs::APP_COMMANDS`)."
+      "(`ui/mock-bridge.ts::appConfig`, `ui/mock-bridge.ts::handlers`), and models the"
     ],
     "reviewed_commit": "ad22f8d2894d81e601ec966d797e9fc87081365f"
   },
@@ -808,10 +808,11 @@
       "ui/src/accent.ts": "sha256:a4d18a28be58bfe586a90d682934b94a66381587569301fe11ec8e4cb6608662",
       "ui/src/components/drawer.tsx": "sha256:b5a2526ed45ab2ff4bb8818b99f0a5a12b257e2b6590767f508a19435ef305c1",
       "ui/src/components/tabs.tsx": "sha256:076f7c93459c18b81269d04066fb4e0ecafc062a8c20f81f3081949ada346db7",
+      "ui/src/i18n.placeholder.test.ts": "sha256:e74b43dd5bfa8eb7f85178f6fe06b5f043747c49adcd9b7cd5e15df9dbaf180c",
       "ui/src/i18n.tsx": "sha256:3020ad8c7e3c1fe921c0ded9308534527a6a02abadc8957e668359793586a424",
-      "ui/src/i18n.zhTW.ts": "sha256:f492c6ccc195f4d8f5a1612ca684fe1ed15e995ee7847965e0dd12d6119333f7",
+      "ui/src/i18n.zhTW.ts": "sha256:c0fb76c9bb1178ecaad9e11f6d92be8f3337352a79aa1e366df4eaec2c2f48d7",
       "ui/src/i18n/en.ts": "sha256:57dfc80de6d5fcd4ffb20066f3da78dd38c806f570549826c398a5b6d73f7aba",
-      "ui/src/i18n/zh.ts": "sha256:a2e32d0d73fef90116b43163d945952e8348737b0bb20178d8daa313ca8303db",
+      "ui/src/i18n/zh.ts": "sha256:803e8a3c70457e19760d271cde5907e05e0cbb8dddb88ba64a9355278277f674",
       "ui/src/pages/routing/AutoModeDrawer.tsx": "sha256:69acb89fe3dd5aba9a2459095407875f1964c049996d7339a06ecdcf8567339e",
       "ui/src/saveQueue.ts": "sha256:e811077a9ebb5dae4c57ad1b52f4948112c5bb334558bf380ef45f3ad43f6ce8",
       "ui/src/shell/nav.ts": "sha256:7bd030c577e65221176338012cd7ddc6ebc600cc6b3e89024684ca48d4258ed8",
@@ -824,8 +825,8 @@
     "verified_at": "2026-11-22",
     "reviewed_by": "second-reader-glm",
     "reviewed_at": "2026-11-22",
-    "reviewed_note": "second-reader: round-2 same-change pass for the cdp_client extraction, percentile total_cmp and stored-response serialization doc edits; citations verified against sources in an independent session",
-    "reviewed_sha": "sha256:50bc3e1f9130dcdfdfca13ca5e8023dc6cc7362934bd29713eefa41b9ce82f18",
+    "reviewed_note": "second-reader: round-4 pass for the validate domain split, token-capture mock fixtures and the i18n placeholder parity gate; citations verified against sources in an independent session",
+    "reviewed_sha": "sha256:45aa141772f4d3324b0fde3de3c04ef588a7c35ef37cb39bf73b3c5117d84207",
     "sample": [
       "(`ui/src/styles.css`, `ui/src/components/confirm.tsx`,",
       "`src-tauri/src/plugins/commands.rs::render_plugin_ui`).",
@@ -914,7 +915,7 @@
       "crates/zroutery-core/src/config/routing.rs": "sha256:63eb968d31d14c48588aa8b3910a6158e72266c0c6200969fdc00018a95b8fdb",
       "crates/zroutery-core/src/config/secrets.rs": "sha256:3fe88ed5037687627a011740b32a743957e87c6bb411dce93450c4b0d120b663",
       "crates/zroutery-core/src/config/server.rs": "sha256:bee183e115f654014ef4c5a5c271d8561b33bda7fd55f88bcac1b37468d0d532",
-      "crates/zroutery-core/src/config/validate.rs": "sha256:09eba8472465f16f3e0e27ba77d0c72d333198430862e359558f41d233e51f2d",
+      "crates/zroutery-core/src/config/validate.rs": "sha256:fb87c665848789aaf71fb6c59b936be0e6759884ab2a42dbece46fb7b0ba6fa9",
       "crates/zroutery-core/src/lib.rs": "sha256:43db8b088b450460ca700734715c019e3f5c1cf5c301a430d0b8b56e088576e0",
       "src-tauri/Cargo.toml": "sha256:c32d57283f5a5ca336ffd02b484b88f162f23eb64e8f035aca87cb6609eaadd8",
       "src-tauri/src/lib.rs": "sha256:aeb0de3c69d5370a39d22177b25b1b91c7f49b2384130de864bd3a67cc20bd43",
@@ -922,11 +923,11 @@
       "src-tauri/src/store.rs": "sha256:690bdbeffb7a1bcd5a802303e404d17cdbb81830d29070f0e6927935e96149ab",
       "ui/src/pages/routing/AutoModeDrawer.tsx": "sha256:69acb89fe3dd5aba9a2459095407875f1964c049996d7339a06ecdcf8567339e"
     },
-    "verified_at": "2026-11-21",
+    "verified_at": "2026-11-22",
     "reviewed_by": "second-reader-glm",
-    "reviewed_at": "2026-11-21",
-    "reviewed_note": "second-reader: re-review after base_depth/models_url tolerance follow-up",
-    "reviewed_sha": "sha256:5240c8891f511071b3b6cf424a090f47731b1d3c44ec2f32f01aca94183daf92",
+    "reviewed_at": "2026-11-22",
+    "reviewed_note": "second-reader: round-4 pass for the validate domain split, token-capture mock fixtures and the i18n placeholder parity gate; citations verified against sources in an independent session",
+    "reviewed_sha": "sha256:768f87285d5596d6226b4e3c91a0d398518d6f94b72156bac81a8a5e76a64fa7",
     "sample": [
       "`crates/zroutery-core/src/config/plugin.rs::CONFIG_SCHEMA_VERSION`",
       "(`crates/zroutery-core/src/config/routing.rs::ClassifierConfig::default`,",
@@ -939,7 +940,7 @@
       "crates/zroutery-core/src/config/registry.rs": "sha256:fd73b31a8523155c88e662d703ad0c06d38e848c508fe6c0fa31245cf6adbeaa",
       "crates/zroutery-core/src/config/secrets.rs": "sha256:3fe88ed5037687627a011740b32a743957e87c6bb411dce93450c4b0d120b663",
       "crates/zroutery-core/src/config/server.rs": "sha256:bee183e115f654014ef4c5a5c271d8561b33bda7fd55f88bcac1b37468d0d532",
-      "crates/zroutery-core/src/config/validate.rs": "sha256:09eba8472465f16f3e0e27ba77d0c72d333198430862e359558f41d233e51f2d",
+      "crates/zroutery-core/src/config/validate.rs": "sha256:fb87c665848789aaf71fb6c59b936be0e6759884ab2a42dbece46fb7b0ba6fa9",
       "crates/zroutery-core/src/error.rs": "sha256:81cc8c251bc9f6cba72b525fd7361979faf4425b0e32c323cee3c0b7da241c7d",
       "crates/zroutery-core/src/ir/headers.rs": "sha256:7bbb26d4fab751463709600a5847201f06d87899629326e2bddcd427f594b937",
       "crates/zroutery-core/src/server/cors.rs": "sha256:26eeaaa8a30636a095384d4a3fbb152a3efd453b2d859231d48030f99c77719c",
@@ -971,8 +972,8 @@
     "verified_at": "2026-11-22",
     "reviewed_by": "second-reader-glm",
     "reviewed_at": "2026-11-22",
-    "reviewed_note": "second-reader: round-3 one-sentence pass for the stored-response error-mapping bullet; citation verified against handlers.rs in an independent session",
-    "reviewed_sha": "sha256:e202ede7c2cdc64c1d4d506c4f96d491067f10bce961b6f42d2fba244739a2ad",
+    "reviewed_note": "second-reader: round-4 pass for the validate domain split, token-capture mock fixtures and the i18n placeholder parity gate; citations verified against sources in an independent session",
+    "reviewed_sha": "sha256:79a326713d35844f250b790436181c7faf00c3f9dd0e3ea596533cf8bbd66cee",
     "sample": [
       "`crates/zroutery-core/src/config/validate.rs::AppConfig::validate`",
       "(`crates/zroutery-core/src/server/cors.rs::cors_layer`).",
@@ -1001,13 +1002,15 @@
       "src-tauri/build.rs": "sha256:d1bdadd21e6e4785d393299b8c848bc1b89986716cc3349a0b53dc6e31e76dc0",
       "src-tauri/capabilities/default.json": "sha256:c9bde894dd6c06cbc9bf98d184061d047f8908df274bc06646116b914d46d165",
       "src-tauri/src/lib.rs": "sha256:aeb0de3c69d5370a39d22177b25b1b91c7f49b2384130de864bd3a67cc20bd43",
-      "src-tauri/src/secrets.rs": "sha256:8231cd072af1f824ed5c6724757ba56b51a6a0801fca6737ed21a69b2fc18a39"
+      "src-tauri/src/secrets.rs": "sha256:8231cd072af1f824ed5c6724757ba56b51a6a0801fca6737ed21a69b2fc18a39",
+      "ui/mock-bridge.ts": "sha256:aeb8ac29f613eacdf4be30b3241aef2bc0131a319d5f6ea256079e5fcfa71da3",
+      "ui/src/i18n.placeholder.test.ts": "sha256:e74b43dd5bfa8eb7f85178f6fe06b5f043747c49adcd9b7cd5e15df9dbaf180c"
     },
-    "verified_at": "2026-11-21",
+    "verified_at": "2026-11-22",
     "reviewed_by": "second-reader-glm",
-    "reviewed_at": "2026-11-21",
-    "reviewed_note": "second-reader: independent session review of plugin feature docs",
-    "reviewed_sha": "sha256:30f911dbb486f842a54a34270dfbbe762674b787e79e98fbdc07323a15b1af79",
+    "reviewed_at": "2026-11-22",
+    "reviewed_note": "second-reader: round-4 pass for the validate domain split, token-capture mock fixtures and the i18n placeholder parity gate; citations verified against sources in an independent session",
+    "reviewed_sha": "sha256:ece93f83ba1c3840a73443e673695dc9c76361cc715f34842ebe38fbd25daf8b",
     "sample": [
       "controls (`crates/zroutery-core/src/ir/mod.rs::ChatRequest`,",
       "`crates/zroutery-core/src/plugin/mod.rs`",
