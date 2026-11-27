@@ -386,6 +386,14 @@ impl PluginManifestV1 {
             {
                 return Err(PluginError::InvalidManifest);
             }
+            if let Some(shaping) = &p.shaping {
+                // The host's published shaping set; v1 carries the OpenCode
+                // CLI profile alone. An unknown name would silently change
+                // nothing upstream, so it is refused at install time.
+                if shaping != "opencode_cli" {
+                    return Err(PluginError::InvalidManifest);
+                }
+            }
             if let Some(profile) = &p.transport_profile {
                 self.require(
                     Capability::TransportProfileUse,

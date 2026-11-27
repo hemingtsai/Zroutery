@@ -109,7 +109,7 @@ pub(crate) fn retry_advice(
             retry_after.unwrap_or_default(),
             true,
         ),
-        Error::Transport { .. } | Error::Timeout(_) => {
+        Error::Transport { .. } | Error::FingerprintTransport { .. } | Error::Timeout(_) => {
             (&TRANSPORT_DELAYS, transport_limit, Duration::ZERO, true)
         }
         _ => return None,

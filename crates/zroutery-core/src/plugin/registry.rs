@@ -47,7 +47,17 @@ pub fn provider(
     let mut provider = ProviderConfig::new(id, name, kind);
     provider.base_url = operation.base_url.clone();
     provider.bypass_proxy = Some(true);
-    provider.client_profile = crate::config::ProviderClientProfile::Native;
+    // A manifest-declared shaping profile replaces the default Native pin:
+    // the core's own shaping layer (session generation, identity headers,
+    // environment-block completion, catalog registration) then applies to
+    // this provider's upstream requests exactly as it does for the native
+    // kinds that select the same profile.
+    #[cfg(feature = "opencode")]
+    if descriptor.shaping.as_deref() == Some("opencode_cli") {
+        provider.client_profile = crate::config::ProviderClientProfile::OpenCodeCli;
+    }
+    #[cfg(not(feature = "opencode"))]
+    let _ = &descriptor.shaping;
     provider.bearer_auth = operation.service_options.bearer_auth;
     provider.quirks.stream_usage = operation.service_options.stream_usage;
     if operation.service.id == "host.protocol.openai_responses" {

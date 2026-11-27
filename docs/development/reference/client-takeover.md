@@ -1,6 +1,6 @@
 # Client Takeover Reference
 
-> Authority: reference · Owner: backend · Last verified: 2026-11-21 · Verified by: `cargo test --workspace --all-features --locked`
+> Authority: reference · Owner: backend · Last verified: 2026-11-27 · Verified by: `cargo test --workspace --all-features --locked`
 
 This page describes how Zroutery takes over an external client's configuration,
 previews the change, and gives it back. It does not claim a production takeover;

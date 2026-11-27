@@ -1,11 +1,9 @@
 //! One streaming call, end to end.
 
 use std::collections::VecDeque;
-use std::pin::Pin;
 use std::time::Duration;
 
-use bytes::Bytes;
-use futures_util::{Stream, StreamExt};
+use futures_util::StreamExt;
 use serde_json::Value;
 
 use super::errors::truncate;
@@ -68,6 +66,15 @@ impl Upstream {
         // happen before any bytes of the answer exist, and a rate limit is a
         // window that reopens. Every replay carries the same fingerprint.
         let mut retries = 0u32;
+        #[cfg(feature = "opencode")]
+        if client.profile == crate::config::ProviderClientProfile::OpenCodeCli {
+            if let Some(session) = client.session.as_deref() {
+                if !crate::opencode::is_session_registered(session) {
+                    self.register_opencode_session(provider, client, session)
+                        .await;
+                }
+            }
+        }
         let response = loop {
             let url = provider.chat_url();
             let request = self
@@ -162,7 +169,7 @@ impl Upstream {
         let native_anthropic =
             provider.dialect() == crate::ir::Dialect::Anthropic && client.native_anthropic;
         let state = StreamState {
-            body: Box::pin(response.bytes_stream()),
+            body: response.bytes_stream(),
             decoder: SseDecoder::new(),
             parser: if native_anthropic {
                 Box::new(protocol::anthropic::AnthropicStreamParser::native(
@@ -254,7 +261,7 @@ impl Upstream {
                         Ok(Some(Err(source))) => {
                             state.done = true;
                             let provider = state.provider.clone();
-                            return Some((Err(Error::Transport { provider, source }), state));
+                            return Some((Err(source.into_upstream(&provider)), state));
                         }
                         Ok(Some(Ok(chunk))) => {
                             if let Some(body) = state.error_body.as_mut() {
@@ -465,7 +472,7 @@ impl Upstream {
 }
 
 struct StreamState {
-    body: Pin<Box<dyn Stream<Item = reqwest::Result<Bytes>> + Send>>,
+    body: super::response::BodyStream,
     decoder: SseDecoder,
     parser: Box<dyn StreamParser>,
     pending: VecDeque<StreamEvent>,

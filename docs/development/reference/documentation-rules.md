@@ -1,6 +1,6 @@
 # Documentation Rules Reference
 
-> Authority: reference · Owner: docs · Last verified: 2026-11-21 · Verified by: `python3 -B scripts/docs_rules.py`
+> Authority: reference · Owner: docs · Last verified: 2026-11-27 · Verified by: `python3 -B scripts/docs_rules.py`
 
 This page registers every documentation rule and the check that enforces it.
 `docs/rules.json` is the machine source; `scripts/docs_rules.py` checks that the

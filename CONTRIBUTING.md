@@ -1,6 +1,6 @@
 # Contributing
 
-> Authority: guide · Owner: docs · Last verified: 2026-11-21 · Verified by: `scripts/commit_contract_test.py --self-test`
+> Authority: guide · Owner: docs · Last verified: 2026-11-27 · Verified by: `scripts/commit_contract_test.py --self-test`
 
 Human onboarding. The rules live in [AGENTS.md](AGENTS.md),
 [verification.md](docs/development/verification.md) and [WORKFLOW.md](docs/development/WORKFLOW.md).

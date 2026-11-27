@@ -73,6 +73,23 @@ pub trait PluginPort: Send + Sync {
         scope: PluginSendScope<'_>,
         send: &mut dyn FnMut() -> Poll<Result<reqwest::Response>>,
     ) -> Poll<Result<reqwest::Response>>;
+    /// The same send/revoke boundary for the fingerprint transport.
+    ///
+    /// The request is the one the OpenCode free tier admits (BoringSSL
+    /// ClientHello), which `reqwest` cannot produce. A composition layer that
+    /// does not carry that transport keeps the default: no send is attempted,
+    /// so an absent capability cannot become an unauthorized request.
+    #[cfg(all(feature = "opencode", any(target_os = "windows", target_os = "macos")))]
+    fn poll_send_fingerprint(
+        &self,
+        scope: PluginSendScope<'_>,
+        send: &mut dyn FnMut() -> Poll<Result<wreq::Response>>,
+    ) -> Poll<Result<wreq::Response>> {
+        let _ = (scope, send);
+        Poll::Ready(Err(Error::NoCandidate(
+            "plugin fingerprint transport unavailable".into(),
+        )))
+    }
     fn synthesize(&self, _config: &crate::config::AppConfig) -> Vec<crate::config::ProviderConfig> {
         Vec::new()
     }
@@ -214,6 +231,23 @@ impl PluginBinding {
         send: &mut dyn FnMut() -> Poll<Result<reqwest::Response>>,
     ) -> Poll<Result<reqwest::Response>> {
         self.port.poll_send(
+            PluginSendScope {
+                binding: self,
+                operation,
+                origin,
+            },
+            send,
+        )
+    }
+    /// The send/revoke boundary for the fingerprint transport.
+    #[cfg(all(feature = "opencode", any(target_os = "windows", target_os = "macos")))]
+    pub fn poll_send_fingerprint(
+        &self,
+        operation: &HostOperationBinding,
+        origin: &str,
+        send: &mut dyn FnMut() -> Poll<Result<wreq::Response>>,
+    ) -> Poll<Result<wreq::Response>> {
+        self.port.poll_send_fingerprint(
             PluginSendScope {
                 binding: self,
                 operation,

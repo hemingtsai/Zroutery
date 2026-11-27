@@ -146,6 +146,11 @@ keyring = { version = "3.6.3", features = ["windows-native"] }
 # webview (and its locale machinery) exists.
 windows-sys = { version = "0.60", features = ["Win32_Globalization", "Win32_Graphics_Dwm"] }
 
+# The OpenCode fingerprint transport lives in core (Windows and macOS only);
+# the broker's send boundary names the response type it polls.
+[target.'cfg(any(target_os = "windows", target_os = "macos"))'.dependencies]
+wreq = { version = "=0.15.3", default-features = true, features = ["json", "stream"] }
+
 [target.'cfg(target_os = "linux")'.dependencies]
 keyring = { version = "3.6.3", features = ["sync-secret-service"] }
 

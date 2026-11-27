@@ -1,6 +1,6 @@
 # Routing and Policy Reference
 
-> Authority: reference · Owner: backend · Last verified: 2026-11-21 · Verified by: `cargo test --workspace --all-features --locked`
+> Authority: reference · Owner: backend · Last verified: 2026-11-27 · Verified by: `cargo test --workspace --all-features --locked`
 
 This page describes how a requested model becomes an ordered candidate plan:
 resolution, policy, eligibility, the strategy and the circuit breaker. It does

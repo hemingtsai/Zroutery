@@ -79,6 +79,16 @@ pub enum Error {
         source: reqwest::Error,
     },
 
+    /// The fingerprint transport failed below the HTTP message.
+    ///
+    /// The OpenCode free tier is served over a second TLS stack (`wreq`,
+    /// Windows and macOS only); its errors are not `reqwest::Error`s, and
+    /// pretending they were would mean inventing one. Every classifier that
+    /// treats [`Error::Transport`] as a network failure treats this alike; the
+    /// message is provider-scrubbed at construction, never the request URL.
+    #[error("cannot reach upstream {provider}")]
+    FingerprintTransport { provider: String, message: String },
+
     #[error("upstream returned malformed data: {0}")]
     BadUpstreamPayload(String),
 
@@ -190,7 +200,7 @@ impl Error {
                     StatusCode::from_u16(*status).unwrap_or(StatusCode::BAD_GATEWAY)
                 }
             }
-            Error::Transport { .. } => StatusCode::BAD_GATEWAY,
+            Error::Transport { .. } | Error::FingerprintTransport { .. } => StatusCode::BAD_GATEWAY,
             // The client already holds part of the answer; what failed is the
             // upstream's stream, so this is a bad gateway rather than a 5xx
             // the client could retry into a fresh answer.
@@ -227,6 +237,7 @@ impl Error {
                 _ => "api_error",
             },
             Error::Transport { .. }
+            | Error::FingerprintTransport { .. }
             | Error::BadUpstreamPayload(_)
             | Error::InterruptedStream { .. } => "api_error",
             Error::Timeout(_) => "timeout_error",

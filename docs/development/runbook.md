@@ -1,6 +1,6 @@
 # Runbook
 
-> Authority: guide · Owner: docs · Last verified: 2026-11-21 · Verified by: `scripts/docs_check.py`
+> Authority: guide · Owner: docs · Last verified: 2026-11-27 · Verified by: `scripts/docs_check.py`
 
 How to run, release and recover Zroutery. Rules live in
 [verification.md](verification.md); this page is the operator's short path.

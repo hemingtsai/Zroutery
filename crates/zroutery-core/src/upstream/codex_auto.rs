@@ -44,10 +44,7 @@ impl Upstream {
             .await
             .map_err(|_| Error::Timeout(idle.as_secs()))?
         {
-            let chunk = chunk.map_err(|source| Error::Transport {
-                provider: provider.name.clone(),
-                source,
-            })?;
+            let chunk = chunk.map_err(|source| source.into_upstream(&provider.name))?;
             if bytes.len() + chunk.len() > BUFFER_LIMIT {
                 return Err(Error::BadUpstreamPayload(
                     "response_too_large: compact response exceeds 64 MiB".into(),
@@ -107,10 +104,7 @@ impl Upstream {
                 .await
                 .map_err(|_| Error::Timeout(idle.as_secs()))?;
             let Some(chunk) = chunk else { break };
-            let chunk = chunk.map_err(|source| Error::Transport {
-                provider: provider.name.clone(),
-                source,
-            })?;
+            let chunk = chunk.map_err(|source| source.into_upstream(&provider.name))?;
             size += chunk.len();
             if size > BUFFER_LIMIT {
                 return Err(Error::BadUpstreamPayload(

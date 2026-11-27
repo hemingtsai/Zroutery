@@ -86,3 +86,27 @@ fn the_workbuddy_relay_package_decodes_with_provider_and_ui() {
     let packed = Package::from_archive(&bytes).expect("the packed archive must decode");
     assert_eq!(packed.digest, package.digest);
 }
+
+#[test]
+fn the_opencode_zen_package_declares_shaping_and_an_anonymous_provider() {
+    let package = package_from("opencode-zen", &["zroutery.plugin.json", "ui.mjs"]);
+    assert_eq!(package.manifest.id, "dev.zroutery.opencode-zen");
+    let providers = &package.manifest.contributions.providers;
+    assert_eq!(providers.len(), 1);
+    let zen = &providers[0];
+    assert_eq!(zen.id, "zen");
+    // Chat + catalog: the catalog operation is what registers each session.
+    assert_eq!(zen.operations.len(), 2);
+    assert_eq!(zen.operations[0].base_url, "https://opencode.ai/zen/v1");
+    assert_eq!(
+        zen.operations[1].service.id, "host.catalog.openai",
+        "the catalog operation is the session registration vehicle"
+    );
+    // Anonymous: no credential slots at all.
+    assert!(zen.credentials.is_empty());
+    assert!(zen.operations.iter().all(|o| o.credential_slots.is_empty()));
+    // The opencode_cli shaping profile drives sessions, identity and the env block.
+    assert_eq!(zen.shaping.as_deref(), Some("opencode_cli"));
+    assert!(zen.extra_headers.contains_key("accept"));
+    assert!(!zen.extra_headers.contains_key("authorization"));
+}

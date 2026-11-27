@@ -1006,7 +1006,7 @@ BASE_CONFIG = {
             "base_url": "https://api.deepseek.com/v1",
             "key_ref": "provider:deepseek",
             "extra_headers": {},
-            "impersonate_claude_code": False,
+            "client_profile": "auto",
             "bearer_auth": False,
             "enabled": True,
             "timeout_secs": 600,
@@ -1030,7 +1030,7 @@ BASE_CONFIG = {
             "base_url": "https://api.anthropic.com",
             "key_ref": "provider:anthropic",
             "extra_headers": {},
-            "impersonate_claude_code": True,
+            "client_profile": "claude_code",
             "bearer_auth": False,
             "enabled": True,
             "timeout_secs": 600,
@@ -1224,6 +1224,14 @@ ML_QUERY = {"status": ml_status(), "traces": ML_TRACES, "round": ML_ROUND}
 
 def open_page(devtools: DevTools, page: str) -> None:
     """Open an addressable area through its current six-door task shell."""
+    # The six sidebar doors keep the old stable route names as addressable
+    # sub-areas; a sub-area opens through its door first, then through its
+    # tab. Mirrors ui/src/navigation.ts::taskFor.
+    TASK_DOORS = {
+        "accounts": "providers",
+        "routing": "models",
+        "cutover": "takeover",
+    }
     door = TASK_DOORS.get(page, page)
     door_selector = '[data-page="%s"]' % door
     devtools.click_selector(door_selector)

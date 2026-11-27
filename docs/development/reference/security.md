@@ -1,6 +1,6 @@
 # Security Reference
 
-> Authority: reference · Owner: backend · Last verified: 2026-11-22 · Verified by: `cargo test --workspace --all-features --locked`
+> Authority: reference · Owner: backend · Last verified: 2026-11-27 · Verified by: `cargo test --workspace --all-features --locked`
 
 This page describes the local trust boundary: who may call the gateway, where
 secrets live, what the desktop exposes to the webview, and what is deliberately
@@ -75,6 +75,12 @@ That is the model; hiding the token from the same user is not a goal.
 - The dashboard can re-run the startup plugin wiring without restarting the
   app: worker discovery, a fresh sandbox attestation and the ledger sweep
   (`src-tauri/src/plugins/commands.rs::reload_plugins`).
+- A plugin provider may select the host's OpenCode shaping profile; the profile
+  generates a canonical per-conversation session, registers it through the
+  ungated models catalog before the first chat call, and completes the system
+  prompt with the environment block — the session and prompt checks the free tier validates
+  (`crates/zroutery-core/src/upstream/mod.rs::register_opencode_session`,
+  `crates/zroutery-core/src/opencode/mod.rs::ensure_environment_block`).
 
 ## Webview surface
 

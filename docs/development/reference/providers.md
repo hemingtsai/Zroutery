@@ -1,6 +1,6 @@
 # Provider Surfaces Reference
 
-> Authority: reference · Owner: backend · Last verified: 2026-11-21 · Verified by: `cargo test --workspace --all-features --locked`
+> Authority: reference · Owner: backend · Last verified: 2026-11-27 · Verified by: `cargo test --workspace --all-features --locked`
 
 This page covers the provider kinds that are not the plain Anthropic/OpenAI
 upstream: NewAPI account panels, OpenCode Zen, and the CC Switch import. It does
@@ -164,6 +164,16 @@ upstream with the relay's own version segment, and the host keeps it:
 whose final segment is `v<digits>` and never grow a second one
 (`crates/zroutery-core/src/config/registry.rs::versioned_suffix`,
 `crates/zroutery-core/src/plugin/bindings.rs::PluginBinding::operation_for_url`).
+
+A manifest may also select the host's shaping profile for the provider
+(`shaping: "opencode_cli"`): the core then applies the OpenCode CLI identity to
+every upstream request — per-conversation canonical session generation and
+injection, the profile's identity headers, environment-block completion in the
+system prompt, and pre-use catalog registration. The free tier rejects unknown
+sessions and stale client versions with a quota-flavored 429, which is why the
+registration and the version-fresh identity matter
+(`crates/zroutery-core/src/opencode/mod.rs::environment_block`,
+`crates/zroutery-core/src/upstream/mod.rs::register_opencode_session`).
 
 The manifest may carry static identity headers for the provider
 (`ProviderDescriptor.extra_headers`, names from the same closed allowlist the

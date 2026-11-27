@@ -23,6 +23,18 @@ tracing = { workspace = true }
 uuid = { workspace = true }
 zroutery-plugin-api = { path = "../zroutery-plugin-api", optional = true }
 
+# The Zen free tier admits one TLS ClientHello: the BoringSSL shape its own
+# runtime presents. `reqwest`/`native-tls` cannot produce it, and rustls with
+# matched suites and groups is still refused (both measured 2026-11-27), so the
+# shaped providers get a second client instead. Only these targets can link a
+# BoringSSL copy without colliding with the system TLS library: Windows
+# (Schannel) and macOS (Security) use no OpenSSL, while Linux's `native-tls`
+# is OpenSSL and shares `SSL_*` symbols with BoringSSL. On Linux the provider
+# reports the transport as unavailable instead of sending a request the
+# gateway is known to refuse.
+[target.'cfg(any(target_os = "windows", target_os = "macos"))'.dependencies]
+wreq = { version = "=0.15.3", default-features = true, features = ["json", "stream"] }
+
 [dev-dependencies]
 tempfile = "3"
 tokio = { workspace = true, features = ["rt-multi-thread", "macros", "sync", "time", "net", "signal", "test-util"] }

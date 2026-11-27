@@ -1,6 +1,6 @@
 # Configuration Reference
 
-> Authority: reference · Owner: backend · Last verified: 2026-11-22 · Verified by: `cargo test --workspace --all-features --locked`
+> Authority: reference · Owner: backend · Last verified: 2026-11-27 · Verified by: `cargo test --workspace --all-features --locked`
 
 This page describes the configuration document: defaults, validation,
 normalisation, persistence and the secret boundary. It is not a settings guide;
@@ -118,7 +118,10 @@ provider key. `SecretStore` is the credential boundary
 - `zroutery-core` ships no default feature (`crates/zroutery-core/Cargo.toml::default`).
 - The Rust dependencies compiled for Core and the desktop shell are pinned in
   `crates/zroutery-core/Cargo.toml::dependencies` and
-  `src-tauri/Cargo.toml::dependencies`.
+  `src-tauri/Cargo.toml::dependencies`. Core's `wreq` dependency and the
+  desktop's mirror of it are target-gated to Windows and macOS: the OpenCode
+  fingerprint transport needs a second TLS stack, and Linux's `native-tls`
+  OpenSSL cannot share a process with it.
 - The desktop crate enables `ml`, `account`, `newapi`, `account-maint`,
   `opencode` and `plugin` by default (`src-tauri/Cargo.toml::default`).
 - A capability compiled by a feature is inert until configured. A capability the

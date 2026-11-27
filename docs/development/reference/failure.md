@@ -1,6 +1,6 @@
 # Failure Reference
 
-> Authority: reference · Owner: backend · Last verified: 2026-11-21 · Verified by: `cargo test --workspace --all-features --locked`
+> Authority: reference · Owner: backend · Last verified: 2026-11-27 · Verified by: `cargo test --workspace --all-features --locked`
 
 This page describes how an error becomes a classification, a retry decision and
 a terminal state. It does not describe accounting; a failed attempt's known cost
@@ -26,6 +26,14 @@ The error's `classified` method is the single mapping from an error to a
   may still inspect status or body to pick the delay class or admit the
   history-resource 400
   (`crates/zroutery-core/src/upstream/errors.rs::retry_advice`).
+- A new OpenCode gateway session registers through the ungated models
+  catalog before its first chat call; a registration failure is logged and
+  left unregistered, so the next call retries it rather than surfacing a
+  quota-flavored rejection to the client
+  (`crates/zroutery-core/src/upstream/mod.rs::register_opencode_session`).
+  The registration is best-effort: a failure is logged, the session stays
+  unregistered, and the next call retries rather than surfacing the gateway's
+  quota-flavored rejection to the client.
 
 ## Retry and failover
 

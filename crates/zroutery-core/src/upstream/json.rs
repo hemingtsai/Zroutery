@@ -36,10 +36,7 @@ impl Upstream {
             tokio::time::timeout(Duration::from_secs(provider.timeout_secs), response.text())
                 .await
                 .map_err(|_| Error::Timeout(provider.timeout_secs))?
-                .map_err(|source| Error::Transport {
-                    provider: provider.name.clone(),
-                    source,
-                })?;
+                .map_err(|source| source.into_upstream(&provider.name))?;
         if !status.is_success() {
             return Err(Error::Upstream {
                 provider: provider.name.clone(),
@@ -141,10 +138,7 @@ impl Upstream {
         let text = tokio::time::timeout(Duration::from_secs(timeout_secs), response.text())
             .await
             .map_err(|_| Error::Timeout(timeout_secs))?
-            .map_err(|source| Error::Transport {
-                provider: provider.name.clone(),
-                source,
-            })?;
+            .map_err(|source| source.into_upstream(&provider.name))?;
         if !status.is_success() {
             return Err(Error::Upstream {
                 provider: provider.name.clone(),

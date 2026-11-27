@@ -846,7 +846,7 @@ impl ClassifiedFailure {
                 FailureClass::from_status_with_body(*status, body),
                 Some(*status),
             ),
-            crate::Error::Transport { .. } => {
+            crate::Error::Transport { .. } | crate::Error::FingerprintTransport { .. } => {
                 (FailureClass::Transport, Some(error.status().as_u16()))
             }
             crate::Error::BadUpstreamPayload(message) => {

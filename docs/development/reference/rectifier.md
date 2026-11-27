@@ -1,6 +1,6 @@
 # Rectifier Reference
 
-> Authority: reference · Owner: backend · Last verified: 2026-11-21 · Verified by: `cargo test --workspace --all-features --locked`
+> Authority: reference · Owner: backend · Last verified: 2026-11-27 · Verified by: `cargo test --workspace --all-features --locked`
 
 A rectifier repairs a request the upstream refused, before the gateway gives up
 on that provider. It is not a retry of the same bytes: it changes the request
@@ -42,6 +42,16 @@ shape, then sends again.
   other beta values; the gateway then supplies real review results
   (`crates/zroutery-core/src/server/pipeline/safeguards/mod.rs::recover_rejected_review`,
   `crates/zroutery-core/src/upstream/headers.rs::is_server_review_beta`).
+- The OpenCode shaping profile's client UA and request id are fabricated by the
+  host, never forwarded from the inbound client; the UA version must track
+  OpenCode's own updater, since the free tier rejects stale versions with a
+  quota-flavored 429
+  (`crates/zroutery-core/src/upstream/headers.rs::OPENCODE_USER_AGENT`). The
+  session id is the one exception: an inbound id that already has the canonical
+  shape is forwarded verbatim for its upstream prompt-cache affinity, and only
+  a foreign conversation signal is derived into a fresh session
+  (`crates/zroutery-core/src/server/pipeline/client.rs::client_for`,
+  `crates/zroutery-core/src/opencode/mod.rs::session_from_signal`).
 
 ## The repairs
 

@@ -96,7 +96,49 @@ pub fn encode_for_mode(
             && provider.dialect() == crate::ir::Dialect::Anthropic
             && req.anthropic_body.is_some())
     {
-        crate::opencode::shape_v2_body(&mut body);
+        crate::opencode::shape_v2_body(&mut body, !req.tools.is_empty());
+        crate::opencode::ensure_environment_block(&mut body);
+        // Metadata only: the shaped body's own content never reaches a log.
+        // It answers "did the shape the gateway fingerprints actually arrive"
+        // without persisting a prompt.
+        let keys = body
+            .as_object()
+            .map(|object| object.keys().cloned().collect::<Vec<_>>());
+        let messages = body
+            .get("messages")
+            .and_then(Value::as_array)
+            .map(|messages| {
+                messages
+                    .iter()
+                    .map(|message| {
+                        (
+                            message
+                                .get("role")
+                                .and_then(Value::as_str)
+                                .map(str::to_string),
+                            message.get("content").and_then(Value::as_str).map(str::len),
+                        )
+                    })
+                    .collect::<Vec<_>>()
+            });
+        let tools = body.get("tools").and_then(Value::as_array).map(|tools| {
+            tools
+                .iter()
+                .filter_map(|tool| tool.pointer("/function/name").and_then(Value::as_str))
+                .collect::<Vec<_>>()
+        });
+        let max_tokens = body.get("max_tokens").cloned();
+        let stream = body.get("stream").cloned();
+        let tool_choice = body.get("tool_choice").cloned();
+        tracing::debug!(
+            ?keys,
+            ?messages,
+            ?tools,
+            ?max_tokens,
+            ?stream,
+            ?tool_choice,
+            "shaped OpenCode request body"
+        );
     }
 
     Ok(body)

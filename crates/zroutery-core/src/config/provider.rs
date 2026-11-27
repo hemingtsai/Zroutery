@@ -331,9 +331,13 @@ impl ProviderClientProfile {
             // caller's own identity travels under [`AUTO_IDENTITY_HEADERS`]
             // instead, which is a different question from a profile's allowlist.
             Self::Auto | Self::Native => &[],
-            // The OpenCode identity is fabricated by the profile arm; its session
-            // header is owned there too, never forwarded verbatim (a non-canonical
-            // client value would be refused upstream with 403).
+            // The OpenCode identity is fabricated by the profile arm; the
+            // profile forwards none of the client's own headers. The session
+            // is not part of this allowlist because it is not a passthrough:
+            // the pipeline resolves it — a canonical inbound id is kept
+            // verbatim for its upstream prompt-cache affinity, a foreign
+            // conversation signal is derived into a fresh one
+            // (`crate::server::pipeline::client.rs::client_for`).
             Self::OpenCodeCli => &[],
             Self::Codex => &[
                 "originator",

@@ -1,6 +1,6 @@
 # IPC Reference
 
-> Authority: reference · Owner: frontend · Last verified: 2026-11-22 · Verified by: `scripts/command_surface_test.py`
+> Authority: reference · Owner: frontend · Last verified: 2026-11-27 · Verified by: `scripts/command_surface_test.py`
 
 The webview talks to Rust through Tauri commands. This page describes that
 boundary; it does not list every command signature, because the contract is the

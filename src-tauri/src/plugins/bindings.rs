@@ -142,6 +142,37 @@ impl PluginPort for HostBindings {
             Err(_) => Poll::Ready(Err(denied())),
         }
     }
+    #[cfg(all(feature = "opencode", any(target_os = "windows", target_os = "macos")))]
+    fn poll_send_fingerprint(
+        &self,
+        scope: PluginSendScope<'_>,
+        send: &mut dyn FnMut() -> Poll<Result<wreq::Response>>,
+    ) -> Poll<Result<wreq::Response>> {
+        if self
+            .plugins
+            .safe_mode
+            .load(std::sync::atomic::Ordering::Acquire)
+        {
+            return Poll::Ready(Err(denied()));
+        }
+        let Ok(manager) = self.plugins.manager.as_ref() else {
+            return Poll::Ready(Err(denied()));
+        };
+        let Ok(operation_scope) = Self::operation_scope(scope.binding, scope.operation) else {
+            return Poll::Ready(Err(denied()));
+        };
+        let binding = self.host_binding(scope.binding, None);
+        match manager.authority.with_authorized(
+            &binding,
+            Principal::HostBinding,
+            Capability::HostOperationBind,
+            operation_scope,
+            || Ok(send()),
+        ) {
+            Ok(result) => result,
+            Err(_) => Poll::Ready(Err(denied())),
+        }
+    }
     fn synthesize(&self, config: &AppConfig) -> Vec<ProviderConfig> {
         if self
             .plugins

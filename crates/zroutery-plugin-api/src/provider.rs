@@ -88,6 +88,15 @@ pub struct ProviderDescriptor {
     /// use, so auth/framing names can never travel through it.
     #[serde(default)]
     pub extra_headers: std::collections::BTreeMap<String, String>,
+    /// The host shaping profile applied to this provider's upstream requests:
+    /// per-conversation session generation and injection, the profile's
+    /// identity headers, environment-block completion, and pre-use catalog
+    /// registration. Values come from the host's published set — v1 carries
+    /// `"opencode_cli"` alone; anything else fails validation. A provider
+    /// that selects a shaping keeps its `extra_headers`, which sit UNDER the
+    /// profile's own fingerprint in the header precedence.
+    #[serde(default)]
+    pub shaping: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

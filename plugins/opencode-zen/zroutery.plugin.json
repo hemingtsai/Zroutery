@@ -1,0 +1,86 @@
+{
+  "manifest_version": 1,
+  "id": "dev.zroutery.opencode-zen",
+  "version": "0.1.0",
+  "name": {
+    "en": "OpenCode Zen (free)",
+    "zh-CN": "OpenCode Zen（免费层）",
+    "zh-TW": "OpenCode Zen（免費層）"
+  },
+  "host_api": { "major": 1, "min_minor": 0 },
+  "runtime": { "engine": "quickjs", "entries": { "ui": "ui.mjs" } },
+  "requires": [
+    { "service": "host.protocol.openai_chat", "api": { "major": 1, "min_minor": 0 } },
+    { "service": "host.catalog.openai", "api": { "major": 1, "min_minor": 0 } }
+  ],
+  "permissions": [
+    {
+      "capability": "provider.register",
+      "principal": "host_binding",
+      "contributions": ["zen"],
+      "reason": {
+        "en": "Register the OpenCode Zen free-tier provider",
+        "zh-CN": "注册 OpenCode Zen 免费层提供方",
+        "zh-TW": "註冊 OpenCode Zen 免費層提供方"
+      }
+    },
+    {
+      "capability": "host.operation.bind",
+      "principal": "host_binding",
+      "contributions": ["zen"],
+      "operations": ["chat", "models"],
+      "origins": ["https://opencode.ai"],
+      "reason": {
+        "en": "Reach the Zen chat endpoint and register sessions via the model catalog",
+        "zh-CN": "访问 Zen 对话端点并经模型目录登记会话",
+        "zh-TW": "存取 Zen 對話端點並經模型目錄登記會話"
+      }
+    },
+    {
+      "capability": "ui.contribute",
+      "principal": "ui",
+      "contributions": ["status"],
+      "reason": {
+        "en": "Show the Zen free-tier status card on the settings page",
+        "zh-CN": "在设置页显示 Zen 免费层状态卡片",
+        "zh-TW": "在設定頁顯示 Zen 免費層狀態卡片"
+      }
+    }
+  ],
+  "contributions": {
+    "providers": [
+      {
+        "id": "zen",
+        "name": { "en": "OpenCode Zen", "zh-CN": "OpenCode Zen", "zh-TW": "OpenCode Zen" },
+        "operations": [
+          {
+            "id": "chat",
+            "service": { "id": "host.protocol.openai_chat", "api": { "major": 1, "min_minor": 0 } },
+            "base_url": "https://opencode.ai/zen/v1",
+            "credential_slots": []
+          },
+          {
+            "id": "models",
+            "service": { "id": "host.catalog.openai", "api": { "major": 1, "min_minor": 0 } },
+            "base_url": "https://opencode.ai/zen/v1",
+            "credential_slots": []
+          }
+        ],
+        "credentials": [],
+        "shaping": "opencode_cli",
+        "extra_headers": {
+          "accept": "*/*",
+          "accept-encoding": "gzip, deflate, br, zstd"
+        }
+      }
+    ],
+    "ui": [
+      {
+        "id": "status",
+        "slot": "settings.extension",
+        "title": { "en": "OpenCode Zen (free)", "zh-CN": "OpenCode Zen（免费层）", "zh-TW": "OpenCode Zen（免費層）" },
+        "render_hook": "card"
+      }
+    ]
+  }
+}

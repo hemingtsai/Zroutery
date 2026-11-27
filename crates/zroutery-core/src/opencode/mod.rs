@@ -85,6 +85,114 @@ pub fn request_id() -> String {
     format!("{REQUEST_PREFIX}{}", identifier(false))
 }
 
+/// Session ids this process has already registered with the OpenCode gateway
+/// (`GET …/models` carrying the session header registers it). The gateway
+/// rejects chat calls from a session it has never seen with a quota-flavored
+/// 429 (field-verified 2026-11-21), so a fresh session registers before its
+/// first chat call. Bounded: 256 sessions cover any realistic window, and a
+/// clear forgets registrations whose re-registration costs one ungated GET.
+static REGISTERED_SESSIONS: std::sync::LazyLock<
+    std::sync::Mutex<std::collections::HashSet<String>>,
+> = std::sync::LazyLock::new(|| std::sync::Mutex::new(std::collections::HashSet::new()));
+
+pub fn is_session_registered(session: &str) -> bool {
+    REGISTERED_SESSIONS
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .contains(session)
+}
+
+pub fn mark_session_registered(session: &str) {
+    let mut set = REGISTERED_SESSIONS
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    if set.len() >= 256 {
+        set.clear();
+    }
+    set.insert(session.to_string());
+}
+
+/// The environment block OpenCode's own system prompt carries (`<env>` with a
+/// `Working directory:` line), said for `dir` — the home folder when empty.
+/// The gateway's free tier serves a request as OpenCode's own only when a
+/// system message carries one; without it a request gets a small allowance a
+/// day, then a quota-flavored 429 (field-verified 2026-11-21; matches OpenCode
+/// 2.2.5's `packages/core/src/instructions/builtins.ts` word for word).
+pub fn environment_block() -> String {
+    let home = std::env::var("USERPROFILE")
+        .or_else(|_| std::env::var("HOME"))
+        .unwrap_or_else(|_| "unknown".into());
+    let platform = std::env::consts::OS;
+    let date = chrono::Utc::now().format("%a %b %d %Y");
+    format!(
+        "Here is some useful information about the environment you are running in:\n\
+         <env>\n  \
+         Working directory: {home}\n  \
+         Workspace root folder: {home}\n  \
+         Is directory a git repo: no\n  \
+         Platform: {platform}\n  \
+         Today's date: {date}\n\
+         </env>"
+    )
+}
+
+/// Whether the chat body already carries the environment block in a system or
+/// developer message (OpenCode's own client does; other harnesses need it
+/// injected). Text may be a plain string or an array of content parts.
+pub fn has_environment_block(body: &Value) -> bool {
+    fn carries_environment(content: &Value) -> bool {
+        match content {
+            Value::String(text) => text.contains("<env>") && text.contains("Working directory:"),
+            Value::Array(parts) => parts.iter().any(|part| {
+                part.get("text")
+                    .and_then(Value::as_str)
+                    .is_some_and(|text| text.contains("<env>"))
+            }),
+            _ => false,
+        }
+    }
+    body.pointer("/messages")
+        .and_then(Value::as_array)
+        .map(|messages| {
+            messages.iter().any(|message| {
+                matches!(
+                    message.get("role").and_then(Value::as_str),
+                    Some("system") | Some("developer")
+                ) && message.get("content").is_some_and(carries_environment)
+            })
+        })
+        .unwrap_or(false)
+}
+
+/// Completes the system prompt with the environment block when it is missing:
+/// a fresh leading system message is prepended, mirroring OpenCode's own
+/// client — existing messages are never rewritten, so content-part arrays
+/// survive untouched. The free tier answers a request without the block with
+/// its small anonymous allowance and then a quota-flavored 429. Responses-
+/// surface bodies carry it in `instructions` instead, appended when missing.
+pub fn ensure_environment_block(body: &mut Value) {
+    if has_environment_block(body) {
+        return;
+    }
+    let Some(object) = body.as_object_mut() else {
+        return;
+    };
+    let block = environment_block();
+    match object.get_mut("messages") {
+        Some(Value::Array(messages)) => {
+            messages.insert(0, serde_json::json!({"role": "system", "content": block}));
+        }
+        _ => {
+            let existing = object
+                .get("instructions")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .to_string();
+            object["instructions"] = Value::String(format!("{existing}\n\n{block}"));
+        }
+    }
+}
+
 /// Whether `value` already carries the canonical session shape the gateway
 /// demands: `ses_` + 12 lowercase hex + 14 base62 (30 characters total).
 pub fn is_canonical_session(value: &str) -> bool {
@@ -99,13 +207,15 @@ pub fn is_canonical_session(value: &str) -> bool {
         && tail.bytes().all(|b| BASE62.contains(&b))
 }
 
-/// Canonicalise an arbitrary conversation signal into a `ses_` id.
+/// Shape-canonicalise an arbitrary signal into a `ses_` id.
 ///
-/// Idempotent: an already-canonical id is returned unchanged, so a real OpenCode
-/// client's session — and the upstream prompt-cache affinity it carries — is
-/// preserved. Anything else (a UUID, a foreign session, Zroutery's own
-/// conversation id) is deterministically hashed into the canonical shape, so the
-/// same conversation always maps to the same session.
+/// The 12-hex prefix here is a hash, **not** a timestamp. The gateway parses
+/// that prefix as one and refuses a session whose embedded time is implausible
+/// (field-verified 2026-11-27: a hashed prefix decoding to 1970 was answered
+/// with the quota-flavored 429 while a real-timestamp id with the same request
+/// was served). [`session_from_signal`] therefore never sends this form
+/// upstream; it remains the pure shape helper for callers that need a
+/// deterministic, shape-valid id.
 pub fn canonical_session(signal: &str) -> String {
     if is_canonical_session(signal) {
         return signal.to_string();
@@ -138,23 +248,44 @@ fn derive_bytes(signal: &str) -> [u8; 24] {
     out
 }
 
+/// Session ids already handed to one conversation, keyed by the conversation
+/// seed. The gateway parses the id's 12-hex prefix as a timestamp and refuses
+/// an implausible one (see [`canonical_session`]), so a seed cannot be hashed
+/// into the id directly. The first request of a conversation instead gets a
+/// fresh [`session_id`] — a real timestamp — and later requests reuse it for
+/// upstream prompt-cache affinity. Bounded like [`REGISTERED_SESSIONS`]; a
+/// clear costs one new session and one re-registration.
+static SESSIONS_BY_SEED: std::sync::LazyLock<std::sync::Mutex<HashMap<String, String>>> =
+    std::sync::LazyLock::new(|| std::sync::Mutex::new(HashMap::new()));
+
 /// The session for one request, in priority order:
 ///
 /// 1. an inbound `x-opencode-session` that is already canonical — its upstream
 ///    prompt-cache affinity belongs to the client;
-/// 2. `seed`, a conversation signal (a foreign session, Zroutery's own
-///    conversation id, the first user message), deterministically canonicalised;
-/// 3. a fresh random session when neither is available.
+/// 2. the session already created for `seed`, a conversation signal (a foreign
+///    session, Zroutery's own conversation id, the first user message);
+/// 3. a fresh [`session_id`] for an unseen seed, remembered for (2).
 pub fn session_from_signal(inbound: Option<&str>, seed: Option<&str>) -> String {
     if let Some(value) = inbound.map(str::trim).filter(|s| !s.is_empty()) {
         if is_canonical_session(value) {
             return value.to_string();
         }
     }
-    match seed.map(str::trim).filter(|s| !s.is_empty()) {
-        Some(seed) => canonical_session(seed),
-        None => session_id(),
+    let Some(seed) = seed.map(str::trim).filter(|s| !s.is_empty()) else {
+        return session_id();
+    };
+    let mut sessions = SESSIONS_BY_SEED
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    if let Some(existing) = sessions.get(seed) {
+        return existing.clone();
     }
+    let id = session_id();
+    if sessions.len() >= 256 {
+        sessions.clear();
+    }
+    sessions.insert(seed.to_string(), id.clone());
+    id
 }
 
 /// Drop a tool call to a placeholder we injected only to satisfy the gate, when
@@ -198,10 +329,21 @@ pub fn shape_body(body: &mut Value, client_declared_tools: bool) {
     }
 }
 
-/// V2 native capture (2026-10-25): title requests carry no tools, primary
-/// requests carry the caller's tools (shell, not fabricated bash). Both work
-/// with Bearer public. Streaming plus usage is sufficient body shaping.
-pub fn shape_v2_body(body: &mut Value) {
+/// Shape an already-encoded OpenAI Chat Completions body for the OpenCode
+/// gateway's free tier.
+///
+/// Forces `stream: true` with `stream_options.include_usage`, and guarantees
+/// the `bash`/`read` tool definitions the gate requires
+/// (`crates/zroutery-core/src/opencode/mod.rs::ensure_required_tools`). The
+/// gateway checks those two names, not the rest of the catalogue: a client's
+/// own tools pass through untouched, and a client that declared none gets the
+/// minimal pair plus `tool_choice: "none"` so the placeholders are not called
+/// in place of an answer.
+///
+/// Measured 2026-11-27: the same request, TLS handshake, identity headers and
+/// body without the two tool entries is refused with the quota-flavored 429;
+/// adding them is the difference between that refusal and a 200.
+pub fn shape_v2_body(body: &mut Value, client_declared_tools: bool) {
     let Some(object) = body.as_object_mut() else {
         return;
     };
@@ -209,6 +351,10 @@ pub fn shape_v2_body(body: &mut Value) {
     let options = object.entry("stream_options").or_insert_with(|| json!({}));
     if let Some(options) = options.as_object_mut() {
         options.insert("include_usage".into(), Value::Bool(true));
+    }
+    ensure_required_tools(object);
+    if !client_declared_tools {
+        object.insert("tool_choice".into(), Value::String("none".into()));
     }
 }
 
@@ -422,7 +568,7 @@ mod tests {
     }
 
     #[test]
-    fn session_from_signal_canonicalises_a_seed_and_ignores_a_bad_inbound() {
+    fn session_from_signal_reuses_one_fresh_id_per_seed() {
         let from_seed = session_from_signal(None, Some("conv-1"));
         assert!(is_canonical_session(&from_seed));
         assert_eq!(session_from_signal(None, Some("conv-1")), from_seed);
@@ -430,6 +576,27 @@ mod tests {
         assert_eq!(
             session_from_signal(Some("not-a-canonical-session"), Some("conv-1")),
             from_seed
+        );
+        // Different conversations get different sessions.
+        assert_ne!(session_from_signal(None, Some("conv-2")), from_seed);
+    }
+
+    #[test]
+    fn session_from_signal_embeds_a_real_timestamp() {
+        // The gateway parses the 12-hex prefix as a timestamp and refuses an
+        // implausible value with the quota-flavored 429 (2026-11-27): a
+        // never-used session with random hex was refused, while the same
+        // request with a generated id was served. The algorithm keeps the low
+        // 36 bits of `ts * 0x1000 + counter`, so decoding `>> 12` must equal
+        // the low 36 bits of the current clock.
+        let id = session_from_signal(None, Some("conv-timestamp"));
+        let stored = u64::from_str_radix(&id[4..16], 16).expect("hex prefix");
+        let decoded = ((!stored) & ((1u64 << 48) - 1)) >> 12;
+        let now = chrono::Utc::now().timestamp_millis() as u64;
+        let delta = decoded as i64 - (now & ((1u64 << 36) - 1)) as i64;
+        assert!(
+            delta.abs() <= 1_000,
+            "session prefix does not encode the current time (delta {delta}ms)"
         );
     }
 
@@ -468,7 +635,7 @@ mod tests {
             "ua={}",
             get("user-agent")
         );
-        assert_eq!(get("x-opencode-client"), "cli");
+        assert_eq!(get("x-opencode-client"), "opencode");
         assert_eq!(get("x-opencode-project"), "global");
         assert_eq!(get("x-opencode-session"), "ses_0123456789abcdefghijklmnop");
         assert!(
@@ -487,6 +654,28 @@ mod tests {
             body["stream_options"]["include_usage"].as_bool(),
             Some(true)
         );
+    }
+
+    #[test]
+    fn v2_shaping_carries_the_required_tools_and_none_choice() {
+        let mut body = json!({"model": "m", "messages": [{"role": "user", "content": "hi"}]});
+        shape_v2_body(&mut body, false);
+        let names: Vec<&str> = body["tools"]
+            .as_array()
+            .expect("tools are created")
+            .iter()
+            .filter_map(|tool| tool["function"]["name"].as_str())
+            .collect();
+        assert_eq!(names, ["bash", "read"]);
+        assert_eq!(body["tool_choice"].as_str(), Some("none"));
+        assert_eq!(body["stream"].as_bool(), Some(true));
+
+        // A client that declared its own tools keeps them and gets no forced
+        // choice; only the missing required names are appended.
+        let mut declared = json!({"tools": [{"type": "function", "function": {"name": "grep"}}]});
+        shape_v2_body(&mut declared, true);
+        assert_eq!(declared["tools"].as_array().unwrap().len(), 3);
+        assert!(declared.get("tool_choice").is_none());
     }
 
     #[test]
@@ -552,11 +741,18 @@ mod tests {
         )
         .expect("encodes");
         assert_eq!(body["stream"].as_bool(), Some(true));
-        assert!(
-            body.get("tools").is_none(),
-            "V2 does not require fabricated tools"
+        let names: Vec<&str> = body["tools"]
+            .as_array()
+            .expect("tools are created")
+            .iter()
+            .filter_map(|tool| tool["function"]["name"].as_str())
+            .collect();
+        assert_eq!(
+            names,
+            ["bash", "read"],
+            "V2 adds the two required tool names when the client declared none"
         );
-        assert!(body.get("tool_choice").is_none());
+        assert_eq!(body["tool_choice"].as_str(), Some("none"));
         assert_eq!(body["stream_options"]["include_usage"], true);
     }
 
@@ -776,8 +972,8 @@ mod gateway_tests {
             .collect();
         assert_eq!(
             names,
-            vec!["my_tool"],
-            "V2 preserves the caller's tool list"
+            vec!["my_tool", "bash", "read"],
+            "V2 preserves the caller's tools and appends only the missing required names"
         );
         assert!(body.get("tool_choice").is_none());
 
@@ -804,7 +1000,7 @@ mod gateway_tests {
             "ua={}",
             h("user-agent")
         );
-        assert_eq!(h("x-opencode-client"), "cli");
+        assert_eq!(h("x-opencode-client"), "opencode");
         assert_eq!(h("x-opencode-project"), "global");
         assert_eq!(h("x-opencode-session"), "ses_0123456789abcdefghijklmnop");
         assert!(h("x-opencode-request").starts_with("msg_"));
@@ -849,7 +1045,7 @@ mod gateway_tests {
         );
         assert_eq!(
             seen.get("x-opencode-client").unwrap().to_str().unwrap(),
-            "cli"
+            "opencode"
         );
     }
 
@@ -858,22 +1054,19 @@ mod gateway_tests {
     #[tokio::test]
     #[ignore = "live: hits https://opencode.ai/zen and needs network"]
     async fn live_anonymous_smoke() {
-        let provider = ProviderConfig::new(
+        let mut provider = ProviderConfig::new(
             "opencode",
             "OpenCode Zen Free",
             ProviderKind::OpenCodeZenFree,
         );
-        let mut req = ChatRequest::new("space-bunny-free", provider.dialect());
+        // The anonymous lane. `ProviderKind::default_base_url` names the
+        // token-authenticated lane instead, which `Bearer public` cannot use.
+        provider.base_url = "https://opencode.ai/zen/v1".into();
+        let mut req = ChatRequest::new("iceman-free", provider.dialect());
         req.messages
             .push(Message::user_text("Reply with the single word: pong"));
-        let body = encode_for_mode(
-            &provider,
-            &req,
-            "space-bunny-free",
-            None,
-            EncodeMode::Normal,
-        )
-        .expect("encodes");
+        let body = encode_for_mode(&provider, &req, "iceman-free", None, EncodeMode::Normal)
+            .expect("encodes");
         let identity = ClientIdentity {
             native_anthropic: false,
             omit_server_review: false,
@@ -886,13 +1079,7 @@ mod gateway_tests {
         };
         let upstream = Upstream::new(false, 15);
         let mut stream = upstream
-            .stream_with_identity(
-                &provider,
-                Some("public"),
-                &body,
-                "space-bunny-free",
-                &identity,
-            )
+            .stream_with_identity(&provider, Some("public"), &body, "iceman-free", &identity)
             .await
             .expect("handshake");
         let mut collector = StreamCollector::default();

@@ -1,6 +1,6 @@
 # Model Catalog Reference
 
-> Authority: reference · Owner: backend · Last verified: 2026-11-22 · Verified by: `cargo test --workspace --all-features --locked`
+> Authority: reference · Owner: backend · Last verified: 2026-11-27 · Verified by: `cargo test --workspace --all-features --locked`
 
 models.dev supplies the capabilities a provider's own `/models` route rarely
 answers: context window, max output, vision/audio/video/file support, tools,

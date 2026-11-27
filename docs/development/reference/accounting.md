@@ -1,6 +1,6 @@
 # Accounting Reference
 
-> Authority: reference · Owner: backend · Last verified: 2026-11-21 · Verified by: `cargo test --workspace --all-features --locked`
+> Authority: reference · Owner: backend · Last verified: 2026-11-27 · Verified by: `cargo test --workspace --all-features --locked`
 
 This page describes usage, cost, settlement and budgets. It is the reference for
 the invariants in [architecture.md](../architecture.md); it does not repeat the

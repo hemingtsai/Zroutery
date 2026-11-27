@@ -48,6 +48,7 @@ mod catalogue;
 mod decision;
 mod encode;
 mod errors;
+mod response;
 
 pub(crate) use errors::{retry_advice, MAX_TOTAL_RETRIES};
 mod codex_auto;
@@ -201,6 +202,79 @@ impl Upstream {
     /// client's own headers are forwarded; it never controls auth. Resolving it
     /// upstream of this call and passing it in means the handshake retries and
     /// every candidate attempt present the identical client.
+    /// OpenCode gateway session registration: the gateway rejects chat calls
+    /// from a session it has never seen with a quota-flavored 429, and the
+    /// ungated `GET …/models` carrying the session header registers it.
+    /// Failures are logged and left unregistered — the next call retries.
+    #[cfg(feature = "opencode")]
+    async fn register_opencode_session(
+        &self,
+        provider: &ProviderConfig,
+        client: &ClientIdentity,
+        session: &str,
+    ) {
+        let models_url = provider.models_url();
+        let request = self
+            .request_for(provider, &models_url, reqwest::Method::GET, None, client)
+            .await;
+        let request = match request {
+            Ok(request) => request,
+            Err(error) => {
+                tracing::warn!(
+                    provider = %provider.name,
+                    session = %session,
+                    error = %error,
+                    "opencode session registration request could not be built"
+                );
+                return;
+            }
+        };
+        match tokio::time::timeout(
+            Duration::from_secs(30),
+            self.execute_request(provider, &models_url, request),
+        )
+        .await
+        {
+            Ok(Ok(response)) if response.status().is_success() => {
+                crate::opencode::mark_session_registered(session);
+                tracing::debug!(
+                    provider = %provider.name,
+                    session = %session,
+                    "opencode session registered via the models catalog"
+                );
+            }
+            Ok(Ok(response)) => {
+                tracing::warn!(
+                    provider = %provider.name,
+                    session = %session,
+                    status = %response.status(),
+                    "opencode session registration failed; will retry on the next call"
+                );
+            }
+            Ok(Err(error)) => {
+                tracing::warn!(
+                    provider = %provider.name,
+                    session = %session,
+                    error = %error,
+                    "opencode session registration transport error"
+                );
+            }
+            Err(_) => {
+                tracing::warn!(
+                    provider = %provider.name,
+                    session = %session,
+                    "opencode session registration timed out"
+                );
+            }
+        }
+    }
+
+    /// Non-streaming call for one already resolved client identity.
+    ///
+    /// The identity only decides which fingerprint is presented and which of the
+    /// client's own headers are forwarded; it never controls auth. Resolving it
+    /// upstream of this call and passing it in means the handshake retries and
+    /// every candidate attempt present the identical client.
     pub async fn send_with_identity(
         &self,
         provider: &ProviderConfig,
@@ -210,6 +284,15 @@ impl Upstream {
     ) -> Result<ChatResponse> {
         let observation = client.observation.clone();
         let url = provider.chat_url();
+        #[cfg(feature = "opencode")]
+        if client.profile == crate::config::ProviderClientProfile::OpenCodeCli {
+            if let Some(session) = client.session.as_deref() {
+                if !crate::opencode::is_session_registered(session) {
+                    self.register_opencode_session(provider, client, session)
+                        .await;
+                }
+            }
+        }
         let request = self
             .request_for(provider, &url, reqwest::Method::POST, api_key, client)
             .await?
@@ -229,10 +312,7 @@ impl Upstream {
             tokio::time::timeout(Duration::from_secs(provider.timeout_secs), response.text())
                 .await
                 .map_err(|_| Error::Timeout(provider.timeout_secs))?
-                .map_err(|source| Error::Transport {
-                    provider: provider.name.clone(),
-                    source,
-                })?;
+                .map_err(|source| source.into_upstream(&provider.name))?;
 
         if let Ok(value) = serde_json::from_str::<Value>(&text) {
             observation::capture(&observation, provider.dialect(), &value);
@@ -328,10 +408,7 @@ impl Upstream {
             tokio::time::timeout(Duration::from_secs(provider.timeout_secs), response.text())
                 .await
                 .map_err(|_| Error::Timeout(provider.timeout_secs))?
-                .map_err(|source| Error::Transport {
-                    provider: provider.name.clone(),
-                    source,
-                })?;
+                .map_err(|source| source.into_upstream(&provider.name))?;
 
         if let Ok(value) = serde_json::from_str::<Value>(&text) {
             let usage = decision::observed_usage(&value);

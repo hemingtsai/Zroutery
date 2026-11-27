@@ -1,6 +1,6 @@
 # Implementation Contracts Reference
 
-> Authority: reference · Owner: backend · Last verified: 2026-11-22 · Verified by: `cargo test --workspace --all-features --locked`
+> Authority: reference · Owner: backend · Last verified: 2026-11-27 · Verified by: `cargo test --workspace --all-features --locked`
 
 These are the boundaries a change must preserve. `AGENTS.md` routes here; it does
 not restate them.
@@ -13,7 +13,9 @@ not restate them.
 - A dependency major is pinned by the crate that calls it
   (`crates/zroutery-core/Cargo.toml::dependencies`,
   `src-tauri/Cargo.toml::dependencies`); an API-breaking upgrade migrates the
-  caller in the same change (`crates/zroutery-core/src/router/selection.rs::weighted_shuffle`).
+  caller in the same change. A dependency that only some targets can carry is
+  gated by target, not by feature, so a Linux build never links it
+  (`crates/zroutery-core/Cargo.toml`, `src-tauri/Cargo.toml`) (`crates/zroutery-core/src/router/selection.rs::weighted_shuffle`).
 - Backend wire fields are `snake_case`; the Tauri argument mapping lives in the
   typed frontend contract (`ui/src/api.ts`).
 - Configuration is declaration; runtime observations, credentials and historical

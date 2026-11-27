@@ -1,6 +1,6 @@
 # Verification
 
-> Authority: normative · Owner: backend · Last verified: 2026-11-22 · Verified by: `scripts/docs_check.py`
+> Authority: normative · Owner: backend · Last verified: 2026-11-27 · Verified by: `scripts/docs_check.py`
 
 This is the only document that defines the toolchain and the gates. Other
 documents point here; they do not restate a command. Current pass/fail status
@@ -122,7 +122,10 @@ deliberately not flattering.
 Consequences, stated rather than discovered:
 
 - `ui_layout_test.py` and `ui_interaction_test.py` are local gates. A green CI
-  run says nothing about them.
+  run says nothing about them. The interaction harness opens addressable helper
+  pages through their owning door before their tab
+  (`scripts/ui_interaction_test.py::open_page`), so a navigation re-shape that
+  renames doors or tabs is a harness change too.
 - The CI clippy row is not `--all-targets` and not workspace-wide. Tier 1 is the
   stricter contract.
 - The advisory job is allowed to be red on a pull request by design; a red

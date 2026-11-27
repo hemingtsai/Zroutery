@@ -258,13 +258,14 @@ pub fn classify_error(error: &Error) -> Option<RetryDecision> {
         });
     }
     match error {
-        Error::Transport { .. } | Error::Timeout(_) | Error::InterruptedStream { .. } => {
-            Some(RetryDecision {
-                kind: RetryKind::Transport,
-                code: "stream_incomplete",
-                cleanup: false,
-            })
-        }
+        Error::Transport { .. }
+        | Error::FingerprintTransport { .. }
+        | Error::Timeout(_)
+        | Error::InterruptedStream { .. } => Some(RetryDecision {
+            kind: RetryKind::Transport,
+            code: "stream_incomplete",
+            cleanup: false,
+        }),
         Error::Upstream { status, body, .. } if body.len() <= ERROR_LIMIT => {
             let value = serde_json::from_str::<Value>(body).ok();
             if *status == 400

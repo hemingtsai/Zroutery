@@ -1,6 +1,6 @@
 # Outcome Reference
 
-> Authority: reference · Owner: backend · Last verified: 2026-11-21 · Verified by: `cargo test --workspace --all-features --locked`
+> Authority: reference · Owner: backend · Last verified: 2026-11-27 · Verified by: `cargo test --workspace --all-features --locked`
 
 An outcome is the complete result of one client request: every routing attempt,
 the terminal status, timing, usage, cost and the identity evidence. Stats,

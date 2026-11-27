@@ -1,6 +1,6 @@
 # Routing Data Reference
 
-> Authority: reference · Owner: backend · Last verified: 2026-11-21 · Verified by: `cargo test --workspace --all-features --locked`
+> Authority: reference · Owner: backend · Last verified: 2026-11-27 · Verified by: `cargo test --workspace --all-features --locked`
 
 This page describes the data that routing learns from, where it lives, and what
 it deliberately does not contain. It is not a retention policy; the operator

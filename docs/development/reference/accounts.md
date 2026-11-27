@@ -1,6 +1,6 @@
 # Accounts Reference
 
-> Authority: reference · Owner: backend · Last verified: 2026-11-22 · Verified by: `cargo test --workspace --all-features --locked`
+> Authority: reference · Owner: backend · Last verified: 2026-11-27 · Verified by: `cargo test --workspace --all-features --locked`
 
 This page describes account declarations, panel-token binding, inference-key
 pools, browser check-in and token capture. It does not claim real-panel

@@ -1,6 +1,6 @@
 # UI Design System Reference
 
-> Authority: reference · Owner: frontend · Last verified: 2026-11-22 · Verified by: `pnpm --dir ui build && pnpm --dir ui test`
+> Authority: reference · Owner: frontend · Last verified: 2026-11-27 · Verified by: `pnpm --dir ui build && pnpm --dir ui test`
 
 This page covers the tokens, skins, primitives and gates of the dashboard. It is
 a reference, not a pixel specification; the shipped values are in the stylesheet.
@@ -34,6 +34,10 @@ a reference, not a pixel specification; the shipped values are in the stylesheet
   `cutover`) are tabs inside a task door, not extra doors. Each door carries a
   static inline icon from a fixed per-page map, not a component tree
   (`ui/src/shell/navIcons.tsx::NAV_ICONS`).
+- An addressable helper page opens through its owning door first, then through
+  its tab: the interaction harness maps the stable route names to their doors
+  instead of treating them as doors themselves
+  (`scripts/ui_interaction_test.py::open_page`).
 - `Tabs` is a real tablist: arrow keys, Home/End, roving tabindex, and only the
   selected panel is mounted (`ui/src/components/tabs.tsx::Tabs`).
 - `Drawer` is the overlay for editing; it restores focus to its opener and keeps

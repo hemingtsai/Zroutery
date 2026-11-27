@@ -1,6 +1,6 @@
 # Architecture
 
-> Authority: normative · Owner: backend · Last verified: 2026-11-22 · Verified by: `scripts/docs_check.py`
+> Authority: normative · Owner: backend · Last verified: 2026-11-27 · Verified by: `scripts/docs_check.py`
 
 This document describes the current boundaries and the invariants a change must
 preserve. It does not track pass/fail status (`current-state.md`), command
@@ -139,7 +139,13 @@ test; the evidence table below marks the two that are source-only.
     `src-tauri/src/secrets.rs::KeychainSecrets`); a plugin slot whose secret
     exceeds the platform's per-credential blob cap rides a chunked layout the
     scoped path reassembles transparently
-    (`src-tauri/src/secrets.rs::set_keyring_plugin`).
+    (`src-tauri/src/secrets.rs::set_keyring_plugin`). A plugin provider may
+    select a host shaping profile; the profile's session generation,
+    registration and environment-block completion run in the core, never in
+    plugin code, and the generated session registers through the ungated
+    models catalog before its first chat call
+    (`crates/zroutery-core/src/opencode/mod.rs::environment_block`,
+    `crates/zroutery-core/src/upstream/mod.rs::register_opencode_session`).
 14. **A local persistence failure does not replay an upstream action.** A failed
     local write is a terminal failure for that request, not a reason to re-send a
     request the provider already executed

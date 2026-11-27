@@ -1,6 +1,6 @@
 # Protocol Reference
 
-> Authority: reference · Owner: backend · Last verified: 2026-11-21 · Verified by: `cargo test --workspace --all-features --locked`
+> Authority: reference · Owner: backend · Last verified: 2026-11-27 · Verified by: `cargo test --workspace --all-features --locked`
 
 This page describes the canonical IR, the four client dialects, SSE and the
 media/reasoning bridges. It does not define routing; see the routing reference.
@@ -58,7 +58,12 @@ entry protocol only (`crates/zroutery-core/src/config/provider.rs::ProviderKind`
 For the chat, models and plugin paths, a provider base URL that already ends
 in a version segment (`/v1`, or a relay's own `/v2`) is kept as declared and
 never grows a second one
-(`crates/zroutery-core/src/config/registry.rs::versioned_suffix`).
+(`crates/zroutery-core/src/config/registry.rs::versioned_suffix`). A request
+shaped as the OpenCode CLI also carries the environment block in its system
+prompt, completed there when the client's own prompt lacks it
+(`crates/zroutery-core/src/opencode/mod.rs::ensure_environment_block`), and
+a fresh session registers through the ungated models catalog before its first
+chat call (`crates/zroutery-core/src/upstream/mod.rs::register_opencode_session`).
 
 The dialect and the client identity are separate choices. Which surface the
 request is encoded for is `ApiSurface`; which name the upstream sees is the

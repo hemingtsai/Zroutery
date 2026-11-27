@@ -14,12 +14,17 @@ pub(super) const CLAUDE_CODE_SYSTEM_IDENTITY: &str =
     "You are Claude Code, Anthropic's official CLI for Claude.";
 const CODEX_USER_AGENT: &str = "codex_cli_rs/0.1.0";
 
-/// The OpenCode CLI User-Agent the gateway's free tier requires: it must contain
-/// `opencode/<ver>` with `<ver> >= 1.18.0`, and the rest is the CLI's own suffix.
+/// The OpenCode CLI User-Agent the gateway's free tier requires. The shape is
+/// `opencode/<channel>/<version>/<client>` (packages/core/src/app.ts), and the
+/// gateway validates the version against OpenCode's own updater
+/// (`opencode.ai/update/api/latest/cli/npm`) — a stale version is rejected
+/// with a quota-flavored 429 (field-verified 2026-11-21). The V1 multi-segment
+/// form (`… ai-sdk/… runtime/bun/…`) is accepted too; the plain channel form
+/// matches OpenCode 2.3.2.
 #[cfg(feature = "opencode")]
-const OPENCODE_USER_AGENT: &str = "opencode/latest/2.0.32/cli";
+const OPENCODE_USER_AGENT: &str = "opencode/latest/2.3.2/opencode";
 #[cfg(feature = "opencode")]
-const OPENCODE_CLIENT_ID: &str = "cli";
+const OPENCODE_CLIENT_ID: &str = "opencode";
 #[cfg(feature = "opencode")]
 const OPENCODE_PROJECT_ID: &str = "global";
 
@@ -193,7 +198,11 @@ pub fn build_headers_for_identity(
     // The OpenCode identity is locked: it is the fingerprint the gateway's free
     // tier demands, so it is emitted after the Claude Code / Codex fabricators
     // (a fixed OpenCode profile must not be perturbed by them) and before the
-    // passthrough. The session is owned here, never forwarded verbatim.
+    // passthrough. The UA and the request id are fabricated here; the session
+    // was resolved by the pipeline — a canonical inbound id is forwarded
+    // verbatim for its upstream prompt-cache affinity, a foreign conversation
+    // signal was derived into a fresh one
+    // (`crate::server::pipeline::client.rs::client_for`).
     #[cfg(feature = "opencode")]
     if profile == ProviderClientProfile::OpenCodeCli {
         headers.insert(
